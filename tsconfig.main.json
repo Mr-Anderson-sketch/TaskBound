@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+  "outDir": "dist/main",
+  "rootDir": "src",
+    "module": "NodeNext",
+    "lib": ["ES2021"],
+    "types": ["node"],
+    "moduleResolution": "nodenext"
+  },
+  "include": [
+    "src/main/**/*",
+    "src/shared/**/*"
+  ]
+}
