@@ -1,19 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Task } from '../shared/types';
+import type { CSSProperties } from 'react';
+import type { Task, WindowState } from '../shared/types';
 import { useAppStore } from './store/state';
 import { TaskRow } from './components/TaskRow';
 import { EditModal } from './components/EditModal';
 import { ReminderPopup } from './components/Popup';
 import { AddTimeModal } from './components/AddTimeModal';
+import { FocusSpotlight } from './components/FocusSpotlight';
+import { TitleBar } from './components/TitleBar';
 import { formatSeconds } from './utils/time';
+import type { ElectronApi } from '../shared/ipc';
 
 const REMINDER_INTERVAL_MS = 3 * 60 * 1000;
+const FOCUS_SPOTLIGHT_INACTIVITY_MS = 60 * 1000;
 
 const getActiveTask = (tasks: Task[]): Task | undefined =>
   tasks.find((task) => task.status !== 'completed' && task.status !== 'struck');
 
 export default function App() {
-  const { state, hydrated, addTask, completeActiveTask, addTime, updateTask, dispatchTick } = useAppStore();
+  const {
+    state,
+    hydrated,
+    addTask,
+    completeActiveTask,
+    addTime,
+    updateTask,
+    dispatchTick,
+    setAlwaysOnTop
+  } = useAppStore();
   const [modalState, setModalState] = useState<{ mode: 'create' | 'edit'; task?: Task } | null>(null);
   const [addTimeOpen, setAddTimeOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -21,9 +35,17 @@ export default function App() {
   const reminderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snoozeUntilRef = useRef<number | null>(null);
   const lastReminderTaskIdRef = useRef<string | null>(null);
+  const [focusSpotlightOpenState, setFocusSpotlightOpenState] = useState(false);
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const focusSpotlightOpenRef = useRef(focusSpotlightOpenState);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTaskRef = useRef<Task | undefined>(undefined);
+  const lastTrackedTaskIdRef = useRef<string | null>(null);
 
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
+  const orderedTasks = useMemo(() => [...state.tasks].reverse(), [state.tasks]);
+  const alwaysOnTopEnabled = state.preferences.alwaysOnTop;
   const requiresTimeForNextTask = useMemo(() => {
     const openTasks = state.tasks.filter((task) => task.status !== 'completed' && task.status !== 'struck');
     if (openTasks.length === 0) {
@@ -174,6 +196,43 @@ export default function App() {
     void api?.quitApp?.();
   }, []);
 
+  const updateFocusSpotlightOpen = useCallback((value: boolean) => {
+    focusSpotlightOpenRef.current = value;
+    setFocusSpotlightOpenState(value);
+  }, []);
+
+  const handleToggleAlwaysOnTop = useCallback(() => {
+    setAlwaysOnTop(!alwaysOnTopEnabled).catch((error) => {
+      console.error('Failed to update always-on-top preference', error);
+      setErrorMessage('Unable to update window pin setting.');
+    });
+  }, [alwaysOnTopEnabled, setAlwaysOnTop]);
+
+  const electronApi = useMemo(() => {
+    return (window as Window & { electronAPI?: ElectronApi }).electronAPI ?? null;
+  }, []);
+
+  const clearInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleFocusSpotlight = useCallback(() => {
+    clearInactivityTimer();
+    if (!activeTaskRef.current || focusSpotlightOpenRef.current) {
+      return;
+    }
+
+    inactivityTimerRef.current = setTimeout(() => {
+      if (!focusSpotlightOpenRef.current && activeTaskRef.current) {
+        updateFocusSpotlightOpen(true);
+      }
+      inactivityTimerRef.current = null;
+    }, FOCUS_SPOTLIGHT_INACTIVITY_MS);
+  }, [clearInactivityTimer, updateFocusSpotlightOpen]);
+
   useEffect(() => {
     if (!errorMessage) {
       return;
@@ -181,6 +240,88 @@ export default function App() {
     const timeout = setTimeout(() => setErrorMessage(null), 3200);
     return () => clearTimeout(timeout);
   }, [errorMessage]);
+
+  useEffect(() => {
+    activeTaskRef.current = activeTask ?? undefined;
+    if (!activeTask) {
+      lastTrackedTaskIdRef.current = null;
+      updateFocusSpotlightOpen(false);
+      clearInactivityTimer();
+      return;
+    }
+
+    const activeId = activeTask.id;
+    const isNewTask = lastTrackedTaskIdRef.current !== activeId;
+    lastTrackedTaskIdRef.current = activeId;
+
+    if (!focusSpotlightOpenRef.current && (isNewTask || !inactivityTimerRef.current)) {
+      scheduleFocusSpotlight();
+    }
+  }, [activeTask, scheduleFocusSpotlight, clearInactivityTimer, updateFocusSpotlightOpen]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    const handleActivity = () => {
+      if (focusSpotlightOpenRef.current) {
+        return;
+      }
+      scheduleFocusSpotlight();
+    };
+
+    const events: Array<keyof WindowEventMap> = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'wheel'];
+    events.forEach((eventName) => window.addEventListener(eventName, handleActivity, { passive: true }));
+    scheduleFocusSpotlight();
+
+    return () => {
+      events.forEach((eventName) => window.removeEventListener(eventName, handleActivity));
+      clearInactivityTimer();
+    };
+  }, [hydrated, scheduleFocusSpotlight, clearInactivityTimer]);
+
+  useEffect(() => {
+    focusSpotlightOpenRef.current = focusSpotlightOpenState;
+    if (!focusSpotlightOpenState) {
+      scheduleFocusSpotlight();
+    }
+  }, [focusSpotlightOpenState, scheduleFocusSpotlight]);
+
+  useEffect(() => {
+    document.body.style.backgroundColor = 'transparent';
+    return () => {
+      document.body.style.backgroundColor = '';
+    };
+  }, []);
+
+  useEffect(() => {
+    const api = electronApi;
+    if (!api?.getWindowState) {
+      return;
+    }
+
+    let unsubscribe: (() => void) | undefined;
+
+    api
+      .getWindowState()
+      .then((state: WindowState) => {
+        setIsWindowMaximized(Boolean(state.isMaximized));
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to get window state', error);
+      });
+
+    if (api.onWindowStateChange) {
+      unsubscribe = api.onWindowStateChange((state: WindowState) => {
+        setIsWindowMaximized(Boolean(state.isMaximized));
+      });
+    }
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [electronApi]);
 
   if (!hydrated) {
     return (
@@ -194,16 +335,35 @@ export default function App() {
   const scoreSign = state.score > 0 ? '+' : state.score < 0 ? '-' : '';
   const scoreValue = Math.abs(state.score);
 
+  const rootClasses = `min-h-screen text-brand-ice transition-colors duration-300 ${
+    focusSpotlightOpenState ? 'bg-transparent' : 'bg-brand-navy'
+  }`;
+
+  const dragLayerStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
+
   return (
-    <div className="min-h-screen bg-brand-navy text-brand-ice">
-      <main className="mx-auto flex h-full max-w-xl flex-col gap-4 p-4">
+      <div className={rootClasses} style={dragLayerStyle}>
+        <div
+          className={`mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
+            focusSpotlightOpenState ? 'pointer-events-none opacity-0' : ''
+          }`}
+        >
+        <TitleBar
+          alwaysOnTop={alwaysOnTopEnabled}
+          isMaximized={isWindowMaximized}
+          onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
+          onMinimize={() => electronApi?.minimizeWindow?.()}
+          onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
+          onClose={() => electronApi?.closeWindow?.()}
+        />
+        <main className="flex flex-1 flex-col gap-4">
         <header className="rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-xl font-semibold text-brand-ice">TimeBound</h1>
               <p className="text-xs text-brand-aqua/80">Focus, finish, and track your wins.</p>
             </div>
-            <div className="text-right text-sm">
+            <div className="flex flex-col items-end gap-1 text-right text-sm">
               <div className="font-semibold text-brand-coral">
                 Score: {scoreSign}
                 {scoreValue}
@@ -224,11 +384,11 @@ export default function App() {
           )}
         </header>
 
-        <section className="flex-1 space-y-2 overflow-y-auto rounded-2xl border border-brand-ice/10 bg-brand-dusk/70 p-4 shadow-lg">
+  <section className="app-region-no-drag flex-1 space-y-2 overflow-y-auto rounded-2xl border border-brand-ice/10 bg-brand-dusk/70 p-4 shadow-lg">
           {state.tasks.length === 0 ? (
             <p className="text-center text-sm text-brand-ice/70">Create your first task to begin timeboxing.</p>
           ) : (
-            state.tasks.slice(0, 5).map((task, index) => (
+            orderedTasks.slice(0, 5).map((task, index) => (
               <TaskRow
                 key={task.id}
                 task={task}
@@ -238,8 +398,8 @@ export default function App() {
               />
             ))
           )}
-          {state.tasks.length > 5 ? (
-            <p className="text-xs text-brand-ice/60">+ {state.tasks.length - 5} more tasks queued</p>
+          {orderedTasks.length > 5 ? (
+            <p className="text-xs text-brand-ice/60">+ {orderedTasks.length - 5} more tasks queued</p>
           ) : null}
         </section>
 
@@ -269,10 +429,25 @@ export default function App() {
           </button>
         </section>
 
+        <button
+          type="button"
+          className="rounded-xl border border-brand-coral/50 bg-brand-coral/20 px-3 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
+          onClick={() => {
+            clearInactivityTimer();
+            if (activeTask) {
+              updateFocusSpotlightOpen(true);
+            }
+          }}
+          disabled={!activeTask}
+        >
+          See Focus Spotlight
+        </button>
+
         <footer className="text-xs text-brand-ice/60">
           {pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'All tasks completed'}
         </footer>
-      </main>
+        </main>
+      </div>
 
       {modalState ? (
         <EditModal
@@ -296,6 +471,15 @@ export default function App() {
         onSetTime={handleReminderSetTime}
         onRemindLater={handleReminderSnooze}
         onCloseApp={handleReminderCloseApp}
+      />
+
+      <FocusSpotlight
+        open={focusSpotlightOpenState}
+        taskTitle={activeTask?.title}
+        timeRemaining={activeTime}
+        onClose={() => {
+          updateFocusSpotlightOpen(false);
+        }}
       />
 
       {errorMessage ? (

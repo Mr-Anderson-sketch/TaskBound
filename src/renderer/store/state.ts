@@ -14,7 +14,8 @@ type AppAction =
   | { type: 'addTime'; payload: { taskId: string; seconds: number; now: string } }
   | { type: 'updateTask'; payload: { taskId: string; title: string; seconds?: number; now: string } }
   | { type: 'deleteTask'; payload: { taskId: string; now: string } }
-  | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } };
+  | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } }
+  | { type: 'setAlwaysOnTop'; payload: { value: boolean } };
 
 type Reducer = (state: AppState, action: AppAction) => AppState;
 
@@ -152,14 +153,21 @@ const reducer: Reducer = (state, action) => {
     }
     case 'addTime': {
       const { taskId, seconds, now } = action.payload;
+      let scoreDelta = 0;
       const tasks = state.tasks.map((task) => {
         if (task.id !== taskId) {
           return task;
         }
-        const totalAssigned = (task.timeAssignedSeconds ?? 0) + seconds;
+        const previousAssigned = task.timeAssignedSeconds ?? 0;
+        const totalAssigned = previousAssigned + seconds;
         const remaining = (task.remainingSeconds ?? task.timeAssignedSeconds ?? 0) + seconds;
         const status: Task['status'] =
           task.status === 'completed' || task.status === 'struck' ? task.status : 'in_progress';
+
+        if (seconds > 0 && previousAssigned > 0) {
+          scoreDelta -= 1;
+        }
+
         return {
           ...task,
           timeAssignedSeconds: totalAssigned,
@@ -178,7 +186,7 @@ const reducer: Reducer = (state, action) => {
       });
       return {
         ...state,
-        score: state.score - 1,
+        score: state.score + scoreDelta,
         tasks: ensureAlignedTasks(tasks),
         meta: { ...state.meta, lastSavedAt: now }
       };
@@ -199,7 +207,7 @@ const reducer: Reducer = (state, action) => {
           const diff = nextAssigned - previousAssigned;
           const candidate = previousRemaining + diff;
           nextRemaining = Math.max(0, candidate);
-          if (diff > 0) {
+          if (diff > 0 && previousAssigned > 0) {
             scoreDelta -= 1;
           }
         } else {
@@ -246,6 +254,15 @@ const reducer: Reducer = (state, action) => {
         }
       };
     }
+    case 'setAlwaysOnTop': {
+      return {
+        ...state,
+        preferences: {
+          ...state.preferences,
+          alwaysOnTop: action.payload.value
+        }
+      };
+    }
     default:
       return state;
   }
@@ -260,6 +277,7 @@ export interface AppStore {
   updateTask: (taskId: string, title: string, seconds?: number) => void;
   deleteTask: (taskId: string) => void;
   dispatchTick: () => void;
+  setAlwaysOnTop: (value: boolean) => Promise<void>;
 }
 
 const shouldPersist = (type: AppAction['type']): boolean => {
@@ -384,6 +402,17 @@ export const useAppStore = (): AppStore => {
     dispatch({ type: 'tick', now: new Date().toISOString() });
   }, []);
 
+  const setAlwaysOnTopPreference = useCallback(
+    async (value: boolean) => {
+      const api = apiRef.current;
+      if (api?.setAlwaysOnTop) {
+        await api.setAlwaysOnTop(value);
+      }
+      dispatchWithPersist({ type: 'setAlwaysOnTop', payload: { value } });
+    },
+    [dispatchWithPersist]
+  );
+
   const addTask = useCallback(
     (title: string, seconds?: number) => {
       dispatchWithPersist({
@@ -436,6 +465,7 @@ export const useAppStore = (): AppStore => {
     addTime,
     updateTask,
     deleteTask,
-    dispatchTick
+    dispatchTick,
+    setAlwaysOnTop: setAlwaysOnTopPreference
   };
 };

@@ -10,18 +10,19 @@ export const formatSeconds = (seconds?: number): string => {
   return `${minutes}:${secs}`;
 };
 
-export const splitSeconds = (seconds?: number): { minutes: number; seconds: number } => {
+export const splitSeconds = (seconds?: number): { hours: number; minutes: number } => {
   if (!seconds || Number.isNaN(seconds)) {
-    return { minutes: 0, seconds: 0 };
+    return { hours: 0, minutes: 0 };
   }
   const clamped = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(clamped / 60);
-  const remainder = clamped % 60;
-  return { minutes, seconds: remainder };
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  return { hours, minutes };
 };
 
-export const combineToSeconds = (minutes: number, seconds: number): number => {
-  const safeMinutes = Number.isFinite(minutes) ? minutes : 0;
-  const safeSeconds = Number.isFinite(seconds) ? seconds : 0;
-  return Math.max(0, Math.floor(safeMinutes * 60 + safeSeconds));
+export const combineToSeconds = (hours: number, minutes: number): number => {
+  const safeHours = Number.isFinite(hours) ? Math.max(0, Math.floor(hours)) : 0;
+  const safeMinutes = Number.isFinite(minutes) ? Math.max(0, Math.floor(minutes)) : 0;
+  const totalMinutes = safeHours * 60 + safeMinutes;
+  return Math.max(0, totalMinutes * 60);
 };

@@ -24,24 +24,38 @@ export function EditModal({
   requireTime = false,
   confirmLabel,
   onSubmit,
-  onCancel
+  onCancel,
 }: EditModalProps) {
   const initialTime = useMemo(() => splitSeconds(initialSeconds), [initialSeconds]);
+  const MAX_TOTAL_MINUTES = 240;
+  const MAX_HOURS = Math.floor(MAX_TOTAL_MINUTES / 60);
+  const clampDuration = (rawHours: number, rawMinutes: number) => {
+    const safeHours = Number.isFinite(rawHours) ? Math.max(0, Math.floor(rawHours)) : 0;
+    const safeMinutes = Number.isFinite(rawMinutes) ? Math.max(0, Math.floor(rawMinutes)) : 0;
+    const combinedMinutes = safeHours * 60 + safeMinutes;
+    const limitedMinutes = Math.min(MAX_TOTAL_MINUTES, combinedMinutes);
+    return {
+      hours: Math.min(MAX_HOURS, Math.floor(limitedMinutes / 60)),
+      minutes: limitedMinutes % 60
+    };
+  };
   const [title, setTitle] = useState(initialTitle);
-  const [minutes, setMinutes] = useState<number>(initialTime.minutes);
-  const [seconds, setSeconds] = useState<number>(initialTime.seconds);
+  const normalizedInitial = clampDuration(initialTime.hours, initialTime.minutes);
+  const [hours, setHours] = useState<number>(normalizedInitial.hours);
+  const [minutes, setMinutes] = useState<number>(normalizedInitial.minutes);
   const [useTime, setUseTime] = useState<boolean>(initialSeconds !== undefined);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setTitle(initialTitle);
-      setMinutes(initialTime.minutes);
-      setSeconds(initialTime.seconds);
+      const clamped = clampDuration(initialTime.hours, initialTime.minutes);
+      setHours(clamped.hours);
+      setMinutes(clamped.minutes);
       setUseTime(initialSeconds !== undefined);
       setError(null);
     }
-  }, [open, initialTitle, initialSeconds, initialTime.minutes, initialTime.seconds]);
+  }, [open, initialTitle, initialSeconds, initialTime.hours, initialTime.minutes]);
 
   if (!open) {
     return null;
@@ -55,7 +69,7 @@ export function EditModal({
 
     let computedSeconds: number | undefined;
     if (useTime) {
-      computedSeconds = combineToSeconds(minutes, seconds);
+      computedSeconds = combineToSeconds(hours, minutes);
       if (computedSeconds <= 0) {
         setError('Please provide a positive amount of time.');
         return;
@@ -72,11 +86,11 @@ export function EditModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-navy/85 px-4">
       <div className="w-full max-w-md rounded-xl border border-brand-teal/40 bg-brand-dusk p-6 shadow-2xl">
         <header className="mb-4">
-          <h2 className="text-lg font-semibold text-brand-ice">{heading}</h2>
-          {subtitle ? <p className="mt-1 text-sm text-brand-ice/80">{subtitle}</p> : null}
+          <h2 className="modal-heading font-semibold text-brand-ice">{heading}</h2>
+          {subtitle ? <p className="modal-subtitle mt-1 text-brand-ice/80">{subtitle}</p> : null}
         </header>
         <div className="space-y-4">
-          <label className="block text-sm font-medium text-brand-ice">
+          <label className="modal-label block font-medium text-brand-ice">
             Task Title
             <textarea
               className="mt-2 w-full resize-none rounded-md border border-brand-teal/40 bg-brand-navy px-3 py-2 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
@@ -95,7 +109,7 @@ export function EditModal({
                 checked={useTime}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => setUseTime(event.target.checked)}
               />
-              <label htmlFor="edit-modal-time-toggle" className="text-sm text-brand-ice">
+              <label htmlFor="edit-modal-time-toggle" className="modal-label text-brand-ice">
                 Attach time limit
               </label>
             </div>
@@ -104,28 +118,64 @@ export function EditModal({
             </div>
           </div>
           {useTime ? (
-            <div className="grid grid-cols-2 gap-3">
-              <label className="text-sm text-brand-ice">
-                Minutes
-                <input
-                  type="number"
-                  min={0}
-                  className="mt-1 w-full rounded-md border border-brand-teal/40 bg-brand-navy px-3 py-2 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
-                  value={minutes}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setMinutes(Number(event.target.value))}
-                />
-              </label>
-              <label className="text-sm text-brand-ice">
-                Seconds
-                <input
-                  type="number"
-                  min={0}
-                  max={59}
-                  className="mt-1 w-full rounded-md border border-brand-teal/40 bg-brand-navy px-3 py-2 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
-                  value={seconds}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setSeconds(Number(event.target.value))}
-                />
-              </label>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <label className="modal-label block text-brand-ice">
+                  Hours
+                  <input
+                    type="number"
+                    min={0}
+                    max={MAX_HOURS}
+                    className="app-region-no-drag mt-2 w-full rounded-md border border-brand-teal/40 bg-brand-navy px-3 py-2 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
+                    value={hours}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const raw = Number(event.target.value);
+                      setHours((previous) => {
+                        if (Number.isNaN(raw)) {
+                          return previous;
+                        }
+                        const safe = Math.max(0, Math.min(MAX_HOURS, Math.floor(raw)));
+                        const totalMinutes = safe * 60 + minutes;
+                        if (totalMinutes > MAX_TOTAL_MINUTES) {
+                          const clampedTotal = Math.min(MAX_TOTAL_MINUTES, totalMinutes);
+                          setMinutes(clampedTotal % 60);
+                          return Math.floor(clampedTotal / 60);
+                        }
+                        return safe;
+                      });
+                    }}
+                  />
+                </label>
+                <label className="modal-label block text-brand-ice">
+                  Minutes
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    className="app-region-no-drag mt-2 w-full rounded-md border border-brand-teal/40 bg-brand-navy px-3 py-2 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
+                    value={minutes}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const raw = Number(event.target.value);
+                      setMinutes((previous) => {
+                        if (Number.isNaN(raw)) {
+                          return previous;
+                        }
+                        const safe = Math.max(0, Math.min(59, Math.floor(raw)));
+                        const totalMinutes = hours * 60 + safe;
+                        if (totalMinutes > MAX_TOTAL_MINUTES) {
+                          const clampedTotal = Math.min(MAX_TOTAL_MINUTES, totalMinutes);
+                          setHours(Math.floor(clampedTotal / 60));
+                          return clampedTotal % 60;
+                        }
+                        return safe;
+                      });
+                    }}
+                  />
+                </label>
+              </div>
+              <p className="modal-subtitle text-brand-ice/60">
+                Maximum task length is {Math.floor(MAX_TOTAL_MINUTES / 60)}h {(MAX_TOTAL_MINUTES % 60).toString().padStart(2, '0')}m.
+              </p>
             </div>
           ) : null}
           {error ? <p className="text-sm text-brand-coral">{error}</p> : null}
@@ -150,3 +200,4 @@ export function EditModal({
     </div>
   );
 }
+

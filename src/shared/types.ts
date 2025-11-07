@@ -30,9 +30,18 @@ export interface MetaState {
   appVersion: string;
 }
 
+export interface PreferencesState {
+  alwaysOnTop: boolean;
+}
+
 export interface AppState {
   score: number;
   tasks: Task[];
   stats: StatsSnapshot;
   meta: MetaState;
+  preferences: PreferencesState;
+}
+
+export interface WindowState {
+  isMaximized: boolean;
 }

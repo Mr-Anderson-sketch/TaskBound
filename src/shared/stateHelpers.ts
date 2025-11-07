@@ -30,6 +30,9 @@ export const createEmptyState = (appVersion: string, now: Date = new Date()): Ap
   meta: {
     lastSavedAt: now.toISOString(),
     appVersion
+  },
+  preferences: {
+    alwaysOnTop: true
   }
 });
 
@@ -134,6 +137,9 @@ export const rehydrateState = (
     meta: {
       lastSavedAt: rawState.meta?.lastSavedAt ?? now.toISOString(),
       appVersion
+    },
+    preferences: {
+      alwaysOnTop: rawState.preferences?.alwaysOnTop ?? true
     }
   };
 
@@ -156,6 +162,9 @@ export const rehydrateState = (
     meta: {
       lastSavedAt: now.toISOString(),
       appVersion
+    },
+    preferences: {
+      alwaysOnTop: nextState.preferences?.alwaysOnTop ?? true
     }
   };
 };
