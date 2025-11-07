@@ -131,3 +131,22 @@ select,
     font-size: clamp(0.78rem, 1.4vw + 0.35rem, 0.95rem);
   }
 }
+
+/* Hide scrollbars when focus spotlight is active */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.hide-scrollbar * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hide-scrollbar *::-webkit-scrollbar {
+  display: none;
+}

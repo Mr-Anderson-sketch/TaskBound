@@ -161,8 +161,9 @@ const reducer: Reducer = (state, action) => {
         const previousAssigned = task.timeAssignedSeconds ?? 0;
         const totalAssigned = previousAssigned + seconds;
         const remaining = (task.remainingSeconds ?? task.timeAssignedSeconds ?? 0) + seconds;
+        const wasFinished = task.status === 'completed' || task.status === 'struck';
         const status: Task['status'] =
-          task.status === 'completed' || task.status === 'struck' ? task.status : 'in_progress';
+          wasFinished && remaining > 0 ? 'in_progress' : task.status === 'completed' || task.status === 'struck' ? task.status : 'in_progress';
 
         if (seconds > 0 && previousAssigned > 0) {
           scoreDelta -= 1;
@@ -174,6 +175,7 @@ const reducer: Reducer = (state, action) => {
           remainingSeconds: remaining,
           updatedAt: now,
           status,
+          completedAt: wasFinished && remaining > 0 ? undefined : task.completedAt,
           history: [
             ...task.history,
             {

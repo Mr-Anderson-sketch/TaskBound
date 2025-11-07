@@ -5,7 +5,9 @@ interface TaskRowProps {
   task: Task;
   index: number;
   isActive: boolean;
+  isSelected?: boolean;
   onEdit: (task: Task) => void;
+  onSelect?: (task: Task) => void;
 }
 
 const statusTone: Record<Task['status'], string> = {
@@ -23,12 +25,13 @@ const statusDecoration: Record<Task['status'], string> = {
 };
 
 export function TaskRow(props: TaskRowProps) {
-  const { task, index, isActive, onEdit } = props;
+  const { task, index, isActive, isSelected = false, onEdit, onSelect } = props;
   const time = formatSeconds(task.remainingSeconds ?? task.timeAssignedSeconds);
   const displayIndex = index + 1;
   const containerClasses = [
     'flex items-center justify-between rounded-lg border border-brand-ice/10 bg-brand-dusk/70 px-3 py-2 transition-colors shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-coral/60 focus:ring-offset-2 focus:ring-offset-brand-navy',
-    isActive ? 'border-brand-teal/60 bg-brand-teal/20 shadow-md' : ''
+    isActive ? 'border-brand-teal/60 bg-brand-teal/20 shadow-md' : '',
+    isSelected && !isActive ? 'border-brand-coral/60 bg-brand-coral/10 shadow-md' : ''
   ]
     .filter(Boolean)
     .join(' ');
@@ -43,7 +46,11 @@ export function TaskRow(props: TaskRowProps) {
   return (
     <div
       className={containerClasses}
-      onDoubleClick={() => onEdit(task)}
+      onClick={() => onSelect?.(task)}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onEdit(task);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -52,7 +59,7 @@ export function TaskRow(props: TaskRowProps) {
       }}
       role="button"
       tabIndex={0}
-      title="Double-click to edit"
+      title="Click to select, double-click to edit"
     >
   <span className="text-xs font-semibold tracking-wide text-brand-aqua/80">{displayIndex.toString().padStart(2, '0')}</span>
   <span className="w-20 text-xs font-mono text-brand-aqua/70">[{time}]</span>

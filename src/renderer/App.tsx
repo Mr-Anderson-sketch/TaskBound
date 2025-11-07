@@ -32,6 +32,7 @@ export default function App() {
   const [addTimeOpen, setAddTimeOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reminderOpen, setReminderOpen] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const reminderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snoozeUntilRef = useRef<number | null>(null);
   const lastReminderTaskIdRef = useRef<string | null>(null);
@@ -46,6 +47,11 @@ export default function App() {
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
   const orderedTasks = useMemo(() => [...state.tasks].reverse(), [state.tasks]);
   const alwaysOnTopEnabled = state.preferences.alwaysOnTop;
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? state.tasks.find((t) => t.id === selectedTaskId) : null),
+    [selectedTaskId, state.tasks]
+  );
+  const taskForAddTime = selectedTask ?? activeTask;
   const requiresTimeForNextTask = useMemo(() => {
     const openTasks = state.tasks.filter((task) => task.status !== 'completed' && task.status !== 'struck');
     if (openTasks.length === 0) {
@@ -135,6 +141,10 @@ export default function App() {
     setModalState({ mode: 'edit', task });
   }, []);
 
+  const handleSelectTask = useCallback((task: Task) => {
+    setSelectedTaskId((prev) => (prev === task.id ? null : task.id));
+  }, []);
+
   const handleModalSubmit = useCallback(
     (payload: { title: string; seconds?: number }) => {
       if (!modalState) {
@@ -169,13 +179,15 @@ export default function App() {
 
   const handleAddTime = useCallback(
     (seconds: number) => {
-      if (!activeTask) {
+      const targetTask = taskForAddTime;
+      if (!targetTask) {
         return;
       }
-      addTime(activeTask.id, seconds);
+      addTime(targetTask.id, seconds);
       setAddTimeOpen(false);
+      setSelectedTaskId(null);
     },
-    [addTime, activeTask]
+    [addTime, taskForAddTime]
   );
 
   const handleReminderSnooze = useCallback(() => {
@@ -260,6 +272,12 @@ export default function App() {
   }, [activeTask, scheduleFocusSpotlight, clearInactivityTimer, updateFocusSpotlightOpen]);
 
   useEffect(() => {
+    if (selectedTaskId && !state.tasks.find((t) => t.id === selectedTaskId)) {
+      setSelectedTaskId(null);
+    }
+  }, [selectedTaskId, state.tasks]);
+
+  useEffect(() => {
     if (!hydrated) {
       return;
     }
@@ -335,19 +353,21 @@ export default function App() {
   const scoreSign = state.score > 0 ? '+' : state.score < 0 ? '-' : '';
   const scoreValue = Math.abs(state.score);
 
-  const rootClasses = `min-h-screen text-brand-ice transition-colors duration-300 ${
-    focusSpotlightOpenState ? 'bg-transparent' : 'bg-brand-navy'
+  const rootClasses = `min-h-screen text-brand-ice transition-colors duration-300 border-[3px] border-brand-ice/30 ${
+    focusSpotlightOpenState ? 'bg-transparent hide-scrollbar' : 'bg-brand-navy'
   }`;
 
   const dragLayerStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
 
+  const appContainerClasses = `mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
+    focusSpotlightOpenState
+      ? 'pointer-events-none opacity-0'
+      : 'border-2 border-brand-ice/5 rounded-3xl shadow-[0_0_30px_rgba(148,187,233,0.08)]'
+  }`;
+
   return (
       <div className={rootClasses} style={dragLayerStyle}>
-        <div
-          className={`mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
-            focusSpotlightOpenState ? 'pointer-events-none opacity-0' : ''
-          }`}
-        >
+        <div className={appContainerClasses}>
         <TitleBar
           alwaysOnTop={alwaysOnTopEnabled}
           isMaximized={isWindowMaximized}
@@ -357,7 +377,7 @@ export default function App() {
           onClose={() => electronApi?.closeWindow?.()}
         />
         <main className="flex flex-1 flex-col gap-4">
-        <header className="rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
+  <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-xl font-semibold text-brand-ice">TimeBound</h1>
@@ -394,7 +414,9 @@ export default function App() {
                 task={task}
                 index={index}
                 isActive={activeTask?.id === task.id}
+                isSelected={selectedTaskId === task.id}
                 onEdit={handleEditTask}
+                onSelect={handleSelectTask}
               />
             ))
           )}
@@ -423,7 +445,7 @@ export default function App() {
             type="button"
             className="rounded-xl border border-brand-coral/70 bg-transparent px-3 py-2 text-sm font-semibold text-brand-coral hover:bg-brand-coral/10 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
             onClick={() => setAddTimeOpen(true)}
-            disabled={!activeTask}
+            disabled={!taskForAddTime}
           >
             Add Time +
           </button>

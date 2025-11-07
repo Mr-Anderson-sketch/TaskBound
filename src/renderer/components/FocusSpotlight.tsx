@@ -11,7 +11,7 @@ interface FocusSpotlightProps {
 export function FocusSpotlight(props: FocusSpotlightProps) {
   const { open, taskTitle, timeRemaining, onClose } = props;
 
-  const overlayStyle = { WebkitAppRegion: 'no-drag' } as unknown as CSSProperties;
+  const overlayStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
 
   useEffect(() => {
     if (!open) {
@@ -37,7 +37,7 @@ export function FocusSpotlight(props: FocusSpotlightProps) {
       className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-transparent backdrop-blur-2xl p-4 sm:p-6 md:p-10"
       style={overlayStyle}
     >
-      <div className="relative flex w-full max-w-3xl flex-col gap-6 overflow-hidden rounded-3xl border border-brand-coral/50 bg-brand-navy/60 p-6 text-brand-ice shadow-[0_35px_60px_-15px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-8 md:p-10">
+  <div className="relative flex w-full max-w-3xl flex-col gap-6 overflow-hidden rounded-3xl border border-brand-coral/50 bg-brand-navy/60 p-6 text-brand-ice shadow-[0_35px_60px_-15px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-8 md:p-10 app-region-no-drag">
         <button
           type="button"
           className="absolute right-4 top-4 rounded-full border border-brand-coral/70 bg-brand-coral px-3 py-1 text-xs font-semibold text-brand-navy shadow-md transition hover:brightness-110 sm:right-6 sm:py-1.5 sm:text-sm"
