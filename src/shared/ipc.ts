@@ -10,4 +10,5 @@ export interface ElectronApi {
   closeWindow?(): Promise<void>;
   getWindowState?(): Promise<WindowState>;
   onWindowStateChange?(callback: (state: WindowState) => void): () => void;
+  onTimerTick?(callback: (timestamp: number) => void): () => void;
 }

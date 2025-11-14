@@ -14,6 +14,7 @@ type AppAction =
   | { type: 'addTime'; payload: { taskId: string; seconds: number; now: string } }
   | { type: 'updateTask'; payload: { taskId: string; title: string; seconds?: number; now: string } }
   | { type: 'deleteTask'; payload: { taskId: string; now: string } }
+  | { type: 'reorderTasks'; payload: { orderedTaskIds: string[]; now: string } }
   | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } }
   | { type: 'setAlwaysOnTop'; payload: { value: boolean } };
 
@@ -246,6 +247,30 @@ const reducer: Reducer = (state, action) => {
         meta: { ...state.meta, lastSavedAt: action.payload.now }
       };
     }
+    case 'reorderTasks': {
+      const { orderedTaskIds, now } = action.payload;
+      if (orderedTaskIds.length === 0) {
+        return state;
+      }
+      const idToTask = new Map(state.tasks.map((task) => [task.id, task]));
+      const seen = new Set<string>();
+      const reordered: Task[] = [];
+      for (const id of orderedTaskIds) {
+        const task = idToTask.get(id);
+        if (!task || seen.has(id)) {
+          continue;
+        }
+        reordered.push(task);
+        seen.add(id);
+      }
+      const trailing = state.tasks.filter((task) => !seen.has(task.id));
+      const nextTasks = ensureAlignedTasks([...reordered, ...trailing]);
+      return {
+        ...state,
+        tasks: nextTasks,
+        meta: { ...state.meta, lastSavedAt: now }
+      };
+    }
     case 'syncMeta': {
       return {
         ...state,
@@ -278,7 +303,8 @@ export interface AppStore {
   addTime: (taskId: string, seconds: number) => void;
   updateTask: (taskId: string, title: string, seconds?: number) => void;
   deleteTask: (taskId: string) => void;
-  dispatchTick: () => void;
+  reorderTasks: (orderedTaskIds: string[]) => void;
+  dispatchTick: (timestamp?: number) => void;
   setAlwaysOnTop: (value: boolean) => Promise<void>;
 }
 
@@ -298,6 +324,8 @@ export const useAppStore = (): AppStore => {
     totalCompleted: state.stats.totalCompleted,
     todayCompleted: state.stats.todayCompleted
   });
+  const lastTickTimestampRef = useRef<number | null>(null);
+  const tickCarryoverRef = useRef(0);
 
   useEffect(() => {
     stateRef.current = state;
@@ -399,10 +427,30 @@ export const useAppStore = (): AppStore => {
     [queuePersist]
   );
 
-  const dispatchTick = useCallback(() => {
-    lastActionRef.current = 'tick';
-    dispatch({ type: 'tick', now: new Date().toISOString() });
-  }, []);
+  const dispatchTick = useCallback(
+    (timestamp?: number) => {
+      const nowMs = typeof timestamp === 'number' ? timestamp : Date.now();
+      const previous = lastTickTimestampRef.current;
+      if (previous === null) {
+        lastTickTimestampRef.current = nowMs;
+        tickCarryoverRef.current = 0;
+        return;
+      }
+      const deltaMs = nowMs - previous + tickCarryoverRef.current;
+      const elapsedSeconds = Math.floor(deltaMs / 1000);
+      tickCarryoverRef.current = deltaMs - elapsedSeconds * 1000;
+      lastTickTimestampRef.current = nowMs;
+      if (elapsedSeconds <= 0) {
+        return;
+      }
+      for (let i = 1; i <= elapsedSeconds; i += 1) {
+        const tickTime = previous + i * 1000;
+        lastActionRef.current = 'tick';
+        dispatch({ type: 'tick', now: new Date(tickTime).toISOString() });
+      }
+    },
+    [dispatch]
+  );
 
   const setAlwaysOnTopPreference = useCallback(
     async (value: boolean) => {
@@ -459,6 +507,40 @@ export const useAppStore = (): AppStore => {
     [dispatchWithPersist]
   );
 
+  const reorderTasks = useCallback(
+    (orderedTaskIds: string[]) => {
+      dispatchWithPersist({
+        type: 'reorderTasks',
+        payload: { orderedTaskIds, now: new Date().toISOString() }
+      });
+    },
+    [dispatchWithPersist]
+  );
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    const api = apiRef.current;
+    if (!api?.onTimerTick) {
+      return;
+    }
+    const unsubscribeTick = api.onTimerTick((timestamp: number) => {
+      dispatchTick(timestamp);
+    });
+
+    return () => {
+      unsubscribeTick?.();
+    };
+  }, [hydrated, dispatchTick]);
+
+  useEffect(() => {
+    if (hydrated && lastTickTimestampRef.current === null) {
+      lastTickTimestampRef.current = Date.now();
+      tickCarryoverRef.current = 0;
+    }
+  }, [hydrated]);
+
   return {
     state,
     hydrated,
@@ -467,6 +549,7 @@ export const useAppStore = (): AppStore => {
     addTime,
     updateTask,
     deleteTask,
+    reorderTasks,
     dispatchTick,
     setAlwaysOnTop: setAlwaysOnTopPreference
   };

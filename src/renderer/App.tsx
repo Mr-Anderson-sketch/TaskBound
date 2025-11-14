@@ -1,5 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragCancelEvent,
+  type DragEndEvent,
+  type DragStartEvent
+} from '@dnd-kit/core';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy
+} from '@dnd-kit/sortable';
+import { CSS as DndCSS } from '@dnd-kit/utilities';
 import type { Task, WindowState } from '../shared/types';
 import { useAppStore } from './store/state';
 import { TaskRow } from './components/TaskRow';
@@ -17,6 +34,38 @@ const FOCUS_SPOTLIGHT_INACTIVITY_MS = 60 * 1000;
 const getActiveTask = (tasks: Task[]): Task | undefined =>
   tasks.find((task) => task.status !== 'completed' && task.status !== 'struck');
 
+interface SortableTaskRowProps {
+  task: Task;
+  index: number;
+  isActive: boolean;
+  isSelected: boolean;
+  onEdit: (task: Task) => void;
+  onSelect: (task: Task) => void;
+}
+
+function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect }: SortableTaskRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  const style: CSSProperties = {
+    transform: transform ? DndCSS.Transform.toString(transform) : undefined,
+    transition,
+    cursor: isDragging ? 'grabbing' : undefined,
+    zIndex: isDragging ? 1 : undefined
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <TaskRow
+        task={task}
+        index={index}
+        isActive={isActive}
+        isSelected={isSelected}
+        onEdit={onEdit}
+        onSelect={onSelect}
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const {
     state,
@@ -25,6 +74,7 @@ export default function App() {
     completeActiveTask,
     addTime,
     updateTask,
+    reorderTasks,
     dispatchTick,
     setAlwaysOnTop
   } = useAppStore();
@@ -42,6 +92,8 @@ export default function App() {
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTaskRef = useRef<Task | undefined>(undefined);
   const lastTrackedTaskIdRef = useRef<string | null>(null);
+  const dragGuardRef = useRef(false);
+  const dragResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
@@ -63,6 +115,8 @@ export default function App() {
       return (remaining ?? assigned ?? 0) > 0;
     });
   }, [state.tasks]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   useEffect(() => {
     if (!hydrated) {
@@ -129,6 +183,14 @@ export default function App() {
     };
   }, [hydrated, state.tasks, reminderOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (dragResetTimeoutRef.current) {
+        clearTimeout(dragResetTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const closeModal = useCallback(() => {
     setModalState(null);
   }, []);
@@ -142,8 +204,50 @@ export default function App() {
   }, []);
 
   const handleSelectTask = useCallback((task: Task) => {
+    if (dragGuardRef.current) {
+      return;
+    }
     setSelectedTaskId((prev) => (prev === task.id ? null : task.id));
   }, []);
+
+  const scheduleDragReset = useCallback(() => {
+    if (dragResetTimeoutRef.current) {
+      clearTimeout(dragResetTimeoutRef.current);
+    }
+    dragResetTimeoutRef.current = setTimeout(() => {
+      dragGuardRef.current = false;
+      dragResetTimeoutRef.current = null;
+    }, 120);
+  }, []);
+
+  const handleDragStart = useCallback((_: DragStartEvent) => {
+    if (dragResetTimeoutRef.current) {
+      clearTimeout(dragResetTimeoutRef.current);
+      dragResetTimeoutRef.current = null;
+    }
+    dragGuardRef.current = true;
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (over && active.id !== over.id) {
+        const currentOrder = orderedTasks.map((task) => task.id);
+        const fromIndex = currentOrder.indexOf(active.id as string);
+        const toIndex = currentOrder.indexOf(over.id as string);
+        if (fromIndex !== -1 && toIndex !== -1) {
+          const reorderedUi = arrayMove(currentOrder, fromIndex, toIndex);
+          reorderTasks([...reorderedUi].reverse());
+        }
+      }
+      scheduleDragReset();
+    },
+    [orderedTasks, reorderTasks, scheduleDragReset]
+  );
+
+  const handleDragCancel = useCallback((_: DragCancelEvent) => {
+    scheduleDragReset();
+  }, [scheduleDragReset]);
 
   const handleModalSubmit = useCallback(
     (payload: { title: string; seconds?: number }) => {
@@ -408,21 +512,28 @@ export default function App() {
           {state.tasks.length === 0 ? (
             <p className="text-center text-sm text-brand-ice/70">Create your first task to begin timeboxing.</p>
           ) : (
-            orderedTasks.slice(0, 5).map((task, index) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                index={index}
-                isActive={activeTask?.id === task.id}
-                isSelected={selectedTaskId === task.id}
-                onEdit={handleEditTask}
-                onSelect={handleSelectTask}
-              />
-            ))
+            <DndContext
+              sensors={sensors}
+              modifiers={[restrictToVerticalAxis]}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <SortableContext items={orderedTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+                {orderedTasks.map((task, index) => (
+                  <SortableTaskRow
+                    key={task.id}
+                    task={task}
+                    index={index}
+                    isActive={activeTask?.id === task.id}
+                    isSelected={selectedTaskId === task.id}
+                    onEdit={handleEditTask}
+                    onSelect={handleSelectTask}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           )}
-          {orderedTasks.length > 5 ? (
-            <p className="text-xs text-brand-ice/60">+ {orderedTasks.length - 5} more tasks queued</p>
-          ) : null}
         </section>
 
         <section className="grid grid-cols-3 gap-3">

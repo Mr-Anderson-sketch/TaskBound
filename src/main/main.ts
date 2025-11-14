@@ -6,6 +6,7 @@ import { AppState } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let currentAlwaysOnTop = true;
+let tickInterval: NodeJS.Timeout | null = null;
 
 const isDev = () => process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -52,6 +53,25 @@ const broadcastWindowState = () => {
   };
 
   mainWindow.webContents.send('window:state', state);
+};
+
+const startTickEmitter = () => {
+  if (tickInterval) {
+    return;
+  }
+  tickInterval = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow.webContents.send('timer:tick', Date.now());
+  }, 1000);
+};
+
+const stopTickEmitter = () => {
+  if (tickInterval) {
+    clearInterval(tickInterval);
+    tickInterval = null;
+  }
 };
 
 const createMainWindow = async () => {
@@ -105,6 +125,10 @@ const createMainWindow = async () => {
   mainWindow.on('unmaximize', broadcastWindowState);
   mainWindow.on('enter-full-screen', broadcastWindowState);
   mainWindow.on('leave-full-screen', broadcastWindowState);
+  mainWindow.on('closed', () => {
+    stopTickEmitter();
+    mainWindow = null;
+  });
 
   const devServer = process.env.VITE_DEV_SERVER_URL;
   if (devServer) {
@@ -118,6 +142,7 @@ const createMainWindow = async () => {
 
   mainWindow.webContents.once('did-finish-load', () => {
     broadcastWindowState();
+    startTickEmitter();
   });
 };
 
@@ -199,6 +224,7 @@ const setupApp = () => {
   });
 
   app.on('window-all-closed', () => {
+    stopTickEmitter();
     if (process.platform !== 'darwin') {
       app.quit();
     }

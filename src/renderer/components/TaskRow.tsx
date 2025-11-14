@@ -28,8 +28,8 @@ export function TaskRow(props: TaskRowProps) {
   const { task, index, isActive, isSelected = false, onEdit, onSelect } = props;
   const time = formatSeconds(task.remainingSeconds ?? task.timeAssignedSeconds);
   const displayIndex = index + 1;
-  const containerClasses = [
-    'flex items-center justify-between rounded-lg border border-brand-ice/10 bg-brand-dusk/70 px-3 py-2 transition-colors shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-coral/60 focus:ring-offset-2 focus:ring-offset-brand-navy',
+    const containerClasses = [
+      'flex items-center justify-between rounded-lg border border-brand-ice/10 bg-brand-dusk/70 px-3 py-2 transition-colors shadow-sm cursor-grab select-none focus:outline-none focus:ring-2 focus:ring-brand-coral/60 focus:ring-offset-2 focus:ring-offset-brand-navy active:cursor-grabbing',
     isActive ? 'border-brand-teal/60 bg-brand-teal/20 shadow-md' : '',
     isSelected && !isActive ? 'border-brand-coral/60 bg-brand-coral/10 shadow-md' : ''
   ]

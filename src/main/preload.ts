@@ -19,6 +19,15 @@ const api: ElectronApi = {
     return () => {
       ipcRenderer.removeListener('window:state', handler);
     };
+  },
+  onTimerTick: (callback: (timestamp: number) => void) => {
+    const handler = (_event: unknown, timestamp: number) => {
+      callback(timestamp);
+    };
+    ipcRenderer.on('timer:tick', handler);
+    return () => {
+      ipcRenderer.removeListener('timer:tick', handler);
+    };
   }
 };
 
