@@ -28,7 +28,9 @@ const api: ElectronApi = {
     return () => {
       ipcRenderer.removeListener('timer:tick', handler);
     };
-  }
+  },
+  setWindowSize: (width: number, height: number): Promise<void> => ipcRenderer.invoke('window:setSize', width, height),
+  moveWindowToTopRight: (): Promise<void> => ipcRenderer.invoke('window:moveToTopRight')
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

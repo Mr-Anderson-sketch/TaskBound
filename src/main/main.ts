@@ -194,6 +194,23 @@ const registerIpc = () => {
       isMaximized: mainWindow?.isMaximized() ?? false
     };
   });
+
+  ipcMain.handle('window:setSize', async (_event: IpcMainInvokeEvent, width: number, height: number) => {
+    if (mainWindow) {
+      mainWindow.setSize(width, height);
+    }
+  });
+
+  ipcMain.handle('window:moveToTopRight', async () => {
+    if (!mainWindow) {
+      return;
+    }
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    const [windowWidth] = mainWindow.getSize();
+    const x = screenWidth - windowWidth - 20;
+    const y = 20;
+    mainWindow.setPosition(x, y);
+  });
 };
 
 const setupApp = () => {

@@ -11,4 +11,6 @@ export interface ElectronApi {
   getWindowState?(): Promise<WindowState>;
   onWindowStateChange?(callback: (state: WindowState) => void): () => void;
   onTimerTick?(callback: (timestamp: number) => void): () => void;
+  setWindowSize?(width: number, height: number): Promise<void>;
+  moveWindowToTopRight?(): Promise<void>;
 }

@@ -7,6 +7,7 @@ interface TitleBarProps {
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
+  onAddTask: () => void;
 }
 
 const buttonBase =
@@ -21,15 +22,26 @@ export const TitleBar: FC<TitleBarProps> = ({
   onToggleAlwaysOnTop,
   onMinimize,
   onToggleMaximize,
-  onClose
+  onClose,
+  onAddTask
 }) => {
   return (
     <header className="flex items-center justify-between px-3 py-2 text-xs" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
       <div className="flex items-center gap-2 text-brand-ice/80">
         <div className="h-2 w-2 rounded-full bg-brand-coral/70" aria-hidden="true" />
-        <span className="select-none text-sm font-semibold text-brand-ice">TimeBound</span>
       </div>
       <div className="flex items-center gap-2" style={noDragRegionStyle}>
+        <button
+          type="button"
+          className="rounded-full border-2 border-brand-coral/80 bg-brand-coral/20 p-1.5 text-brand-coral transition hover:bg-brand-coral/30 hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral"
+          onClick={onAddTask}
+          title="Add new task"
+          aria-label="Add new task"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
         <button
           type="button"
           className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral ${

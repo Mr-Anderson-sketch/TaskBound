@@ -29,7 +29,7 @@ import { formatSeconds } from './utils/time';
 import type { ElectronApi } from '../shared/ipc';
 
 const REMINDER_INTERVAL_MS = 3 * 60 * 1000;
-const FOCUS_SPOTLIGHT_INACTIVITY_MS = 60 * 1000;
+const FOCUS_SPOTLIGHT_INACTIVITY_MS = 40 * 1000;
 
 const getActiveTask = (tasks: Task[]): Task | undefined =>
   tasks.find((task) => task.status !== 'completed' && task.status !== 'struck');
@@ -94,10 +94,15 @@ export default function App() {
   const lastTrackedTaskIdRef = useRef<string | null>(null);
   const dragGuardRef = useRef(false);
   const dragResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showAllTasks, setShowAllTasks] = useState(false);
 
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
   const orderedTasks = useMemo(() => [...state.tasks].reverse(), [state.tasks]);
+  const visibleTasks = useMemo(() => {
+    return showAllTasks ? orderedTasks : orderedTasks.slice(0, 5);
+  }, [orderedTasks, showAllTasks]);
+  const hiddenTaskCount = orderedTasks.length - 5;
   const alwaysOnTopEnabled = state.preferences.alwaysOnTop;
   const selectedTask = useMemo(
     () => (selectedTaskId ? state.tasks.find((t) => t.id === selectedTaskId) : null),
@@ -335,6 +340,16 @@ export default function App() {
     }
   }, []);
 
+  const handleFocusMode = useCallback(async () => {
+    if (!activeTask || !electronApi) {
+      return;
+    }
+    clearInactivityTimer();
+    updateFocusSpotlightOpen(true);
+    await electronApi.setWindowSize?.(340, 240);
+    await electronApi.moveWindowToTopRight?.();
+  }, [activeTask, electronApi, clearInactivityTimer, updateFocusSpotlightOpen]);
+
   const scheduleFocusSpotlight = useCallback(() => {
     clearInactivityTimer();
     if (!activeTaskRef.current || focusSpotlightOpenRef.current) {
@@ -380,6 +395,14 @@ export default function App() {
       setSelectedTaskId(null);
     }
   }, [selectedTaskId, state.tasks]);
+
+  useEffect(() => {
+    if (focusSpotlightOpenState) {
+      document.body.classList.add('hide-scrollbar');
+    } else {
+      document.body.classList.remove('hide-scrollbar');
+    }
+  }, [focusSpotlightOpenState]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -479,6 +502,7 @@ export default function App() {
           onMinimize={() => electronApi?.minimizeWindow?.()}
           onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
           onClose={() => electronApi?.closeWindow?.()}
+          onAddTask={handleAddTask}
         />
         <main className="flex flex-1 flex-col gap-4">
   <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
@@ -512,27 +536,38 @@ export default function App() {
           {state.tasks.length === 0 ? (
             <p className="text-center text-sm text-brand-ice/70">Create your first task to begin timeboxing.</p>
           ) : (
-            <DndContext
-              sensors={sensors}
-              modifiers={[restrictToVerticalAxis]}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragCancel={handleDragCancel}
-            >
-              <SortableContext items={orderedTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-                {orderedTasks.map((task, index) => (
-                  <SortableTaskRow
-                    key={task.id}
-                    task={task}
-                    index={index}
-                    isActive={activeTask?.id === task.id}
-                    isSelected={selectedTaskId === task.id}
-                    onEdit={handleEditTask}
-                    onSelect={handleSelectTask}
-                  />
-                ))}
-              </SortableContext>
-            </DndContext>
+            <>
+              <DndContext
+                sensors={sensors}
+                modifiers={[restrictToVerticalAxis]}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDragCancel={handleDragCancel}
+              >
+                <SortableContext items={visibleTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+                  {visibleTasks.map((task, index) => (
+                    <SortableTaskRow
+                      key={task.id}
+                      task={task}
+                      index={index}
+                      isActive={activeTask?.id === task.id}
+                      isSelected={selectedTaskId === task.id}
+                      onEdit={handleEditTask}
+                      onSelect={handleSelectTask}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+              {hiddenTaskCount > 0 && (
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-brand-aqua/30 bg-brand-aqua/10 px-3 py-2 text-xs font-semibold text-brand-aqua transition hover:bg-brand-aqua/20"
+                  onClick={() => setShowAllTasks(!showAllTasks)}
+                >
+                  {showAllTasks ? '− Show Less' : `+ Show ${hiddenTaskCount} More Task${hiddenTaskCount === 1 ? '' : 's'}`}
+                </button>
+              )}
+            </>
           )}
         </section>
 
@@ -562,19 +597,30 @@ export default function App() {
           </button>
         </section>
 
-        <button
-          type="button"
-          className="rounded-xl border border-brand-coral/50 bg-brand-coral/20 px-3 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
-          onClick={() => {
-            clearInactivityTimer();
-            if (activeTask) {
-              updateFocusSpotlightOpen(true);
-            }
-          }}
-          disabled={!activeTask}
-        >
-          See Focus Spotlight
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="flex-1 rounded-xl border border-brand-coral/50 bg-brand-coral/20 px-3 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
+            onClick={() => {
+              clearInactivityTimer();
+              if (activeTask) {
+                updateFocusSpotlightOpen(true);
+              }
+            }}
+            disabled={!activeTask}
+          >
+            See Focus Spotlight
+          </button>
+          <button
+            type="button"
+            className="flex-1 rounded-xl border border-brand-teal/50 bg-brand-teal/20 px-3 py-2 text-sm font-semibold text-brand-teal transition hover:bg-brand-teal/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
+            onClick={handleFocusMode}
+            disabled={!activeTask}
+            title="Activate spotlight, minimize window, and move to top-right corner"
+          >
+            Focus Mode
+          </button>
+        </div>
 
         <footer className="text-xs text-brand-ice/60">
           {pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'All tasks completed'}
