@@ -1,5 +1,4 @@
 import type { CSSProperties, FC } from 'react';
-import logoIcon from '../assets/logo-icon.png';
 
 interface TitleBarProps {
   alwaysOnTop: boolean;
@@ -27,10 +26,9 @@ export const TitleBar: FC<TitleBarProps> = ({
   onAddTask
 }) => {
   return (
-    <header className="flex items-center justify-between px-4 py-3 text-xs bg-brand-navy/40" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
-      <div className="flex items-center gap-3">
-        <img src={logoIcon} alt="TimeBound" className="h-8 w-8" />
-        <span className="text-xl font-bold text-brand-ice tracking-tight">TimeBound</span>
+    <header className="flex items-center justify-between px-3 py-2 text-xs" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
+      <div className="flex items-center gap-2 text-brand-ice/80">
+        <div className="h-2 w-2 rounded-full bg-brand-coral/70" aria-hidden="true" />
       </div>
       <div className="flex items-center gap-2" style={noDragRegionStyle}>
         <button

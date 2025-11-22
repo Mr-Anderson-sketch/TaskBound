@@ -17,17 +17,14 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
-import type { Task, WindowState } from '../shared/types';
+import type { Task } from '../shared/types';
 import { useAppStore } from './store/state';
 import { TaskRow } from './components/TaskRow';
 import { EditModal } from './components/EditModal';
 import { ReminderPopup } from './components/Popup';
 import { AddTimeModal } from './components/AddTimeModal';
 import { FocusSpotlight } from './components/FocusSpotlight';
-import { TitleBar } from './components/TitleBar';
 import { formatSeconds } from './utils/time';
-import type { ElectronApi } from '../shared/ipc';
-import { v4 as uuidv4 } from 'uuid';
 
 const REMINDER_INTERVAL_MS = 3 * 60 * 1000;
 const FOCUS_SPOTLIGHT_INACTIVITY_MS = 40 * 1000;
@@ -42,12 +39,9 @@ interface SortableTaskRowProps {
   isSelected: boolean;
   onEdit: (task: Task) => void;
   onSelect: (task: Task) => void;
-  onAddTime: (task: Task) => void;
-  onDelete: (task: Task) => void;
-  onMakeActive: (task: Task) => void;
 }
 
-function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect, onAddTime, onDelete, onMakeActive }: SortableTaskRowProps) {
+function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect }: SortableTaskRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style: CSSProperties = {
     transform: transform ? DndCSS.Transform.toString(transform) : undefined,
@@ -65,9 +59,6 @@ function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect, 
         isSelected={isSelected}
         onEdit={onEdit}
         onSelect={onSelect}
-        onAddTime={onAddTime}
-        onDelete={onDelete}
-        onMakeActive={onMakeActive}
       />
     </div>
   );
@@ -81,10 +72,8 @@ export default function App() {
     completeActiveTask,
     addTime,
     updateTask,
-    deleteTask,
     reorderTasks,
-    dispatchTick,
-    setAlwaysOnTop
+    dispatchTick
   } = useAppStore();
   const [modalState, setModalState] = useState<{ mode: 'create' | 'edit'; task?: Task } | null>(null);
   const [addTimeOpen, setAddTimeOpen] = useState(false);
@@ -95,7 +84,6 @@ export default function App() {
   const snoozeUntilRef = useRef<number | null>(null);
   const lastReminderTaskIdRef = useRef<string | null>(null);
   const [focusSpotlightOpenState, setFocusSpotlightOpenState] = useState(false);
-  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const focusSpotlightOpenRef = useRef(focusSpotlightOpenState);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTaskRef = useRef<Task | undefined>(undefined);
@@ -103,8 +91,6 @@ export default function App() {
   const dragGuardRef = useRef(false);
   const dragResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAllTasks, setShowAllTasks] = useState(false);
-  const [showUploadTooltip, setShowUploadTooltip] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
@@ -113,7 +99,6 @@ export default function App() {
     return showAllTasks ? orderedTasks : orderedTasks.slice(0, 5);
   }, [orderedTasks, showAllTasks]);
   const hiddenTaskCount = orderedTasks.length - 5;
-  const alwaysOnTopEnabled = state.preferences.alwaysOnTop;
   const selectedTask = useMemo(
     () => (selectedTaskId ? state.tasks.find((t) => t.id === selectedTaskId) : null),
     [selectedTaskId, state.tasks]
@@ -225,46 +210,6 @@ export default function App() {
     setSelectedTaskId((prev) => (prev === task.id ? null : task.id));
   }, []);
 
-  const handleTaskAddTime = useCallback((task: Task) => {
-    setSelectedTaskId(task.id);
-    setAddTimeOpen(true);
-  }, []);
-
-  const handleTaskDelete = useCallback((task: Task) => {
-    deleteTask(task.id);
-    if (selectedTaskId === task.id) {
-      setSelectedTaskId(null);
-    }
-  }, [deleteTask, selectedTaskId]);
-
-  const handleMakeActive = useCallback((task: Task) => {
-    // Find the current active task index
-    const activeIndex = state.tasks.findIndex(t => t.status !== 'completed' && t.status !== 'struck');
-
-    if (activeIndex === -1) {
-      // No active task, just move to the end
-      const otherTaskIds = state.tasks.filter(t => t.id !== task.id).map(t => t.id);
-      const newOrder = [task.id, ...otherTaskIds];
-      reorderTasks(newOrder);
-      return;
-    }
-
-    // Insert the selected task right after the current active task
-    const taskIds = state.tasks.map(t => t.id);
-    const selectedTaskIndex = taskIds.indexOf(task.id);
-
-    // Remove the task from its current position
-    const reordered = [...taskIds];
-    reordered.splice(selectedTaskIndex, 1);
-
-    // Insert it right after the active task (which shifts active task position if needed)
-    const newActiveIndex = reordered.findIndex(id => id === taskIds[activeIndex]);
-    reordered.splice(newActiveIndex + 1, 0, task.id);
-
-    // Don't reverse - we're working with state.tasks which is already in correct storage order
-    reorderTasks(reordered);
-  }, [state.tasks, reorderTasks]);
-
   const scheduleDragReset = useCallback(() => {
     if (dragResetTimeoutRef.current) {
       clearTimeout(dragResetTimeoutRef.current);
@@ -362,120 +307,9 @@ export default function App() {
     setModalState({ mode: 'edit', task: activeTask });
   }, [activeTask]);
 
-  const handleReminderCloseApp = useCallback(() => {
-    const api = (window as Window & { electronAPI?: { quitApp?: () => Promise<void> } }).electronAPI;
-    void api?.quitApp?.();
-  }, []);
-
-  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      if (!content) {
-        setErrorMessage('Failed to read file content.');
-        return;
-      }
-
-      try {
-        const tasks: Array<{ title: string; seconds?: number }> = [];
-
-        if (file.name.endsWith('.csv')) {
-          // Parse CSV format: Task, Time (in minutes)
-          const lines = content.split('\n').filter(line => line.trim());
-          // Skip header row if it contains "Task" or "Time"
-          const startIndex = lines[0] && (lines[0].toLowerCase().includes('task') || lines[0].toLowerCase().includes('time')) ? 1 : 0;
-
-          for (let i = startIndex; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            const parts = line.split(',').map(p => p.trim());
-            if (parts.length < 1) continue;
-
-            const title = parts[0];
-            const timeInMinutes = parts[1] ? parseInt(parts[1], 10) : undefined;
-            const seconds = timeInMinutes && !isNaN(timeInMinutes) ? timeInMinutes * 60 : undefined;
-
-            if (title) {
-              tasks.push({ title, seconds });
-            }
-          }
-        } else {
-          // Parse text format: Task name [HH:MM] or Task name [MM:SS]
-          const lines = content.split('\n').filter(line => line.trim());
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            // Check for time in brackets [HH:MM] or [MM:SS]
-            const match = trimmed.match(/^(.+?)\s*\[(\d{1,2}):(\d{2})\]\s*$/);
-
-            if (match) {
-              const title = match[1].trim();
-              const first = parseInt(match[2], 10);
-              const second = parseInt(match[3], 10);
-              const seconds = (first * 60) + second;
-              tasks.push({ title, seconds });
-            } else {
-              // No time specified
-              tasks.push({ title: trimmed });
-            }
-          }
-        }
-
-        if (tasks.length === 0) {
-          setErrorMessage('No valid tasks found in file.');
-          return;
-        }
-
-        // Add all tasks to the store
-        tasks.forEach(task => {
-          addTask(task.title, task.seconds);
-        });
-
-        setErrorMessage(`Successfully imported ${tasks.length} task${tasks.length === 1 ? '' : 's'}!`);
-      } catch (error) {
-        console.error('Failed to parse file:', error);
-        setErrorMessage('Failed to parse file. Please check the format.');
-      }
-    };
-
-    reader.onerror = () => {
-      setErrorMessage('Failed to read file.');
-    };
-
-    reader.readAsText(file);
-
-    // Reset the input so the same file can be uploaded again
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }, [addTask]);
-
-  const handleUploadButtonClick = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
   const updateFocusSpotlightOpen = useCallback((value: boolean) => {
     focusSpotlightOpenRef.current = value;
     setFocusSpotlightOpenState(value);
-  }, []);
-
-  const handleToggleAlwaysOnTop = useCallback(() => {
-    setAlwaysOnTop(!alwaysOnTopEnabled).catch((error) => {
-      console.error('Failed to update always-on-top preference', error);
-      setErrorMessage('Unable to update window pin setting.');
-    });
-  }, [alwaysOnTopEnabled, setAlwaysOnTop]);
-
-  const electronApi = useMemo(() => {
-    return (window as Window & { electronAPI?: ElectronApi }).electronAPI ?? null;
   }, []);
 
   const clearInactivityTimer = useCallback(() => {
@@ -484,16 +318,6 @@ export default function App() {
       inactivityTimerRef.current = null;
     }
   }, []);
-
-  const handleFocusMode = useCallback(async () => {
-    if (!activeTask || !electronApi) {
-      return;
-    }
-    clearInactivityTimer();
-    updateFocusSpotlightOpen(true);
-    await electronApi.setWindowSize?.(340, 240);
-    await electronApi.moveWindowToTopRight?.();
-  }, [activeTask, electronApi, clearInactivityTimer, updateFocusSpotlightOpen]);
 
   const scheduleFocusSpotlight = useCallback(() => {
     clearInactivityTimer();
@@ -585,33 +409,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const api = electronApi;
-    if (!api?.getWindowState) {
-      return;
-    }
-
-    let unsubscribe: (() => void) | undefined;
-
-    api
-      .getWindowState()
-      .then((state: WindowState) => {
-        setIsWindowMaximized(Boolean(state.isMaximized));
-      })
-      .catch((error: unknown) => {
-        console.error('Failed to get window state', error);
-      });
-
-    if (api.onWindowStateChange) {
-      unsubscribe = api.onWindowStateChange((state: WindowState) => {
-        setIsWindowMaximized(Boolean(state.isMaximized));
-      });
-    }
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [electronApi]);
 
   if (!hydrated) {
     return (
@@ -629,8 +426,6 @@ export default function App() {
     focusSpotlightOpenState ? 'bg-transparent hide-scrollbar' : 'bg-brand-navy'
   }`;
 
-  const dragLayerStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
-
   const appContainerClasses = `mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
     focusSpotlightOpenState
       ? 'pointer-events-none opacity-0'
@@ -638,18 +433,9 @@ export default function App() {
   }`;
 
   return (
-      <div className={rootClasses} style={dragLayerStyle}>
+      <div className={rootClasses}>
         <div className={appContainerClasses}>
-        <TitleBar
-          alwaysOnTop={alwaysOnTopEnabled}
-          isMaximized={isWindowMaximized}
-          onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
-          onMinimize={() => electronApi?.minimizeWindow?.()}
-          onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
-          onClose={() => electronApi?.closeWindow?.()}
-          onAddTask={handleAddTask}
-        />
-        <main className="flex flex-1 flex-col gap-4">
+        <main className="flex flex-1 flex-col gap-4 pt-4">
   <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
             <div>
@@ -699,9 +485,6 @@ export default function App() {
                       isSelected={selectedTaskId === task.id}
                       onEdit={handleEditTask}
                       onSelect={handleSelectTask}
-                      onAddTime={handleTaskAddTime}
-                      onDelete={handleTaskDelete}
-                      onMakeActive={handleMakeActive}
                     />
                   ))}
                 </SortableContext>
@@ -719,7 +502,7 @@ export default function App() {
           )}
         </section>
 
-        <section className="grid grid-cols-4 gap-3">
+        <section className="grid grid-cols-3 gap-3">
           <button
             type="button"
             className="rounded-xl border border-brand-coral/80 bg-brand-coral px-3 py-2 text-sm font-semibold text-brand-navy hover:bg-brand-coral/90"
@@ -727,35 +510,6 @@ export default function App() {
           >
             + Add Task
           </button>
-          <div className="relative">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".txt,.csv"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-            <button
-              type="button"
-              className="w-full rounded-xl border border-brand-aqua/70 bg-brand-aqua/20 px-3 py-2 text-sm font-semibold text-brand-aqua hover:bg-brand-aqua/30"
-              onClick={handleUploadButtonClick}
-              onMouseEnter={() => setShowUploadTooltip(true)}
-              onMouseLeave={() => setShowUploadTooltip(false)}
-            >
-              📤 Upload
-            </button>
-            {showUploadTooltip && (
-              <div className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-lg border border-brand-aqua/40 bg-brand-dusk p-3 shadow-xl">
-                <p className="text-xs font-semibold text-brand-aqua mb-2">Upload Tasks - Supported Formats:</p>
-                <div className="space-y-1 text-xs text-brand-ice/80">
-                  <p><span className="font-semibold text-brand-coral">Text file:</span> Task name [HH:MM]</p>
-                  <p className="pl-2 text-brand-ice/60">(one per line, time optional)</p>
-                  <p className="mt-1"><span className="font-semibold text-brand-coral">CSV file:</span> Task, Time</p>
-                  <p className="pl-2 text-brand-ice/60">(time in minutes)</p>
-                </div>
-              </div>
-            )}
-          </div>
           <button
             type="button"
             className="rounded-xl border border-brand-teal/80 bg-brand-teal px-3 py-2 text-sm font-semibold text-white hover:bg-brand-teal/90 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/40"
@@ -774,30 +528,19 @@ export default function App() {
           </button>
         </section>
 
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="flex-1 rounded-xl border border-brand-coral/50 bg-brand-coral/20 px-3 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
-            onClick={() => {
-              clearInactivityTimer();
-              if (activeTask) {
-                updateFocusSpotlightOpen(true);
-              }
-            }}
-            disabled={!activeTask}
-          >
-            See Focus Spotlight
-          </button>
-          <button
-            type="button"
-            className="flex-1 rounded-xl border border-brand-teal/50 bg-brand-teal/20 px-3 py-2 text-sm font-semibold text-brand-teal transition hover:bg-brand-teal/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
-            onClick={handleFocusMode}
-            disabled={!activeTask}
-            title="Activate spotlight, minimize window, and move to top-right corner"
-          >
-            Focus Mode
-          </button>
-        </div>
+        <button
+          type="button"
+          className="w-full rounded-xl border border-brand-coral/50 bg-brand-coral/20 px-3 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/25 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
+          onClick={() => {
+            clearInactivityTimer();
+            if (activeTask) {
+              updateFocusSpotlightOpen(true);
+            }
+          }}
+          disabled={!activeTask}
+        >
+          See Focus Spotlight
+        </button>
 
         <footer className="text-xs text-brand-ice/60">
           {pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'All tasks completed'}
@@ -826,7 +569,6 @@ export default function App() {
         taskTitle={activeTask?.title}
         onSetTime={handleReminderSetTime}
         onRemindLater={handleReminderSnooze}
-        onCloseApp={handleReminderCloseApp}
       />
 
       <FocusSpotlight

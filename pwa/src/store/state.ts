@@ -2,7 +2,6 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import type { AppState, Task } from '../../shared/types';
 import { createEmptyState, ensureAlignedTasks } from '../../shared/stateHelpers';
-import type { ElectronApi } from '../../shared/ipc';
 
 const initialState: AppState = createEmptyState('0.0.0');
 
@@ -15,8 +14,7 @@ type AppAction =
   | { type: 'updateTask'; payload: { taskId: string; title: string; seconds?: number; now: string } }
   | { type: 'deleteTask'; payload: { taskId: string; now: string } }
   | { type: 'reorderTasks'; payload: { orderedTaskIds: string[]; now: string } }
-  | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } }
-  | { type: 'setAlwaysOnTop'; payload: { value: boolean } };
+  | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } };
 
 type Reducer = (state: AppState, action: AppAction) => AppState;
 
@@ -216,11 +214,8 @@ const reducer: Reducer = (state, action) => {
         } else {
           nextRemaining = undefined;
         }
-        const wasFinished = task.status === 'completed' || task.status === 'struck';
         const status: Task['status'] =
-          wasFinished && hasTime && nextRemaining && nextRemaining > 0
-            ? 'in_progress'
-            : task.status === 'completed' || task.status === 'struck'
+          task.status === 'completed' || task.status === 'struck'
             ? task.status
             : hasTime
             ? 'in_progress'
@@ -231,8 +226,7 @@ const reducer: Reducer = (state, action) => {
           timeAssignedSeconds: hasTime ? nextAssigned : undefined,
           remainingSeconds: hasTime ? nextRemaining : undefined,
           updatedAt: now,
-          status,
-          completedAt: wasFinished && hasTime && nextRemaining && nextRemaining > 0 ? undefined : task.completedAt
+          status
         };
       });
       const nextState: AppState = {
@@ -285,15 +279,6 @@ const reducer: Reducer = (state, action) => {
         }
       };
     }
-    case 'setAlwaysOnTop': {
-      return {
-        ...state,
-        preferences: {
-          ...state.preferences,
-          alwaysOnTop: action.payload.value
-        }
-      };
-    }
     default:
       return state;
   }
@@ -309,17 +294,17 @@ export interface AppStore {
   deleteTask: (taskId: string) => void;
   reorderTasks: (orderedTaskIds: string[]) => void;
   dispatchTick: (timestamp?: number) => void;
-  setAlwaysOnTop: (value: boolean) => Promise<void>;
 }
 
 const shouldPersist = (type: AppAction['type']): boolean => {
   return type !== 'tick' && type !== 'hydrate' && type !== 'syncMeta';
 };
 
+const STORAGE_KEY = 'timebound-app-state';
+
 export const useAppStore = (): AppStore => {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [hydrated, setHydrated] = useState(false);
-  const apiRef = useRef<ElectronApi | null>(null);
   const stateRef = useRef(state);
   const pendingPersistRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -340,29 +325,16 @@ export const useAppStore = (): AppStore => {
   }, []);
 
   useEffect(() => {
-    const api = (window as Window & { electronAPI?: ElectronApi }).electronAPI;
-    apiRef.current = api ?? null;
-    if (!api) {
-      setHydrated(true);
-      return;
-    }
-    let mounted = true;
-    api
-      .loadState()
-      .then((loaded) => {
-        if (!mounted) {
-          return;
-        }
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const loaded = JSON.parse(stored) as AppState;
         dispatch({ type: 'hydrate', payload: loaded });
-        setHydrated(true);
-      })
-      .catch((error) => {
-        console.error('Failed to load state', error);
-        setHydrated(true);
-      });
-    return () => {
-      mounted = false;
-    };
+      }
+    } catch (error) {
+      console.error('Failed to load state from localStorage', error);
+    }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -372,30 +344,25 @@ export const useAppStore = (): AppStore => {
     if (!pendingPersistRef.current) {
       return;
     }
-    const api = apiRef.current;
-    if (!api) {
-      return;
-    }
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
     debounceRef.current = setTimeout(() => {
       const snapshot = stateRef.current;
       pendingPersistRef.current = false;
-      api
-        .saveState(snapshot)
-        .then((saved: AppState) => {
-          dispatch({
-            type: 'syncMeta',
-            payload: {
-              lastSavedAt: saved.meta.lastSavedAt,
-              appVersion: saved.meta.appVersion
-            }
-          });
-        })
-        .catch((error: unknown) => {
-          console.error('Failed to save state', error);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+        const now = new Date().toISOString();
+        dispatch({
+          type: 'syncMeta',
+          payload: {
+            lastSavedAt: now,
+            appVersion: snapshot.meta.appVersion
+          }
         });
+      } catch (error) {
+        console.error('Failed to save state to localStorage', error);
+      }
     }, 200);
 
     return () => {
@@ -456,17 +423,6 @@ export const useAppStore = (): AppStore => {
     [dispatch]
   );
 
-  const setAlwaysOnTopPreference = useCallback(
-    async (value: boolean) => {
-      const api = apiRef.current;
-      if (api?.setAlwaysOnTop) {
-        await api.setAlwaysOnTop(value);
-      }
-      dispatchWithPersist({ type: 'setAlwaysOnTop', payload: { value } });
-    },
-    [dispatchWithPersist]
-  );
-
   const addTask = useCallback(
     (title: string, seconds?: number) => {
       dispatchWithPersist({
@@ -521,22 +477,6 @@ export const useAppStore = (): AppStore => {
     [dispatchWithPersist]
   );
 
-  useEffect(() => {
-    if (!hydrated) {
-      return;
-    }
-    const api = apiRef.current;
-    if (!api?.onTimerTick) {
-      return;
-    }
-    const unsubscribeTick = api.onTimerTick((timestamp: number) => {
-      dispatchTick(timestamp);
-    });
-
-    return () => {
-      unsubscribeTick?.();
-    };
-  }, [hydrated, dispatchTick]);
 
   useEffect(() => {
     if (hydrated && lastTickTimestampRef.current === null) {
@@ -554,7 +494,6 @@ export const useAppStore = (): AppStore => {
     updateTask,
     deleteTask,
     reorderTasks,
-    dispatchTick,
-    setAlwaysOnTop: setAlwaysOnTopPreference
+    dispatchTick
   };
 };
