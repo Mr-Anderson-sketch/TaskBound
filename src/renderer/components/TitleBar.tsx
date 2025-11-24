@@ -8,7 +8,6 @@ interface TitleBarProps {
   onMinimize: () => void;
   onToggleMaximize: () => void;
   onClose: () => void;
-  onAddTask: () => void;
 }
 
 const buttonBase =
@@ -23,27 +22,18 @@ export const TitleBar: FC<TitleBarProps> = ({
   onToggleAlwaysOnTop,
   onMinimize,
   onToggleMaximize,
-  onClose,
-  onAddTask
+  onClose
 }) => {
   return (
-    <header className="flex items-center justify-between px-4 py-3 text-xs bg-brand-navy/40" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
+    <header className="flex items-center justify-between pr-4 pt-3 pb-1.5 text-xs bg-brand-navy/40" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
       <div className="flex items-center gap-3">
-        <img src={logoIcon} alt="TimeBound" className="h-8 w-8" />
-        <span className="text-xl font-bold text-brand-ice tracking-tight">TimeBound</span>
+        <img src={logoIcon} alt="TimeBound" className="h-12 w-12" />
+        <div className="flex flex-col justify-center">
+          <h1 className="text-xl font-bold text-brand-ice tracking-tight leading-none">TimeBound</h1>
+          <p className="text-xs text-brand-aqua/80 leading-tight">Focus, finish, and track your wins.</p>
+        </div>
       </div>
       <div className="flex items-center gap-2" style={noDragRegionStyle}>
-        <button
-          type="button"
-          className="rounded-full border-2 border-brand-coral/80 bg-brand-coral/20 p-1.5 text-brand-coral transition hover:bg-brand-coral/30 hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral"
-          onClick={onAddTask}
-          title="Add new task"
-          aria-label="Add new task"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
         <button
           type="button"
           className={`flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral ${

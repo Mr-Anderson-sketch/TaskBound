@@ -23,6 +23,7 @@ import { TaskRow } from './components/TaskRow';
 import { EditModal } from './components/EditModal';
 import { ReminderPopup } from './components/Popup';
 import { AddTimeModal } from './components/AddTimeModal';
+import { BulkTaskModal } from './components/BulkTaskModal';
 import { FocusSpotlight } from './components/FocusSpotlight';
 import { TitleBar } from './components/TitleBar';
 import { formatSeconds } from './utils/time';
@@ -103,8 +104,10 @@ export default function App() {
   const dragGuardRef = useRef(false);
   const dragResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAllTasks, setShowAllTasks] = useState(false);
-  const [showUploadTooltip, setShowUploadTooltip] = useState(false);
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
+  const [showBulkTaskModal, setShowBulkTaskModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadMenuRef = useRef<HTMLDivElement>(null);
 
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
@@ -205,6 +208,20 @@ export default function App() {
       }
     };
   }, []);
+
+  // Close upload menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (uploadMenuRef.current && !uploadMenuRef.current.contains(event.target as Node)) {
+        setShowUploadMenu(false);
+      }
+    };
+
+    if (showUploadMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showUploadMenu]);
 
   const closeModal = useCallback(() => {
     setModalState(null);
@@ -406,20 +423,31 @@ export default function App() {
             }
           }
         } else {
-          // Parse text format: Task name [HH:MM] or Task name [MM:SS]
+          // Parse text format: Task name [HH:MM] or Task name [MM:SS] or Task; x mins
           const lines = content.split('\n').filter(line => line.trim());
 
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
 
-            // Check for time in brackets [HH:MM] or [MM:SS]
-            const match = trimmed.match(/^(.+?)\s*\[(\d{1,2}):(\d{2})\]\s*$/);
+            // Check for semicolon format: Task; x mins or Task; x
+            const semicolonMatch = trimmed.match(/^(.+?);\s*(\d+)\s*(?:mins?)?$/i);
+            if (semicolonMatch) {
+              const title = semicolonMatch[1].trim();
+              const minutes = parseInt(semicolonMatch[2], 10);
+              const seconds = minutes * 60;
+              if (title) {
+                tasks.push({ title, seconds });
+              }
+              continue;
+            }
 
-            if (match) {
-              const title = match[1].trim();
-              const first = parseInt(match[2], 10);
-              const second = parseInt(match[3], 10);
+            // Check for time in brackets [HH:MM] or [MM:SS]
+            const bracketMatch = trimmed.match(/^(.+?)\s*\[(\d{1,2}):(\d{2})\]\s*$/);
+            if (bracketMatch) {
+              const title = bracketMatch[1].trim();
+              const first = parseInt(bracketMatch[2], 10);
+              const second = parseInt(bracketMatch[3], 10);
               const seconds = (first * 60) + second;
               tasks.push({ title, seconds });
             } else {
@@ -459,8 +487,66 @@ export default function App() {
   }, [addTask]);
 
   const handleUploadButtonClick = useCallback(() => {
+    setShowUploadMenu(!showUploadMenu);
+  }, [showUploadMenu]);
+
+  const handleFileUploadClick = useCallback(() => {
+    setShowUploadMenu(false);
     fileInputRef.current?.click();
   }, []);
+
+  const handleBulkTaskSubmit = useCallback((tasksText: string) => {
+    try {
+      const tasks: Array<{ title: string; seconds?: number }> = [];
+      const lines = tasksText.split('\n').filter(line => line.trim());
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        // Check for semicolon format: Task; x mins or Task; x
+        const semicolonMatch = trimmed.match(/^(.+?);\s*(\d+)\s*(?:mins?)?$/i);
+        if (semicolonMatch) {
+          const title = semicolonMatch[1].trim();
+          const minutes = parseInt(semicolonMatch[2], 10);
+          const seconds = minutes * 60;
+          if (title) {
+            tasks.push({ title, seconds });
+          }
+          continue;
+        }
+
+        // Check for time in brackets [HH:MM] or [MM:SS]
+        const bracketMatch = trimmed.match(/^(.+?)\s*\[(\d{1,2}):(\d{2})\]\s*$/);
+        if (bracketMatch) {
+          const title = bracketMatch[1].trim();
+          const first = parseInt(bracketMatch[2], 10);
+          const second = parseInt(bracketMatch[3], 10);
+          const seconds = (first * 60) + second;
+          tasks.push({ title, seconds });
+        } else {
+          // No time specified
+          tasks.push({ title: trimmed });
+        }
+      }
+
+      if (tasks.length === 0) {
+        setErrorMessage('No valid tasks found.');
+        return;
+      }
+
+      // Add all tasks to the store
+      tasks.forEach(task => {
+        addTask(task.title, task.seconds);
+      });
+
+      setErrorMessage(`Successfully added ${tasks.length} task${tasks.length === 1 ? '' : 's'}!`);
+      setShowBulkTaskModal(false);
+    } catch (error) {
+      console.error('Failed to parse tasks:', error);
+      setErrorMessage('Failed to parse tasks. Please check the format.');
+    }
+  }, [addTask]);
 
   const updateFocusSpotlightOpen = useCallback((value: boolean) => {
     focusSpotlightOpenRef.current = value;
@@ -647,23 +733,24 @@ export default function App() {
           onMinimize={() => electronApi?.minimizeWindow?.()}
           onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
           onClose={() => electronApi?.closeWindow?.()}
-          onAddTask={handleAddTask}
         />
         <main className="flex flex-1 flex-col gap-4">
   <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-semibold text-brand-ice">TimeBound</h1>
-              <p className="text-xs text-brand-aqua/80">Focus, finish, and track your wins.</p>
-            </div>
-            <div className="flex flex-col items-end gap-1 text-right text-sm">
-              <div className="font-semibold text-brand-coral">
-                Score: {scoreSign}
-                {scoreValue}
-              </div>
-              <div className="text-brand-ice/70">
+            <div className="flex items-center gap-4">
+              <div className="text-sm text-brand-ice/70">
                 Completed: {state.stats.totalCompleted} total | {state.stats.todayCompleted} today
               </div>
+              <button
+                onClick={handleAddTask}
+                className="rounded-full border-2 border-brand-coral/80 bg-brand-coral/20 px-4 py-2 text-sm font-semibold text-brand-coral transition hover:bg-brand-coral/30 hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral"
+              >
+                + Add Task
+              </button>
+            </div>
+            <div className="font-semibold text-brand-coral text-sm">
+              Score: {scoreSign}
+              {scoreValue}
             </div>
           </div>
           {activeTask ? (
@@ -727,7 +814,7 @@ export default function App() {
           >
             + Add Task
           </button>
-          <div className="relative">
+          <div className="relative" ref={uploadMenuRef}>
             <input
               ref={fileInputRef}
               type="file"
@@ -739,20 +826,28 @@ export default function App() {
               type="button"
               className="w-full rounded-xl border border-brand-aqua/70 bg-brand-aqua/20 px-3 py-2 text-sm font-semibold text-brand-aqua hover:bg-brand-aqua/30"
               onClick={handleUploadButtonClick}
-              onMouseEnter={() => setShowUploadTooltip(true)}
-              onMouseLeave={() => setShowUploadTooltip(false)}
             >
-              📤 Upload
+              Upload ▼
             </button>
-            {showUploadTooltip && (
-              <div className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-lg border border-brand-aqua/40 bg-brand-dusk p-3 shadow-xl">
-                <p className="text-xs font-semibold text-brand-aqua mb-2">Upload Tasks - Supported Formats:</p>
-                <div className="space-y-1 text-xs text-brand-ice/80">
-                  <p><span className="font-semibold text-brand-coral">Text file:</span> Task name [HH:MM]</p>
-                  <p className="pl-2 text-brand-ice/60">(one per line, time optional)</p>
-                  <p className="mt-1"><span className="font-semibold text-brand-coral">CSV file:</span> Task, Time</p>
-                  <p className="pl-2 text-brand-ice/60">(time in minutes)</p>
-                </div>
+            {showUploadMenu && (
+              <div className="absolute bottom-full left-0 z-50 mb-2 w-full rounded-lg border border-brand-aqua/40 bg-brand-dusk shadow-xl">
+                <button
+                  type="button"
+                  className="w-full px-4 py-2 text-left text-sm text-brand-aqua hover:bg-brand-aqua/10 rounded-t-lg transition-colors"
+                  onClick={handleFileUploadClick}
+                >
+                  Upload File
+                </button>
+                <button
+                  type="button"
+                  className="w-full px-4 py-2 text-left text-sm text-brand-aqua hover:bg-brand-aqua/10 rounded-b-lg transition-colors"
+                  onClick={() => {
+                    setShowUploadMenu(false);
+                    setShowBulkTaskModal(true);
+                  }}
+                >
+                  Enter Tasks
+                </button>
               </div>
             )}
           </div>
@@ -820,6 +915,12 @@ export default function App() {
       ) : null}
 
       <AddTimeModal open={addTimeOpen} onSubmit={handleAddTime} onCancel={() => setAddTimeOpen(false)} />
+
+      <BulkTaskModal
+        open={showBulkTaskModal}
+        onSubmit={handleBulkTaskSubmit}
+        onCancel={() => setShowBulkTaskModal(false)}
+      />
 
       <ReminderPopup
         open={reminderOpen}

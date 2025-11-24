@@ -7,7 +7,6 @@ interface AddTimeModalProps {
 }
 
 export function AddTimeModal({ open, onSubmit, onCancel }: AddTimeModalProps) {
-  const MIN_TOTAL_MINUTES = 1;
   const MAX_TOTAL_MINUTES = 180;
   const MAX_HOURS = Math.floor(MAX_TOTAL_MINUTES / 60);
   const [hours, setHours] = useState<number>(0);
@@ -24,20 +23,37 @@ export function AddTimeModal({ open, onSubmit, onCancel }: AddTimeModalProps) {
     return null;
   }
 
+  const totalMinutes = hours * 60 + minutes;
+  const isValidTime = totalMinutes > 0;
+
   const handleConfirm = () => {
-    const totalMinutes = Math.max(MIN_TOTAL_MINUTES, Math.min(MAX_TOTAL_MINUTES, hours * 60 + minutes));
-    onSubmit(totalMinutes * 60);
+    if (!isValidTime) return;
+    const clampedMinutes = Math.min(MAX_TOTAL_MINUTES, totalMinutes);
+    onSubmit(clampedMinutes * 60);
   };
 
-  const clampPair = (nextHours: number, nextMinutes: number) => {
-    const safeHours = Number.isFinite(nextHours) ? Math.max(0, Math.min(MAX_HOURS, Math.floor(nextHours))) : 0;
-    const safeMinutes = Number.isFinite(nextMinutes) ? Math.max(0, Math.min(59, Math.floor(nextMinutes))) : 0;
-    const totalMinutes = safeHours * 60 + safeMinutes;
-    const clampedTotal = Math.max(MIN_TOTAL_MINUTES, Math.min(MAX_TOTAL_MINUTES, totalMinutes));
-    return {
-      hours: Math.floor(clampedTotal / 60),
-      minutes: clampedTotal % 60
-    };
+  const handleHoursChange = (value: string) => {
+    // Allow empty string or valid numbers
+    if (value === '') {
+      setHours(0);
+      return;
+    }
+    const next = Number(value);
+    if (Number.isFinite(next) && next >= 0) {
+      setHours(Math.min(MAX_HOURS, Math.floor(next)));
+    }
+  };
+
+  const handleMinutesChange = (value: string) => {
+    // Allow empty string or valid numbers
+    if (value === '') {
+      setMinutes(0);
+      return;
+    }
+    const next = Number(value);
+    if (Number.isFinite(next) && next >= 0) {
+      setMinutes(Math.min(59, Math.floor(next)));
+    }
   };
 
   return (
@@ -61,10 +77,7 @@ export function AddTimeModal({ open, onSubmit, onCancel }: AddTimeModalProps) {
                 max={MAX_HOURS}
                 value={hours}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const next = Number(event.target.value);
-                  const { hours: h, minutes: m } = clampPair(next, minutes);
-                  setHours(h);
-                  setMinutes(m);
+                  handleHoursChange(event.target.value);
                 }}
                 className="app-region-no-drag w-full rounded-md border border-brand-teal/40 bg-brand-navy px-2 py-1 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
               />
@@ -77,10 +90,7 @@ export function AddTimeModal({ open, onSubmit, onCancel }: AddTimeModalProps) {
                 max={59}
                 value={minutes}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const next = Number(event.target.value);
-                  const { hours: h, minutes: m } = clampPair(hours, next);
-                  setHours(h);
-                  setMinutes(m);
+                  handleMinutesChange(event.target.value);
                 }}
                 className="app-region-no-drag w-full rounded-md border border-brand-teal/40 bg-brand-navy px-2 py-1 text-sm text-brand-ice focus:border-brand-coral focus:outline-none focus:ring-1 focus:ring-brand-coral/60"
               />
@@ -100,8 +110,9 @@ export function AddTimeModal({ open, onSubmit, onCancel }: AddTimeModalProps) {
           </button>
           <button
             type="button"
-            className="rounded-md bg-brand-coral px-4 py-2 text-sm font-semibold text-brand-navy hover:bg-brand-coral/90"
+            className="rounded-md bg-brand-coral px-4 py-2 text-sm font-semibold text-brand-navy hover:bg-brand-coral/90 disabled:cursor-not-allowed disabled:bg-brand-coral/40 disabled:text-brand-navy/50"
             onClick={handleConfirm}
+            disabled={!isValidTime}
           >
             Add Time
           </button>
