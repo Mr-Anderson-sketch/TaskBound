@@ -16,7 +16,9 @@ type AppAction =
   | { type: 'deleteTask'; payload: { taskId: string; now: string } }
   | { type: 'reorderTasks'; payload: { orderedTaskIds: string[]; now: string } }
   | { type: 'syncMeta'; payload: { lastSavedAt: string; appVersion: string } }
-  | { type: 'setAlwaysOnTop'; payload: { value: boolean } };
+  | { type: 'setAlwaysOnTop'; payload: { value: boolean } }
+  | { type: 'pauseTask'; payload: { taskId: string; now: string } }
+  | { type: 'resumeTask'; payload: { taskId: string; now: string } };
 
 type Reducer = (state: AppState, action: AppAction) => AppState;
 
@@ -57,6 +59,10 @@ const reducer: Reducer = (state, action) => {
         if (task.remainingSeconds <= 0) {
           return task;
         }
+        // Don't decrement timer if task is paused
+        if (task.isPaused) {
+          return task;
+        }
         const remainingSeconds = task.remainingSeconds - 1;
         if (remainingSeconds > 0) {
           return {
@@ -94,6 +100,8 @@ const reducer: Reducer = (state, action) => {
         (tasks[activeIndex].status === 'struck' || tasks[activeIndex].status === 'completed');
       if (becameStruck) {
         updatedState.stats = updateStatsOnCompletion(state, action.now);
+        // Award +1 point for auto-completing when timer expires
+        updatedState.score = state.score + 1;
       }
       return updatedState;
     }
@@ -146,7 +154,7 @@ const reducer: Reducer = (state, action) => {
       const aligned = ensureAlignedTasks(tasks);
       return {
         ...state,
-        score: state.score + 1,
+        score: state.score + 2, // +1 base + +1 bonus for completing before timer
         stats: updateStatsOnCompletion(state, now),
         tasks: aligned,
         meta: { ...state.meta, lastSavedAt: now }
@@ -294,6 +302,42 @@ const reducer: Reducer = (state, action) => {
         }
       };
     }
+    case 'pauseTask': {
+      const { taskId, now } = action.payload;
+      const tasks = state.tasks.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+        return {
+          ...task,
+          isPaused: true,
+          updatedAt: now
+        };
+      });
+      return {
+        ...state,
+        tasks,
+        meta: { ...state.meta, lastSavedAt: now }
+      };
+    }
+    case 'resumeTask': {
+      const { taskId, now } = action.payload;
+      const tasks = state.tasks.map((task) => {
+        if (task.id !== taskId) {
+          return task;
+        }
+        return {
+          ...task,
+          isPaused: false,
+          updatedAt: now
+        };
+      });
+      return {
+        ...state,
+        tasks,
+        meta: { ...state.meta, lastSavedAt: now }
+      };
+    }
     default:
       return state;
   }
@@ -307,9 +351,12 @@ export interface AppStore {
   addTime: (taskId: string, seconds: number) => void;
   updateTask: (taskId: string, title: string, seconds?: number) => void;
   deleteTask: (taskId: string) => void;
+  deleteTasks: (taskIds: string[]) => void;
   reorderTasks: (orderedTaskIds: string[]) => void;
   dispatchTick: (timestamp?: number) => void;
   setAlwaysOnTop: (value: boolean) => Promise<void>;
+  pauseTask: (taskId: string) => void;
+  resumeTask: (taskId: string) => void;
 }
 
 const shouldPersist = (type: AppAction['type']): boolean => {
@@ -511,11 +558,44 @@ export const useAppStore = (): AppStore => {
     [dispatchWithPersist]
   );
 
+  const deleteTasks = useCallback(
+    (taskIds: string[]) => {
+      const now = new Date().toISOString();
+      taskIds.forEach(taskId => {
+        dispatchWithPersist({
+          type: 'deleteTask',
+          payload: { taskId, now }
+        });
+      });
+    },
+    [dispatchWithPersist]
+  );
+
   const reorderTasks = useCallback(
     (orderedTaskIds: string[]) => {
       dispatchWithPersist({
         type: 'reorderTasks',
         payload: { orderedTaskIds, now: new Date().toISOString() }
+      });
+    },
+    [dispatchWithPersist]
+  );
+
+  const pauseTask = useCallback(
+    (taskId: string) => {
+      dispatchWithPersist({
+        type: 'pauseTask',
+        payload: { taskId, now: new Date().toISOString() }
+      });
+    },
+    [dispatchWithPersist]
+  );
+
+  const resumeTask = useCallback(
+    (taskId: string) => {
+      dispatchWithPersist({
+        type: 'resumeTask',
+        payload: { taskId, now: new Date().toISOString() }
       });
     },
     [dispatchWithPersist]
@@ -553,8 +633,11 @@ export const useAppStore = (): AppStore => {
     addTime,
     updateTask,
     deleteTask,
+    deleteTasks,
     reorderTasks,
     dispatchTick,
-    setAlwaysOnTop: setAlwaysOnTopPreference
+    setAlwaysOnTop: setAlwaysOnTopPreference,
+    pauseTask,
+    resumeTask
   };
 };

@@ -41,14 +41,16 @@ interface SortableTaskRowProps {
   index: number;
   isActive: boolean;
   isSelected: boolean;
+  multiSelectCount: number;
   onEdit: (task: Task) => void;
-  onSelect: (task: Task) => void;
+  onSelect: (task: Task, event?: React.MouseEvent) => void;
   onAddTime: (task: Task) => void;
   onDelete: (task: Task) => void;
+  onDeleteMultiple: () => void;
   onMakeActive: (task: Task) => void;
 }
 
-function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect, onAddTime, onDelete, onMakeActive }: SortableTaskRowProps) {
+function SortableTaskRow({ task, index, isActive, isSelected, multiSelectCount, onEdit, onSelect, onAddTime, onDelete, onDeleteMultiple, onMakeActive }: SortableTaskRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style: CSSProperties = {
     transform: transform ? DndCSS.Transform.toString(transform) : undefined,
@@ -64,10 +66,12 @@ function SortableTaskRow({ task, index, isActive, isSelected, onEdit, onSelect, 
         index={index}
         isActive={isActive}
         isSelected={isSelected}
+        multiSelectCount={multiSelectCount}
         onEdit={onEdit}
         onSelect={onSelect}
         onAddTime={onAddTime}
         onDelete={onDelete}
+        onDeleteMultiple={onDeleteMultiple}
         onMakeActive={onMakeActive}
       />
     </div>
@@ -83,15 +87,22 @@ export default function App() {
     addTime,
     updateTask,
     deleteTask,
+    deleteTasks,
     reorderTasks,
     dispatchTick,
-    setAlwaysOnTop
+    setAlwaysOnTop,
+    pauseTask,
+    resumeTask
   } = useAppStore();
   const [modalState, setModalState] = useState<{ mode: 'create' | 'edit'; task?: Task } | null>(null);
   const [addTimeOpen, setAddTimeOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [reminderOpen, setReminderOpen] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [lastSelectedTaskId, setLastSelectedTaskId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [tasksToDelete, setTasksToDelete] = useState<string[]>([]);
   const reminderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snoozeUntilRef = useRef<number | null>(null);
   const lastReminderTaskIdRef = useRef<string | null>(null);
@@ -108,10 +119,18 @@ export default function App() {
   const [showBulkTaskModal, setShowBulkTaskModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadMenuRef = useRef<HTMLDivElement>(null);
+  const minimalModeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousWindowSizeRef = useRef<{ width: number; height: number } | null>(null);
 
+  const openTasks = useMemo(
+    () => state.tasks.filter((task) => task.status !== 'completed' && task.status !== 'struck'),
+    [state.tasks]
+  );
   const activeTask = useMemo(() => getActiveTask(state.tasks), [state.tasks]);
   const pendingCount = useMemo(() => state.tasks.filter((task) => task.status === 'pending').length, [state.tasks]);
   const orderedTasks = useMemo(() => [...state.tasks].reverse(), [state.tasks]);
+  const shouldBeMinimal = useMemo(() => openTasks.length === 0, [openTasks.length]);
+  const isMinimalMode = useMemo(() => focusSpotlightOpenState && shouldBeMinimal, [focusSpotlightOpenState, shouldBeMinimal]);
   const visibleTasks = useMemo(() => {
     return showAllTasks ? orderedTasks : orderedTasks.slice(0, 5);
   }, [orderedTasks, showAllTasks]);
@@ -123,7 +142,6 @@ export default function App() {
   );
   const taskForAddTime = selectedTask ?? activeTask;
   const requiresTimeForNextTask = useMemo(() => {
-    const openTasks = state.tasks.filter((task) => task.status !== 'completed' && task.status !== 'struck');
     if (openTasks.length === 0) {
       return true;
     }
@@ -132,7 +150,7 @@ export default function App() {
       const assigned = typeof task.timeAssignedSeconds === 'number' ? task.timeAssignedSeconds : undefined;
       return (remaining ?? assigned ?? 0) > 0;
     });
-  }, [state.tasks]);
+  }, [openTasks]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -223,6 +241,56 @@ export default function App() {
     }
   }, [showUploadMenu]);
 
+  // Global keyboard shortcut for deleting tasks
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if Delete or Backspace is pressed
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        // Don't trigger if user is typing in an input/textarea or modal is open
+        const target = event.target as HTMLElement;
+        if (
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          modalState !== null ||
+          addTimeOpen ||
+          showBulkTaskModal ||
+          showDeleteConfirm
+        ) {
+          return;
+        }
+
+        // Delete selected tasks
+        if (selectedTaskIds.size > 0) {
+          event.preventDefault();
+          const taskIdsToDelete = Array.from(selectedTaskIds);
+
+          // Prevent deleting the active task
+          const activeTaskId = activeTask?.id;
+          const filteredTaskIds = taskIdsToDelete.filter(id => id !== activeTaskId);
+
+          if (filteredTaskIds.length > 0) {
+            // Show confirmation for multiple tasks
+            if (filteredTaskIds.length > 1) {
+              setTasksToDelete(filteredTaskIds);
+              setShowDeleteConfirm(true);
+            } else {
+              // Single task - delete directly
+              deleteTasks(filteredTaskIds);
+              setSelectedTaskIds(new Set());
+              setLastSelectedTaskId(null);
+              if (selectedTaskId && filteredTaskIds.includes(selectedTaskId)) {
+                setSelectedTaskId(null);
+              }
+            }
+          }
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTaskIds, activeTask, modalState, addTimeOpen, showBulkTaskModal, showDeleteConfirm, deleteTasks, selectedTaskId]);
+
   const closeModal = useCallback(() => {
     setModalState(null);
   }, []);
@@ -235,12 +303,45 @@ export default function App() {
     setModalState({ mode: 'edit', task });
   }, []);
 
-  const handleSelectTask = useCallback((task: Task) => {
+  const handleSelectTask = useCallback((task: Task, event?: React.MouseEvent) => {
     if (dragGuardRef.current) {
       return;
     }
-    setSelectedTaskId((prev) => (prev === task.id ? null : task.id));
-  }, []);
+
+    // Multi-select with Shift or Ctrl/Cmd
+    if (event?.shiftKey && lastSelectedTaskId) {
+      // Shift+Click: Select range
+      const lastIndex = orderedTasks.findIndex(t => t.id === lastSelectedTaskId);
+      const currentIndex = orderedTasks.findIndex(t => t.id === task.id);
+
+      if (lastIndex !== -1 && currentIndex !== -1) {
+        const start = Math.min(lastIndex, currentIndex);
+        const end = Math.max(lastIndex, currentIndex);
+        const rangeIds = orderedTasks.slice(start, end + 1).map(t => t.id);
+
+        setSelectedTaskIds(new Set(rangeIds));
+        setSelectedTaskId(task.id);
+      }
+    } else if (event?.ctrlKey || event?.metaKey) {
+      // Ctrl/Cmd+Click: Toggle individual selection
+      setSelectedTaskIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(task.id)) {
+          newSet.delete(task.id);
+        } else {
+          newSet.add(task.id);
+        }
+        return newSet;
+      });
+      setSelectedTaskId(task.id);
+      setLastSelectedTaskId(task.id);
+    } else {
+      // Regular click: Select single task
+      setSelectedTaskIds(new Set([task.id]));
+      setSelectedTaskId(task.id);
+      setLastSelectedTaskId(task.id);
+    }
+  }, [lastSelectedTaskId, orderedTasks]);
 
   const handleTaskAddTime = useCallback((task: Task) => {
     setSelectedTaskId(task.id);
@@ -252,7 +353,35 @@ export default function App() {
     if (selectedTaskId === task.id) {
       setSelectedTaskId(null);
     }
+    setSelectedTaskIds(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(task.id);
+      return newSet;
+    });
   }, [deleteTask, selectedTaskId]);
+
+  const handleDeleteMultiple = useCallback(() => {
+    const taskIdsToDelete = Array.from(selectedTaskIds);
+    // Prevent deleting the active task
+    const activeTaskId = activeTask?.id;
+    const filteredTaskIds = taskIdsToDelete.filter(id => id !== activeTaskId);
+
+    if (filteredTaskIds.length > 0) {
+      // Show confirmation for multiple tasks
+      if (filteredTaskIds.length > 1) {
+        setTasksToDelete(filteredTaskIds);
+        setShowDeleteConfirm(true);
+      } else {
+        // Single task - delete directly
+        deleteTasks(filteredTaskIds);
+        setSelectedTaskIds(new Set());
+        setLastSelectedTaskId(null);
+        if (selectedTaskId && filteredTaskIds.includes(selectedTaskId)) {
+          setSelectedTaskId(null);
+        }
+      }
+    }
+  }, [selectedTaskIds, activeTask, deleteTasks, selectedTaskId]);
 
   const handleMakeActive = useCallback((task: Task) => {
     // Find the current active task index
@@ -495,6 +624,24 @@ export default function App() {
     fileInputRef.current?.click();
   }, []);
 
+  const handleConfirmDelete = useCallback(() => {
+    if (tasksToDelete.length > 0) {
+      deleteTasks(tasksToDelete);
+      setSelectedTaskIds(new Set());
+      setLastSelectedTaskId(null);
+      if (selectedTaskId && tasksToDelete.includes(selectedTaskId)) {
+        setSelectedTaskId(null);
+      }
+    }
+    setShowDeleteConfirm(false);
+    setTasksToDelete([]);
+  }, [tasksToDelete, deleteTasks, selectedTaskId]);
+
+  const handleCancelDelete = useCallback(() => {
+    setShowDeleteConfirm(false);
+    setTasksToDelete([]);
+  }, []);
+
   const handleBulkTaskSubmit = useCallback((tasksText: string) => {
     try {
       const tasks: Array<{ title: string; seconds?: number }> = [];
@@ -571,6 +718,58 @@ export default function App() {
     }
   }, []);
 
+  const startMinimalModeCountdown = useCallback(() => {
+    if (minimalModeTimerRef.current) {
+      clearTimeout(minimalModeTimerRef.current);
+      minimalModeTimerRef.current = null;
+    }
+
+    if (!shouldBeMinimal) {
+      if (focusSpotlightOpenRef.current) {
+        updateFocusSpotlightOpen(false);
+      }
+      return;
+    }
+
+    if (!alwaysOnTopEnabled) {
+      return;
+    }
+
+    if (focusSpotlightOpenRef.current) {
+      return;
+    }
+
+    minimalModeTimerRef.current = setTimeout(() => {
+      updateFocusSpotlightOpen(true);
+      minimalModeTimerRef.current = null;
+    }, 30000);
+  }, [shouldBeMinimal, alwaysOnTopEnabled, updateFocusSpotlightOpen]);
+
+  const handleExpandMinimal = useCallback(() => {
+    if (!isMinimalMode) {
+      return;
+    }
+
+    updateFocusSpotlightOpen(false);
+
+    if (!electronApi) {
+      return;
+    }
+
+    const fallback = previousWindowSizeRef.current ?? {
+      width: Math.max(window.innerWidth, 420),
+      height: Math.max(window.innerHeight, 520)
+    };
+
+    previousWindowSizeRef.current = null;
+
+    electronApi.setWindowSize?.(fallback.width, fallback.height).catch((error) => {
+      console.error('Failed to restore window size from minimal mode', error);
+    });
+
+    startMinimalModeCountdown();
+  }, [electronApi, isMinimalMode, startMinimalModeCountdown, updateFocusSpotlightOpen]);
+
   const handleFocusMode = useCallback(async () => {
     if (!activeTask || !electronApi) {
       return;
@@ -607,9 +806,15 @@ export default function App() {
     activeTaskRef.current = activeTask ?? undefined;
     if (!activeTask) {
       lastTrackedTaskIdRef.current = null;
-      updateFocusSpotlightOpen(false);
       clearInactivityTimer();
+      startMinimalModeCountdown();
       return;
+    }
+
+    // Active task exists - cancel minimal mode timer
+    if (minimalModeTimerRef.current) {
+      clearTimeout(minimalModeTimerRef.current);
+      minimalModeTimerRef.current = null;
     }
 
     const activeId = activeTask.id;
@@ -619,13 +824,27 @@ export default function App() {
     if (!focusSpotlightOpenRef.current && (isNewTask || !inactivityTimerRef.current)) {
       scheduleFocusSpotlight();
     }
-  }, [activeTask, scheduleFocusSpotlight, clearInactivityTimer, updateFocusSpotlightOpen]);
+  }, [activeTask, scheduleFocusSpotlight, clearInactivityTimer, startMinimalModeCountdown]);
+
+  useEffect(() => {
+    if (!activeTask) {
+      startMinimalModeCountdown();
+    }
+  }, [activeTask, alwaysOnTopEnabled, shouldBeMinimal, startMinimalModeCountdown]);
 
   useEffect(() => {
     if (selectedTaskId && !state.tasks.find((t) => t.id === selectedTaskId)) {
       setSelectedTaskId(null);
     }
   }, [selectedTaskId, state.tasks]);
+
+  // Cancel minimal mode timer if PIN is turned off
+  useEffect(() => {
+    if (!alwaysOnTopEnabled && minimalModeTimerRef.current) {
+      clearTimeout(minimalModeTimerRef.current);
+      minimalModeTimerRef.current = null;
+    }
+  }, [alwaysOnTopEnabled]);
 
   useEffect(() => {
     if (focusSpotlightOpenState) {
@@ -699,6 +918,43 @@ export default function App() {
     };
   }, [electronApi]);
 
+  // Auto-resize and reposition window when entering/exiting minimal mode
+  useEffect(() => {
+    if (!hydrated || !electronApi) {
+      return;
+    }
+
+    if (isMinimalMode) {
+      if (!previousWindowSizeRef.current) {
+        previousWindowSizeRef.current = {
+          width: Math.max(window.innerWidth, 340),
+          height: Math.max(window.innerHeight, 240)
+        };
+      }
+
+      // Enter minimal mode: resize small and move to top-right
+      electronApi.setWindowSize?.(340, 80).then(() => {
+        return electronApi.moveWindowToTopRight?.();
+      }).catch((error) => {
+        console.error('Failed to resize window for minimal mode', error);
+      });
+    } else if (focusSpotlightOpenState && !shouldBeMinimal) {
+      previousWindowSizeRef.current = null;
+      // Regular focus spotlight mode with active task
+      electronApi.setWindowSize?.(340, 240).then(() => {
+        return electronApi.moveWindowToTopRight?.();
+      }).catch((error) => {
+        console.error('Failed to resize window for focus mode', error);
+      });
+    } else if (previousWindowSizeRef.current) {
+      const { width, height } = previousWindowSizeRef.current;
+      previousWindowSizeRef.current = null;
+      electronApi.setWindowSize?.(width, height).catch((error) => {
+        console.error('Failed to restore window size after minimal mode', error);
+      });
+    }
+  }, [isMinimalMode, focusSpotlightOpenState, shouldBeMinimal, hydrated, electronApi]);
+
   if (!hydrated) {
     return (
       <div className="flex h-screen items-center justify-center bg-brand-navy text-brand-coral">
@@ -718,7 +974,7 @@ export default function App() {
   const dragLayerStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
 
   const appContainerClasses = `mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
-    focusSpotlightOpenState
+    focusSpotlightOpenState && !isMinimalMode
       ? 'pointer-events-none opacity-0'
       : 'border-2 border-brand-ice/5 rounded-3xl shadow-[0_0_30px_rgba(148,187,233,0.08)]'
   }`;
@@ -726,14 +982,28 @@ export default function App() {
   return (
       <div className={rootClasses} style={dragLayerStyle}>
         <div className={appContainerClasses}>
-        <TitleBar
-          alwaysOnTop={alwaysOnTopEnabled}
-          isMaximized={isWindowMaximized}
-          onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
-          onMinimize={() => electronApi?.minimizeWindow?.()}
-          onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
-          onClose={() => electronApi?.closeWindow?.()}
-        />
+        <div className={`relative ${isMinimalMode ? 'group' : ''}`}>
+          <TitleBar
+            alwaysOnTop={alwaysOnTopEnabled}
+            isMaximized={isWindowMaximized}
+            onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
+            onMinimize={() => electronApi?.minimizeWindow?.()}
+            onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
+            onClose={() => electronApi?.closeWindow?.()}
+          />
+          {isMinimalMode && (
+            <div className="pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2">
+              <button
+                type="button"
+                className="app-region-no-drag pointer-events-auto rounded-full border border-brand-ice/40 bg-brand-navy/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-ice opacity-0 transition hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral group-hover:opacity-100"
+                onClick={handleExpandMinimal}
+              >
+                Show more
+              </button>
+            </div>
+          )}
+        </div>
+        {!isMinimalMode && (
         <main className="flex flex-1 flex-col gap-4">
   <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
@@ -755,9 +1025,32 @@ export default function App() {
           </div>
           {activeTask ? (
             <div className="mt-4 rounded-lg border border-brand-teal/50 bg-brand-teal/20 p-3">
-              <p className="text-xs uppercase tracking-wide text-brand-aqua/80">Active Task</p>
-              <p className="mt-1 text-sm font-semibold text-brand-ice">{activeTask.title}</p>
-              <p className="font-mono text-sm text-brand-aqua/80">Time left: {activeTime}</p>
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="text-xs uppercase tracking-wide text-brand-aqua/80">Active Task</p>
+                  <p className="mt-1 text-sm font-semibold text-brand-ice">{activeTask.title}</p>
+                  <p className="font-mono text-sm text-brand-aqua/80">
+                    Time left: {activeTime} {activeTask.isPaused && <span className="text-brand-coral">(Paused)</span>}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="flex-shrink-0 ml-3 flex h-10 w-10 items-center justify-center rounded-full border-2 border-brand-aqua/60 bg-brand-aqua/20 text-brand-aqua transition hover:bg-brand-aqua/30 hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-aqua"
+                  onClick={() => activeTask.isPaused ? resumeTask(activeTask.id) : pauseTask(activeTask.id)}
+                  title={activeTask.isPaused ? 'Resume timer' : 'Pause timer'}
+                  aria-label={activeTask.isPaused ? 'Resume timer' : 'Pause timer'}
+                >
+                  {activeTask.isPaused ? (
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
           ) : (
             <p className="mt-4 text-sm text-brand-ice/70">No active task. Add one to get started.</p>
@@ -783,11 +1076,13 @@ export default function App() {
                       task={task}
                       index={index}
                       isActive={activeTask?.id === task.id}
-                      isSelected={selectedTaskId === task.id}
+                      isSelected={selectedTaskIds.has(task.id)}
+                      multiSelectCount={selectedTaskIds.size}
                       onEdit={handleEditTask}
                       onSelect={handleSelectTask}
                       onAddTime={handleTaskAddTime}
                       onDelete={handleTaskDelete}
+                      onDeleteMultiple={handleDeleteMultiple}
                       onMakeActive={handleMakeActive}
                     />
                   ))}
@@ -898,6 +1193,7 @@ export default function App() {
           {pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'All tasks completed'}
         </footer>
         </main>
+        )}
       </div>
 
       {modalState ? (
@@ -930,20 +1226,49 @@ export default function App() {
         onCloseApp={handleReminderCloseApp}
       />
 
-      <FocusSpotlight
-        open={focusSpotlightOpenState}
-        taskTitle={activeTask?.title}
-        timeRemaining={activeTime}
-        onClose={() => {
-          updateFocusSpotlightOpen(false);
-        }}
-      />
+      {!isMinimalMode && (
+        <FocusSpotlight
+          open={focusSpotlightOpenState}
+          taskTitle={activeTask?.title}
+          timeRemaining={activeTime}
+          onClose={() => {
+            updateFocusSpotlightOpen(false);
+          }}
+        />
+      )}
 
       {errorMessage ? (
         <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-brand-coral bg-brand-coral/15 px-4 py-2 text-sm text-brand-coral shadow-lg">
           {errorMessage}
         </div>
       ) : null}
+
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-brand-ice/30 bg-brand-navy p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-brand-ice mb-2">Confirm Deletion</h3>
+            <p className="text-sm text-brand-ice/80 mb-6">
+              Are you sure you want to delete <span className="font-semibold text-brand-coral">{tasksToDelete.length} tasks</span>? This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-lg border border-brand-ice/40 bg-brand-dusk/80 px-4 py-2 text-sm font-semibold text-brand-ice hover:bg-brand-dusk transition"
+                onClick={handleCancelDelete}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-lg border border-red-500 bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 transition"
+                onClick={handleConfirmDelete}
+              >
+                Delete {tasksToDelete.length} Tasks
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
