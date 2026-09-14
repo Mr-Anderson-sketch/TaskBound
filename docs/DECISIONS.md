@@ -12,3 +12,11 @@ One line each, newest at the bottom. Rationale follows the dash.
 - 2026-09-14 Cloud sync proposal, not built: user-chosen sync folder (OneDrive/Dropbox/Syncthing) holding `data.json`, last-writer-wins with a conflict copy — free and privacy-safe; revisit after v1 ships.
 - 2026-09-14 Installer ships unsigned — code signing needs a paid certificate; question deferred to the final report.
 - 2026-09-14 Start-on-login is an opt-in toggle, default off, implemented with Electron's login-item API (a per-user registry Run entry) — mild, reversible, and standard for tray apps; not treated as a broad OS permission.
+- 2026-09-14 macOS is a first-class target (owner direction), Windows 11 remains primary and the only platform verifiable on the build machine — strip uses an NSPanel-type window on macOS; a macOS "menu bar mode" ships; DMG packaging configured; a macOS release checklist replaces automated verification there.
+- 2026-09-14 Hotkey defaults use only non-character keys (`Ctrl+Alt+Space`, `Ctrl+Alt+Shift+Space`, `Ctrl+Alt+Enter`, `Ctrl+Alt+Shift+Enter`, `Ctrl+Alt+Backspace`) — AltGr never maps those, so the same table works on every layout and on macOS as Control+Option.
+- 2026-09-14 The gstack design mockup tool is not used — it calls the OpenAI image API, which needs a billed key. Strip and window variants are hand-written HTML at true pixel size instead.
+- 2026-09-14 Implementation will be executed by Sonnet-model subagents from per-slice briefs in PLAN.md, with the lead reviewing each slice (owner direction).
+- 2026-09-14 Store never ticks; timer expiry is a single armed timeout; renderers derive display time locally — removes the 1 Hz full-snapshot broadcast and the two-tick-source drift from the old code.
+- 2026-09-14 Undo is a ring of 50 immutable previous states (immer structural sharing), not inverse actions — recurrence spawns and timer stops have no clean inverse.
+- 2026-09-14 One optional FFI module (`koffi`) on Windows only, lazily loaded, every feature gated with fallback — AppBar space reservation and fullscreen detection have no first-party Electron API; the app is complete without it.
+- 2026-09-14 Default dock edge is bottom — a top strip covers browser tab bars; bottom sits above the taskbar like a second taskbar.

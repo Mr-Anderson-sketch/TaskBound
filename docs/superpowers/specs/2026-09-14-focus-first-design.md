@@ -406,3 +406,46 @@ Reviewer verdict: architecture sound; one design line (1 Hz ticks through the st
 ### 4.7 Final gate (founder, self-approved per mission autonomy rules)
 
 Decisions: 78 total (74 auto-decided, 2 taste choices resolved by the founder: D22 window pre-sizing rejected, C6 score kept minimal; 2 user challenges recorded for the owner: C8 data folder, C17 task-model cuts). Status: **APPROVED** as amended above. Next: DESIGN.md, then PLAN.md.
+
+## Part 5 — macOS as a first-class target (added 2026-09-14 after owner direction)
+
+The owner confirmed TimeBound ships on macOS too. Windows 11 stays the primary target and the only one that can be verified on the build machine; macOS is designed in, built in CI-style configuration, and verified with a checklist on a Mac.
+
+### 5.1 What differs on macOS
+
+| Concern | Windows 11 | macOS |
+|---|---|---|
+| Strip window | `focusable:false`, `skipTaskbar`, transparent, topmost | Same plus `type: 'panel'`, `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })`, level `floating`. Panels float over full-screen apps and follow the user across Spaces, so the "fullscreen gap" recorded for Windows (E8, D27) does not exist on macOS. |
+| Docking | Inside `workArea` above/below taskbar | Inside `workArea` below the menu bar; Dock position (bottom/left/right) shifts `workArea` and is handled by the same code. |
+| Zero-pixel mode | Tray tooltip = current task | **Menu bar mode**: the status item title shows the current task (truncated to a setting, default 28 chars) and the running timer; clicking it opens the hover panel as a popover. Strip can be hidden entirely in this mode. |
+| Tray | System tray icon + menu | Status bar item (same `Tray` API); template image for light/dark menu bars. |
+| Hotkeys | `Ctrl+Alt+Space` family | Same accelerators, rendered as ⌃⌥Space. Control+Option chords are free of OS defaults. Capture palette gets focus via `app.focus({ steal: true })`. |
+| Focus return after capture | Windows re-activates the previous window on hide | `app.hide()` after the palette closes returns focus to the previous app reliably. |
+| Notifications | `setAppUserModelId` required | Permission prompt on first notification; no AUMID. |
+| Start on login | Registry Run entry via `setLoginItemSettings` | Login item via the same API; on macOS 13+ the user sees it in System Settings → Login Items. |
+| Window chrome | Frameless with custom controls | `titleBarStyle: 'hiddenInset'` keeps native traffic lights; planner header leaves 78 px on the left for them. |
+| Text scaling | In-app text size setting | Same setting; macOS does not scale web content either. |
+| Packaging | NSIS installer, unsigned until decided | DMG (arm64 + x64 universal). Signing + notarization need an Apple Developer account (money question). Unsigned DMGs trigger Gatekeeper "unidentified developer". |
+| Global shortcut permissions | none | None for `globalShortcut`; if the FFI-free path is kept, no Accessibility permission is needed. |
+| Click-through | `setIgnoreMouseEvents` | Same API, same handle-zone poll. |
+| Data dir | `%APPDATA%\TimeBound` | `~/Library/Application Support/TimeBound` via `app.getPath('userData')`; `TIMEBOUND_DATA_DIR` overrides on both. |
+
+### 5.2 Design consequences
+
+- Key glyphs: settings and onboarding render accelerators per platform (Ctrl/Alt vs ⌃⌥).
+- The strip's corner radius and shadow follow the platform: 6 px on Windows, 8 px on macOS to sit with native panels.
+- Fonts are bundled, so rendering is identical on both; line-height is set explicitly to avoid the macOS/Windows metric drift.
+- The planner's custom title bar reserves traffic-light space on macOS and renders its own minimise/close on Windows.
+
+### 5.3 Verification on macOS
+
+The build machine is Windows; macOS cannot be launched here. The plan includes:
+- `npm run package:mac` producing a DMG (electron-builder `mac` target, `hardenedRuntime` off until signing exists).
+- Playwright e2e runs unchanged on macOS (`_electron.launch` is cross-platform); CI matrix entry provided as a GitHub Actions workflow file, not enabled until the owner wants it.
+- `docs/RELEASE-CHECKLIST.md` gains a macOS section: panel over full-screen app, Spaces switching, menu bar mode, Dock at left/right, notification permission, login item, DMG mounts and launches.
+
+### 5.4 Decisions added
+
+- Menu bar mode is macOS-only in v1; Windows keeps the tray tooltip. Rationale: Windows has no reliable equivalent of a text status item.
+- Hotkey defaults stay `Ctrl+Alt`-based on both platforms so documentation, tests, and onboarding share one table.
+- No `koffi` usage on macOS in v1: the panel window type covers the fullscreen and Spaces cases natively.
