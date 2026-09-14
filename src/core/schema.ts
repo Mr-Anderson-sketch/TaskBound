@@ -1,2 +1,433 @@
-// core/schema — see docs/PLAN.md. Scaffold only; implemented in the slice that names this file.
-export {};
+// core/schema — zod validation for persisted data and dispatched actions.
+// Every object schema is `.strict()`: unknown keys are a bug (typo, stale field,
+// or a future schema version) and must fail loudly rather than pass silently.
+import { z } from 'zod';
+import type { Data } from './types';
+
+// --- primitives -------------------------------------------------------
+
+const IdSchema = z.string().min(1);
+const YmdSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+const HmSchema = z.string().regex(/^\d{2}:\d{2}$/, 'expected HH:mm');
+const TitleSchema = z.string().min(1).max(200);
+const TagsSchema = z.array(z.string().max(40)).max(20);
+
+const DueSchema = z
+  .object({
+    date: YmdSchema,
+    time: HmSchema.optional()
+  })
+  .strict();
+
+const RuleSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('daily') }).strict(),
+  z.object({ kind: z.literal('weekdays') }).strict(),
+  z
+    .object({
+      kind: z.literal('weekly'),
+      days: z
+        .array(z.number().int().min(0).max(6))
+        .min(1)
+        .refine((days) => days.every((d, i) => i === 0 || d > days[i - 1]), 'days must be sorted and unique')
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('monthly'),
+      dayOfMonth: z.number().int().min(1).max(31)
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('everyN'),
+      n: z.number().int().positive(),
+      unit: z.enum(['day', 'week']),
+      anchor: YmdSchema
+    })
+    .strict()
+]);
+
+const TaskTimerSchema = z
+  .object({
+    plannedSeconds: z.number().nonnegative().optional(),
+    spentSeconds: z.number().nonnegative(),
+    runningSince: z.number().optional(),
+    pausedAtSuspend: z.number().optional()
+  })
+  .strict();
+
+const TaskSchema = z
+  .object({
+    id: IdSchema,
+    title: TitleSchema,
+    notes: z.string().optional(),
+    listId: IdSchema,
+    parentId: IdSchema.optional(),
+    tags: TagsSchema,
+    order: z.number(),
+    today: z.boolean(),
+    due: DueSchema.optional(),
+    snoozedUntil: z.number().optional(),
+    recurrence: RuleSchema.optional(),
+    timer: TaskTimerSchema.optional(),
+    status: z.enum(['open', 'done']),
+    completedBy: z.enum(['user', 'timer']).optional(),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+    completedAt: z.number().optional()
+  })
+  .strict();
+
+const ListSchema = z
+  .object({
+    id: IdSchema,
+    name: z.string().min(1),
+    order: z.number(),
+    createdAt: z.number()
+  })
+  .strict();
+
+const DayRecordSchema = z
+  .object({
+    date: YmdSchema,
+    completed: z.number().int().nonnegative(),
+    focusSeconds: z.number().nonnegative(),
+    rolledOver: z.number().int().nonnegative(),
+    note: z.string().optional(),
+    closedAt: z.number().optional()
+  })
+  .strict();
+
+const EdgeSchema = z.enum(['top', 'bottom']);
+
+const StripPositionSchema = z
+  .object({
+    x: z.number(),
+    y: z.number()
+  })
+  .strict();
+
+const SettingsSchema = z
+  .object({
+    theme: z
+      .object({
+        name: z.enum(['ledger', 'kraft', 'phosphor', 'slate']),
+        mode: z.enum(['light', 'dark', 'system'])
+      })
+      .strict(),
+    textSize: z.enum(['S', 'M', 'L']),
+    strip: z
+      .object({
+        enabled: z.boolean(),
+        edge: EdgeSchema,
+        width: z.number(),
+        collapsed: z.boolean(),
+        autoHide: z.boolean(),
+        clickThrough: z.boolean(),
+        opacity: z.number().min(0.4).max(1),
+        reserveSpace: z.boolean(),
+        hideOverFullscreen: z.boolean(),
+        hideFromCapture: z.boolean(),
+        menuBarMode: z.boolean(),
+        positions: z.record(z.string(), StripPositionSchema)
+      })
+      .strict(),
+    hotkeys: z
+      .object({
+        capture: z.string(),
+        toggleStrip: z.string(),
+        completeAdvance: z.string(),
+        toggleTimer: z.string(),
+        undo: z.string()
+      })
+      .strict(),
+    timer: z
+      .object({
+        pomodoro: z.boolean(),
+        workMinutes: z.number().positive(),
+        breakMinutes: z.number().positive(),
+        idlePauseMinutes: z.number().positive(),
+        awayThresholdMinutes: z.number().positive(),
+        defaultPlannedMinutes: z.number().positive()
+      })
+      .strict(),
+    score: z
+      .object({
+        enabled: z.boolean(),
+        value: z.number()
+      })
+      .strict(),
+    startOnLogin: z.boolean(),
+    notifications: z.boolean(),
+    reducedMotion: z.enum(['system', 'on', 'off']),
+    dataDir: z.string().optional(),
+    onboardingDone: z.boolean()
+  })
+  .strict();
+
+const SettingsPatchSchema = SettingsSchema.deepPartial();
+
+export const DataSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    tasks: z.array(TaskSchema).max(10000),
+    lists: z.array(ListSchema),
+    days: z.array(DayRecordSchema),
+    settings: SettingsSchema,
+    meta: z
+      .object({
+        createdAt: z.number(),
+        lastSavedAt: z.number(),
+        appVersion: z.string(),
+        legacyImportedAt: z.number().optional()
+      })
+      .strict()
+  })
+  .strict();
+
+// --- actions ------------------------------------------------------------
+
+const TaskAddSchema = z
+  .object({
+    type: z.literal('task/add'),
+    id: IdSchema,
+    now: z.number(),
+    title: TitleSchema,
+    listId: IdSchema.optional(),
+    parentId: IdSchema.optional(),
+    tags: TagsSchema.optional(),
+    due: DueSchema.optional(),
+    recurrence: RuleSchema.optional(),
+    plannedSeconds: z.number().optional(),
+    today: z.boolean().optional(),
+    makeCurrent: z.boolean().optional()
+  })
+  .strict();
+
+const TaskEditSchema = z
+  .object({
+    type: z.literal('task/edit'),
+    id: IdSchema,
+    now: z.number(),
+    patch: z
+      .object({
+        title: TitleSchema.optional(),
+        notes: z.string().optional(),
+        listId: IdSchema.optional(),
+        tags: TagsSchema.optional(),
+        due: DueSchema.optional(),
+        recurrence: RuleSchema.optional(),
+        today: z.boolean().optional(),
+        plannedSeconds: z.number().nullable().optional()
+      })
+      .strict()
+  })
+  .strict();
+
+const TaskCompleteSchema = z
+  .object({
+    type: z.literal('task/complete'),
+    id: IdSchema,
+    now: z.number(),
+    by: z.enum(['user', 'timer']),
+    spawnId: IdSchema.optional()
+  })
+  .strict();
+
+const TaskUncompleteSchema = z
+  .object({
+    type: z.literal('task/uncomplete'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TaskDeleteSchema = z
+  .object({
+    type: z.literal('task/delete'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TaskMoveSchema = z
+  .object({
+    type: z.literal('task/move'),
+    id: IdSchema,
+    now: z.number(),
+    listId: IdSchema.optional(),
+    parentId: IdSchema.nullable().optional(),
+    afterId: IdSchema.nullable().optional()
+  })
+  .strict();
+
+const TaskMakeCurrentSchema = z
+  .object({
+    type: z.literal('task/makeCurrent'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TaskSkipSchema = z
+  .object({
+    type: z.literal('task/skip'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TaskSnoozeSchema = z
+  .object({
+    type: z.literal('task/snooze'),
+    id: IdSchema,
+    now: z.number(),
+    until: z.number()
+  })
+  .strict();
+
+const TaskSetTodaySchema = z
+  .object({
+    type: z.literal('task/setToday'),
+    ids: z.array(IdSchema),
+    now: z.number(),
+    today: z.boolean()
+  })
+  .strict();
+
+const TimerStartSchema = z
+  .object({
+    type: z.literal('timer/start'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TimerPauseSchema = z
+  .object({
+    type: z.literal('timer/pause'),
+    id: IdSchema,
+    now: z.number(),
+    at: z.number().optional()
+  })
+  .strict();
+
+const TimerStopSchema = z
+  .object({
+    type: z.literal('timer/stop'),
+    id: IdSchema,
+    now: z.number()
+  })
+  .strict();
+
+const TimerAddTimeSchema = z
+  .object({
+    type: z.literal('timer/addTime'),
+    id: IdSchema,
+    now: z.number(),
+    seconds: z.number()
+  })
+  .strict();
+
+const ListAddSchema = z
+  .object({
+    type: z.literal('list/add'),
+    id: IdSchema,
+    now: z.number(),
+    name: z.string().min(1)
+  })
+  .strict();
+
+const ListRenameSchema = z
+  .object({
+    type: z.literal('list/rename'),
+    id: IdSchema,
+    now: z.number(),
+    name: z.string().min(1)
+  })
+  .strict();
+
+const ListDeleteSchema = z
+  .object({
+    type: z.literal('list/delete'),
+    id: IdSchema,
+    now: z.number(),
+    moveTasksTo: IdSchema
+  })
+  .strict();
+
+const DayRolloverSchema = z
+  .object({
+    type: z.literal('day/rollover'),
+    now: z.number(),
+    date: YmdSchema
+  })
+  .strict();
+
+const DayCloseSchema = z
+  .object({
+    type: z.literal('day/close'),
+    now: z.number(),
+    date: YmdSchema,
+    note: z.string().optional()
+  })
+  .strict();
+
+const SettingsPatchActionSchema = z
+  .object({
+    type: z.literal('settings/patch'),
+    now: z.number(),
+    patch: SettingsPatchSchema
+  })
+  .strict();
+
+const DataReplaceSchema = z
+  .object({
+    type: z.literal('data/replace'),
+    now: z.number(),
+    data: DataSchema
+  })
+  .strict();
+
+export const ActionSchema = z.discriminatedUnion('type', [
+  TaskAddSchema,
+  TaskEditSchema,
+  TaskCompleteSchema,
+  TaskUncompleteSchema,
+  TaskDeleteSchema,
+  TaskMoveSchema,
+  TaskMakeCurrentSchema,
+  TaskSkipSchema,
+  TaskSnoozeSchema,
+  TaskSetTodaySchema,
+  TimerStartSchema,
+  TimerPauseSchema,
+  TimerStopSchema,
+  TimerAddTimeSchema,
+  ListAddSchema,
+  ListRenameSchema,
+  ListDeleteSchema,
+  DayRolloverSchema,
+  DayCloseSchema,
+  SettingsPatchActionSchema,
+  DataReplaceSchema
+]);
+
+// --- parsing --------------------------------------------------------------
+
+export class DataInvalidError extends Error {
+  issues: z.ZodIssue[];
+  constructor(issues: z.ZodIssue[]) {
+    super('Invalid data: ' + issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+    this.name = 'DataInvalidError';
+    this.issues = issues;
+  }
+}
+
+export function parseData(input: unknown): Data {
+  const result = DataSchema.safeParse(input);
+  if (!result.success) {
+    throw new DataInvalidError(result.error.issues);
+  }
+  return result.data;
+}
