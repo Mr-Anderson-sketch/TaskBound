@@ -130,4 +130,15 @@ export type Action =
   | { type: 'settings/patch'; now: number; patch: DeepPartial<Settings> }
   | { type: 'data/replace'; now: number; data: Data };
 
-export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+// A type has an index signature (Record<string, V>-shaped) iff `string` itself
+// is assignable to its key type — a plain interface's keyof is a finite union
+// of literal keys, never `string` itself.
+type IsIndexSignature<T> = string extends keyof T ? true : false;
+
+// Deep-partial an object type, but treat index-signature members (Record<string, V>,
+// e.g. Settings['strip']['positions']) as opaque leaves: a partial map entry (half a
+// StripPosition) is meaningless, and this keeps DeepPartial in lockstep with zod's
+// `.deepPartial()`, which likewise does not partial-ify ZodRecord value schemas.
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? (IsIndexSignature<T[K]> extends true ? T[K] : DeepPartial<T[K]>) : T[K];
+};

@@ -2,7 +2,22 @@
 // Every object schema is `.strict()`: unknown keys are a bug (typo, stale field,
 // or a future schema version) and must fail loudly rather than pass silently.
 import { z } from 'zod';
-import type { Data } from './types';
+import type { Action, Data, DeepPartial, Settings } from './types';
+
+// Mutual, non-distributive `extends` equality check for two types, used below to pin
+// zod's inferred output types to the hand-written types in ./types so they cannot
+// silently drift apart again (see the settings/patch DeepPartial-vs-ZodRecord mismatch
+// this guards against). Wrapping both sides in a tuple `[A] extends [B]` suppresses
+// conditional-type distribution over unions (both Action and z.infer<ActionSchema> are
+// 21-member unions) and checks real structural assignability in both directions — the
+// property that actually matters here. The more common "function-parameter-position"
+// equality trick (`(<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)`)
+// was tried first and rejects this codebase's own correct types: it treats
+// `Partial<Pick<Task, ...>> & { plannedSeconds?: number | null }` (task/edit's patch,
+// written as an intersection in the brief) as unequal to the structurally identical
+// flattened object zod infers, even though each is assignable to the other. A failure
+// of the check below is a compile error, not a runtime one.
+type AssertEqual<A, B> = [B] extends [A] ? ([A] extends [B] ? true : never) : never;
 
 // --- primitives -------------------------------------------------------
 
@@ -166,6 +181,11 @@ const SettingsSchema = z
   .strict();
 
 const SettingsPatchSchema = SettingsSchema.deepPartial();
+
+// Keeps the runtime patch schema and the DeepPartial<Settings> type (used by the
+// Action union's settings/patch member, see types.ts) from drifting apart again.
+const _settingsPatchTypeMatches: AssertEqual<z.infer<typeof SettingsPatchSchema>, DeepPartial<Settings>> = true;
+void _settingsPatchTypeMatches;
 
 export const DataSchema = z
   .object({
@@ -412,6 +432,11 @@ export const ActionSchema = z.discriminatedUnion('type', [
   SettingsPatchActionSchema,
   DataReplaceSchema
 ]);
+
+// Keeps ActionSchema's members (each individually .strict()) in lockstep with every
+// member of the Action union in types.ts.
+const _actionSchemaTypeMatches: AssertEqual<z.infer<typeof ActionSchema>, Action> = true;
+void _actionSchemaTypeMatches;
 
 // --- parsing --------------------------------------------------------------
 
