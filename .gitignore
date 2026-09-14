@@ -6,3 +6,4 @@ release/
 e2e/.results/
 test-results/
 playwright-report/
+.superpowers/
