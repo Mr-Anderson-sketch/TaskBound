@@ -34,6 +34,11 @@ export class Store {
   private readonly platform: 'win32' | 'darwin' | 'linux';
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSave: Promise<void> | undefined;
+  // Tail of the serialised save chain: each debounced save runs only after the
+  // previous one settles, so `deps.save` is never called concurrently with itself.
+  // A prior save's rejection is swallowed here (but still surfaced through
+  // `pendingSave`/`flush()` for that call) so later saves keep running.
+  private saveChain: Promise<void> = Promise.resolve();
 
   constructor(
     initial: Data,
@@ -61,11 +66,16 @@ export class Store {
   /** Validated by ipc.ts before this is called. Returns the (possibly unchanged) rev. */
   dispatch(action: Action): number {
     const prev = this.data;
-    if (isUndoable(action)) {
-      this.undoStack.push(prev, labelFor(action, prev));
-    }
+    // Compute the undo label (if any) and reduce BEFORE touching the undo stack: an
+    // undoable action type whose reducer is a no-op (e.g. `task/edit` on a missing id,
+    // unimplemented until Task 4.3) must not push a dead entry that clears redo and
+    // flips `canUndo` with no corresponding data change / notify.
+    const label = isUndoable(action) ? labelFor(action, prev) : undefined;
     const next = reduce(prev, action);
     if (next !== prev) {
+      if (label !== undefined) {
+        this.undoStack.push(prev, label);
+      }
       this.data = { ...next, meta: { ...next.meta, lastSavedAt: this.deps.now() } };
       this.rev++;
       this.scheduleSave();
@@ -98,8 +108,14 @@ export class Store {
 
   /** From the file watcher or an import: replaces the data wholesale, resets undo,
    * bumps rev, notifies — does NOT save (the caller already wrote the file, or the
-   * next dispatch will). */
+   * next dispatch will). Cancels any pending debounced save timer: a stale save
+   * scheduled before the replace must not fire afterwards and overwrite the
+   * replaced data with the pre-replace `Data`. */
   replace(data: Data): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
     this.data = data;
     this.undoStack = new UndoStack();
     this.lastUndoLabel = undefined;
@@ -114,16 +130,18 @@ export class Store {
     };
   }
 
-  /** Awaits any pending or in-flight debounced save. Called by main on `before-quit`. */
+  /** Awaits the full save chain: any not-yet-fired debounced save is run immediately,
+   * and — since saves are serialised (see `saveChain`) — this also waits out any save
+   * still in flight from an earlier debounce cycle. Called by main on `before-quit`;
+   * must not resolve until every enqueued write has actually completed, or the app
+   * could exit mid-write. */
   async flush(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = undefined;
-      this.pendingSave = this.doSave();
+      this.enqueueSave();
     }
-    if (this.pendingSave) {
-      await this.pendingSave;
-    }
+    await this.pendingSave;
   }
 
   private notify(): void {
@@ -139,16 +157,22 @@ export class Store {
     }
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
-      this.pendingSave = this.doSave();
+      this.enqueueSave();
     }, SAVE_DEBOUNCE_MS);
   }
 
+  /** Chains a save of the CURRENT `this.data` (read at call time, i.e. when its turn in
+   * the chain actually runs) onto `saveChain`, so it starts only once every earlier
+   * enqueued save has settled — `deps.save` is thus never invoked concurrently with
+   * itself. `pendingSave` always points at the chain's current tail, which is what
+   * `flush()` awaits. */
+  private enqueueSave(): void {
+    const run = this.saveChain.catch(() => {}).then(() => this.doSave());
+    this.saveChain = run;
+    this.pendingSave = run;
+  }
+
   private async doSave(): Promise<void> {
-    const data = this.data;
-    try {
-      await this.deps.save(data);
-    } finally {
-      this.pendingSave = undefined;
-    }
+    await this.deps.save(this.data);
   }
 }

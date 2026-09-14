@@ -57,13 +57,38 @@ function makeStore(): Store {
   });
 }
 
-function setup() {
+function setup(allowedOrigins: string[] = [ALLOWED_ORIGIN]) {
   const { ipcMain, handlers } = makeFakeIpcMain();
   const store = makeStore();
   const windows = makeWindows();
-  registerIpc({ ipcMain, store, allowedOrigins: [ALLOWED_ORIGIN], windows });
+  registerIpc({ ipcMain, store, allowedOrigins, windows });
   return { handlers, store, windows };
 }
+
+// One valid payload (or none) per InvokeMap channel — used by the table-driven sender
+// guard test below, so a rejection there is provably caused by the origin check and
+// not by payload validation.
+const VALID_PAYLOADS: Record<string, unknown[]> = {
+  'store:get': [],
+  'store:dispatch': [{ type: 'task/add', id: 'x', now: 1000, title: 'Valid' }],
+  'store:undo': [],
+  'store:redo': [],
+  'strip:expand': [true],
+  'strip:reportSize': [{ width: 100, height: 32 }],
+  'strip:setEdge': ['top'],
+  'strip:dragStart': [],
+  'strip:hover': [true],
+  'palette:show': ['capture'],
+  'palette:hide': [],
+  'planner:show': [],
+  'planner:hide': [],
+  'app:openExternal': ['https://example.com/'],
+  'app:quit': [],
+  'data:export': ['json'],
+  'data:import': [],
+  'data:chooseDir': [],
+  'hotkeys:test': ['Control+Alt+Space']
+};
 
 describe('registerIpc', () => {
   it('registers every InvokeMap channel', () => {
@@ -110,6 +135,39 @@ describe('registerIpc', () => {
   it('rejects when the sender frame is missing entirely', async () => {
     const { handlers } = setup();
     await expect(handlers.get('store:get')!(eventFrom(undefined))).rejects.toThrow(IpcRejected);
+  });
+
+  it('rejects every registered channel when the sender is untrusted, even with an otherwise-valid payload', async () => {
+    const { handlers } = setup();
+    expect(Object.keys(VALID_PAYLOADS).sort()).toEqual([...handlers.keys()].sort());
+
+    for (const [channel, args] of Object.entries(VALID_PAYLOADS)) {
+      const handler = handlers.get(channel)!;
+      await expect(handler(eventFrom('https://evil/'), ...args)).rejects.toThrow(IpcRejected);
+    }
+  });
+
+  it('throws at registration time when an allowedOrigins entry lacks a trailing slash', () => {
+    const { ipcMain } = makeFakeIpcMain();
+    const store = makeStore();
+    const windows = makeWindows();
+
+    expect(() =>
+      registerIpc({ ipcMain, store, allowedOrigins: ['https://timebound.local'], windows })
+    ).toThrow(/must end with/);
+  });
+
+  it('does not treat a same-prefix sibling origin as trusted (origin-prefix check is slash-anchored)', async () => {
+    const { handlers } = setup(['file:///D:/app/']);
+
+    // Sibling directory sharing the 'file:///D:/app' text prefix, but not the '/'-anchored one.
+    await expect(handlers.get('store:get')!(eventFrom('file:///D:/app-evil/index.html'))).rejects.toThrow(
+      IpcRejected
+    );
+
+    // A real sub-path/fragment of the trusted directory is accepted.
+    const snapshot = await handlers.get('store:get')!(eventFrom('file:///D:/app/index.html#/strip'));
+    expect(snapshot).toMatchObject({ rev: 0 });
   });
 
   it('applies a valid task/add from an allowed origin and returns the new rev', async () => {

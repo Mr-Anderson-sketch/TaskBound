@@ -86,6 +86,25 @@ describe('Store', () => {
     expect(store.redo()).toBeUndefined();
   });
 
+  it('a no-op dispatch of an undoable action type does not clear redo or bump rev', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+    expect(store.get().canRedo).toBe(true);
+    const revBefore = store.get().rev;
+
+    // task/edit is undoable (UNDOABLE.has('task/edit')) but its reducer is a no-op
+    // (unimplemented until Task 4.3): no task 'zzz' exists, and the patch is empty.
+    // Before the fix, dispatch() pushed to the undo stack BEFORE reducing, so this
+    // call would clear the redo stack and leave a dead undo entry despite nothing
+    // changing.
+    const rev = store.dispatch({ type: 'task/edit', id: 'zzz', now: 1000, patch: {} });
+
+    expect(rev).toBe(revBefore);
+    expect(store.get().rev).toBe(revBefore);
+    expect(store.get().canRedo).toBe(true);
+  });
+
   it('notifies subscribers synchronously with the fresh snapshot, until unsubscribed', () => {
     const { store } = makeStore();
     const cb = vi.fn();
@@ -120,6 +139,73 @@ describe('Store', () => {
 
     await store.flush();
     expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('serialises debounced saves — a later save waits for an earlier in-flight one, and flush() awaits the whole chain', async () => {
+    const events: string[] = [];
+    const resolvers: Array<() => void> = [];
+    const save = vi.fn(() => {
+      const index = resolvers.length;
+      events.push(`start:${index}`);
+      return new Promise<void>((resolve) => {
+        resolvers.push(() => {
+          events.push(`end:${index}`);
+          resolve();
+        });
+      });
+    });
+    const data = createEmptyData(1000, APP_VERSION);
+    const store = new Store(data, {
+      save,
+      now: () => 1000,
+      appVersion: APP_VERSION,
+      platform: 'win32',
+      systemDark: () => false
+    });
+
+    // First debounce window: save 0 starts and does not resolve.
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    // Second debounce window elapses while save 0 is still in flight. The second
+    // save must NOT start yet (no concurrent `deps.save` calls).
+    store.dispatch({ type: 'task/add', id: 'b', now: 1000, title: 'Two' });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    let flushed = false;
+    const flushPromise = store.flush().then(() => {
+      flushed = true;
+    });
+
+    // Give the chain a few microtask ticks: still nothing to do until save 0 resolves.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(flushed).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    // Resolve save 0: save 1 should start (serially), but flush() still must not
+    // resolve until save 1 also finishes.
+    resolvers[0]();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(flushed).toBe(false);
+
+    resolvers[1]();
+    await flushPromise;
+
+    expect(flushed).toBe(true);
+    expect(events).toEqual(['start:0', 'end:0', 'start:1', 'end:1']);
+  });
+
+  it('replace() cancels a pending debounced save timer so it cannot fire afterwards', async () => {
+    const { store, save } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+
+    store.replace(createEmptyData(2000, APP_VERSION));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('replace() resets the undo stack, bumps rev, notifies, and does not save', () => {

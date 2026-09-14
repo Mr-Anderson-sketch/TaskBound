@@ -36,7 +36,7 @@ const ALLOWED_EVENTS = new Set<keyof EventMap>(['store:changed', 'palette:mode',
 const tb: Bridge = {
   invoke(channel, ...args) {
     if (!ALLOWED_INVOKE.has(channel)) {
-      throw new Error(`tb.invoke: channel not allowed: ${String(channel)}`);
+      return Promise.reject(new Error(`tb.invoke: channel not allowed: ${String(channel)}`));
     }
     return ipcRenderer.invoke(channel, ...args);
   },

@@ -39,6 +39,14 @@ export interface WindowCommands {
 export interface RegisterIpcDeps {
   ipcMain: Pick<IpcMain, 'handle'>;
   store: Store;
+  /**
+   * Trusted prefixes checked against `event.senderFrame.url` (a plain `startsWith`).
+   * Each entry MUST end with '/' — e.g. `file:///D:/app/dist/renderer/` or
+   * `http://localhost:5173/` — never a bare origin like `https://timebound.local`,
+   * which would also match an attacker's `https://timebound.local.evil.com/` (and,
+   * for `file:`, a sibling directory like `file:///D:/app-evil/`). `registerIpc`
+   * throws at registration time if any entry lacks the trailing slash.
+   */
   allowedOrigins: string[];
   windows: WindowCommands;
 }
@@ -85,6 +93,12 @@ function parse<T>(schema: ZodType<T>, payload: unknown): T {
  */
 export function registerIpc(deps: RegisterIpcDeps): void {
   const { ipcMain, store, allowedOrigins, windows } = deps;
+
+  for (const origin of allowedOrigins) {
+    if (!origin.endsWith('/')) {
+      throw new Error(`registerIpc: allowedOrigins entries must end with '/' (got ${JSON.stringify(origin)})`);
+    }
+  }
 
   const guard = (event: IpcMainInvokeEvent): void => assertTrustedSender(event, allowedOrigins);
 
