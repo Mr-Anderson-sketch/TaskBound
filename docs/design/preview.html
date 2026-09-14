@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en" data-theme="ledger" data-mode="light">
+<head>
+<meta charset="utf-8">
+<title>TimeBound design preview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../src/renderer/theme/themes.css">
+<style>
+  /* ---------- system tokens (mirrors DESIGN.md) ---------- */
+  :root {
+    --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+    --font-display: "Instrument Serif", Georgia, serif;
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+    --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-full: 999px;
+    --t-micro: 120ms; --t-short: 160ms; --t-medium: 240ms;
+    --ease-out: cubic-bezier(.2,.7,.2,1); --ease-in: cubic-bezier(.6,0,.8,.4);
+    --strip-h: 32px; --pill-h: 24px;
+  }
+  * { box-sizing: border-box; }
+  html { font-family: var(--font-ui); font-size: 14px; line-height: 20px; color: var(--ink); background: var(--bg); }
+  body { margin: 0; padding: 32px 40px 80px; }
+  h1 { font: 400 40px/44px var(--font-display); margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font: 400 26px/32px var(--font-display); margin: 48px 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  h3 { font: 600 13px/16px var(--font-ui); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+  p.lede { font-size: 15px; color: var(--muted); max-width: 64ch; margin: 0 0 16px; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .col { display: flex; flex-direction: column; gap: 12px; }
+  .caption { font-size: 12px; color: var(--muted); }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  code { font-family: var(--font-mono); font-size: 12px; background: var(--surface); border: 1px solid var(--line); padding: 1px 5px; border-radius: var(--r-1); }
+  /* switcher */
+  .switch { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; }
+  .switch button { font: 500 12px/16px var(--font-ui); padding: 5px 10px; border-radius: var(--r-full); border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+  .switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  /* desktop stage: simulates a piece of desktop under a strip */
+  .stage { position: relative; width: 640px; height: 96px; border: 1px solid var(--line); border-radius: var(--r-3); overflow: hidden;
+    background: repeating-linear-gradient(0deg, transparent 0 23px, color-mix(in oklch, var(--ink) 6%, transparent) 23px 24px), color-mix(in oklch, var(--bg) 80%, var(--ink) 20%); }
+  .stage .fakewin { position: absolute; inset: 10px 40px 0 24px; background: var(--surface); border-radius: 6px 6px 0 0; border: 1px solid var(--line); border-bottom: 0; opacity: .9; }
+  .stage .fakewin::before { content: ""; position: absolute; left: 10px; top: 6px; width: 120px; height: 10px; background: var(--line); border-radius: 3px; }
+  .stage .fakewin::after { content: ""; position: absolute; left: 10px; top: 24px; right: 10px; bottom: 0; background: repeating-linear-gradient(0deg, transparent 0 9px, color-mix(in oklch, var(--ink) 8%, transparent) 9px 10px); }
+  .stage .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: color-mix(in oklch, var(--bg) 40%, oklch(0.2 0 0) 60%); }
+  .stage .taskbar::after { content: ""; position: absolute; left: 50%; top: 10px; width: 160px; height: 20px; transform: translateX(-50%); background: color-mix(in oklch, white 20%, transparent); border-radius: 4px; }
+  .stage .strip { position: absolute; left: 50%; transform: translateX(-50%); bottom: 40px; }
+  .stage.top .strip { top: 0; bottom: auto; }
+  .stage.top .fakewin { inset: 32px 40px 40px 24px; }
+
+  /* ---------- THE STRIP ---------- */
+  .strip { width: 420px; height: var(--strip-h); display: flex; align-items: center; gap: 8px; padding: 0 10px 0 0;
+    background: var(--strip-bg); color: var(--strip-ink); font: 500 13px/16px var(--font-ui);
+    border-radius: var(--r-2) var(--r-2) 0 0; box-shadow: 0 -1px 0 var(--line), 0 -6px 18px -8px color-mix(in oklch, var(--ink) 40%, transparent); position: relative; overflow: hidden; }
+  .stage.top .strip { border-radius: 0 0 var(--r-2) var(--r-2); box-shadow: 0 1px 0 var(--line), 0 6px 18px -8px color-mix(in oklch, var(--ink) 40%, transparent); }
+  .strip .handle { width: 24px; height: 24px; margin-left: 4px; display: grid; place-items: center; border-radius: var(--r-1); cursor: grab; flex: none; }
+  .strip .handle:hover { background: color-mix(in oklch, var(--strip-ink) 8%, transparent); }
+  .strip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .strip .dot.paused { background: var(--strip-muted); }
+  .strip .dot.overtime { background: var(--warn); }
+  .strip .dot.done { background: var(--ok); }
+  .strip .dot.unplanned { background: transparent; box-shadow: inset 0 0 0 1.5px var(--strip-muted); }
+  .strip .dot.warnstate { background: var(--danger); }
+  .strip .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  .strip .title .dim { color: var(--strip-muted); font-weight: 400; }
+  .strip .chip { flex: none; height: 20px; padding: 0 7px; border-radius: var(--r-1); background: var(--accent-tint); color: var(--strip-ink); font: 500 12px/20px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+  .strip .chip.paused { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--strip-muted); }
+  .strip .chip.overtime { background: color-mix(in oklch, var(--warn) 22%, transparent); }
+  .strip .chip.plan { background: transparent; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); font-family: var(--font-ui); }
+  .strip .progress { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); }
+  .stage.top .strip .progress { bottom: auto; top: 0; }
+  .strip .strike { text-decoration: line-through; color: var(--strip-muted); }
+  .strip.clickthrough { box-shadow: 0 0 0 1px var(--strip-bg), 0 -1px 0 var(--line); outline: 1.5px dashed var(--strip-muted); outline-offset: -3px; opacity: .72; }
+  /* variant B: ruled */
+  .strip.vB { background: color-mix(in oklch, var(--strip-bg) 96%, transparent); border-top: 2px solid var(--accent); border-radius: 0; box-shadow: 0 -1px 0 var(--line); height: 34px; }
+  .strip.vB .chip { background: transparent; border-left: 1px solid var(--line); border-radius: 0; padding-left: 10px; height: 34px; line-height: 34px; margin-right: -10px; padding-right: 12px; }
+  /* variant C: capsule */
+  .strip.vC { border-radius: var(--r-full); bottom: 48px; box-shadow: 0 0 0 1px var(--line), 0 8px 24px -8px color-mix(in oklch, var(--ink) 45%, transparent); padding-right: 6px; }
+  .strip.vC .chip { border-radius: var(--r-full); }
+  .strip.vC .progress { display: none; }
+  /* pill */
+  .pill { height: var(--pill-h); max-width: 240px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 6px; background: var(--strip-bg); color: var(--strip-ink); font: 500 12px/16px var(--font-ui); border-radius: var(--r-full); box-shadow: 0 0 0 1px var(--line); }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+  .pill .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill .m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--strip-muted); flex: none; }
+  .sliver { width: 420px; height: 4px; border-radius: 2px 2px 0 0; background: color-mix(in oklch, var(--accent) 60%, transparent); }
+
+  /* ---------- hover panel ---------- */
+  .panel { width: 420px; background: var(--strip-bg); color: var(--strip-ink); border-radius: var(--r-2) var(--r-2) 0 0; box-shadow: 0 0 0 1px var(--line), 0 -12px 32px -12px color-mix(in oklch, var(--ink) 40%, transparent); overflow: hidden; }
+  .panel .head { display: flex; justify-content: space-between; align-items: center; height: 28px; padding: 0 12px; font-size: 12px; color: var(--strip-muted); border-bottom: 1px solid var(--line); }
+  .panel .prow { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 10px 0 12px; font-size: 13px; }
+  .panel .prow:hover { background: color-mix(in oklch, var(--strip-ink) 5%, transparent); }
+  .panel .prow.cur { font-weight: 500; }
+  .panel .prow .cb { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--strip-muted); flex: none; }
+  .panel .prow.cur .cb { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 45%, transparent 48%); }
+  .panel .prow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel .prow .due { font-size: 11px; color: var(--strip-muted); font-family: var(--font-mono); }
+  .panel .prow .due.over { color: var(--danger); }
+  .panel .prow .acts { display: none; gap: 2px; }
+  .panel .prow:hover .acts { display: flex; }
+  .panel .prow .acts span { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--r-1); font-size: 12px; color: var(--strip-muted); }
+  .panel .prow .acts span:hover { background: var(--accent-tint); color: var(--strip-ink); }
+  .panel .undo { display: flex; justify-content: space-between; align-items: center; height: 28px; padding: 0 12px; font-size: 12px; background: var(--accent-tint); }
+  .panel .undo b { font-weight: 500; }
+  .panel .strip { box-shadow: none; border-top: 1px solid var(--line); border-radius: 0; }
+
+  /* ---------- palette (capture) ---------- */
+  .palette { width: 560px; background: var(--surface); color: var(--ink); border-radius: var(--r-3); box-shadow: 0 0 0 1px var(--line), 0 24px 60px -20px color-mix(in oklch, var(--ink) 50%, transparent); overflow: hidden; }
+  .palette .in { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px; font-size: 16px; border-bottom: 1px solid var(--line); }
+  .palette .in .caret { width: 2px; height: 20px; background: var(--accent); }
+  .palette .in .ph { color: var(--muted); }
+  .palette .tokens { display: flex; gap: 6px; padding: 10px 16px; flex-wrap: wrap; }
+  .tok { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--r-1); font-size: 12px; background: var(--accent-tint); color: var(--ink); }
+  .tok .k { color: var(--muted); }
+  .palette .hint { display: flex; justify-content: space-between; padding: 6px 16px 10px; font-size: 11px; color: var(--muted); }
+  .palette .hint kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--bg); }
+  .palette .list { border-top: 1px solid var(--line); }
+  .palette .pl { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 16px; font-size: 13px; }
+  .palette .pl.sel { background: var(--accent-tint); }
+  .palette .pl .cb { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--muted); }
+  .palette .pl .cb.on { background: var(--accent); border-color: var(--accent); }
+  .palette .pl .t { flex: 1; }
+  .palette .pl .why { font-size: 11px; color: var(--muted); }
+  .palette .title { padding: 12px 16px 4px; font: 400 22px/26px var(--font-display); }
+  .palette .foot { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .btn { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: var(--r-2); font: 500 13px/16px var(--font-ui); background: var(--accent); color: var(--accent-ink); border: 0; }
+  .btn.ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+
+  /* ---------- planner ---------- */
+  .planner { width: 900px; height: 540px; background: var(--bg); color: var(--ink); border-radius: var(--r-3); box-shadow: 0 0 0 1px var(--line), 0 24px 60px -24px color-mix(in oklch, var(--ink) 50%, transparent); overflow: hidden; display: grid; grid-template-rows: 40px 1fr; }
+  .planner .tb { display: flex; align-items: center; gap: 12px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .planner .tb .brand { font: 500 13px var(--font-ui); letter-spacing: .02em; }
+  .planner .tb .cap { flex: 1; max-width: 460px; height: 26px; margin-left: 24px; border-radius: var(--r-2); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); display: flex; align-items: center; padding: 0 10px; gap: 8px; font-size: 13px; color: var(--muted); }
+  .planner .tb .cap kbd { margin-left: auto; font-family: var(--font-mono); font-size: 11px; }
+  .planner .tb .wc { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-size: 12px; }
+  .planner .body { display: grid; grid-template-columns: 200px 1fr; }
+  .planner .body.three { grid-template-columns: 200px 1fr 300px; }
+  .planner .rail { border-right: 1px solid var(--line); padding: 12px 8px; font-size: 13px; }
+  .planner .rail .g { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 8px 4px; }
+  .planner .rail .i { display: flex; justify-content: space-between; padding: 5px 8px; border-radius: var(--r-1); }
+  .planner .rail .i.sel { background: var(--accent-tint); font-weight: 500; }
+  .planner .rail .i .n { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+  .planner .main { padding: 18px 24px; overflow: hidden; }
+  .planner .main .h { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+  .planner .main .h .d { font: 400 28px/32px var(--font-display); }
+  .planner .main .h .m { color: var(--muted); font-size: 13px; }
+  .planner .main .h .plan { margin-left: auto; }
+  .planner .sec { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 4px; }
+  .task { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 8px; border-radius: var(--r-2); font-size: 14px; }
+  .task.sel { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+  .task.cur .t { font-weight: 500; }
+  .task .cb { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--muted); flex: none; }
+  .task.cur .cb { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 45%, transparent 48%); }
+  .task.done .cb { background: var(--ok); border-color: var(--ok); }
+  .task.done .t { text-decoration: line-through; color: var(--muted); }
+  .task .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .tag { font-size: 11px; color: var(--accent); }
+  .task .due { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+  .task .due.over { color: var(--danger); }
+  .task .tm { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .task .sub { margin-left: 26px; }
+  .planner .detail { border-left: 1px solid var(--line); padding: 18px 20px; font-size: 13px; }
+  .planner .detail .dt { font: 500 15px/20px var(--font-ui); margin-bottom: 8px; }
+  .planner .detail .kv { display: grid; grid-template-columns: 76px 1fr; gap: 6px 10px; color: var(--muted); margin: 10px 0; }
+  .planner .detail .kv b { color: var(--ink); font-weight: 500; }
+  .planner .detail .notes { min-height: 70px; border-radius: var(--r-2); background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); padding: 8px 10px; color: var(--ink); }
+  .planner .detail .timer { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .planner .detail .timer .big { font: 500 24px/28px var(--font-mono); font-variant-numeric: tabular-nums; }
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty .e1 { font: 400 22px/28px var(--font-display); color: var(--ink); }
+  .empty kbd { font-family: var(--font-mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; background: var(--surface); }
+
+  /* ---------- settings ---------- */
+  .settings { width: 720px; background: var(--bg); color: var(--ink); border-radius: var(--r-3); box-shadow: 0 0 0 1px var(--line); display: grid; grid-template-columns: 180px 1fr; overflow: hidden; }
+  .settings .nav { border-right: 1px solid var(--line); padding: 12px 8px; font-size: 13px; }
+  .settings .nav div { padding: 6px 10px; border-radius: var(--r-1); }
+  .settings .nav div.sel { background: var(--accent-tint); font-weight: 500; }
+  .settings .pane { padding: 20px 24px; }
+  .settings .pane h4 { font: 400 24px/28px var(--font-display); margin: 0 0 4px; }
+  .settings .pane .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .set { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line); gap: 16px; }
+  .set .l { font-size: 13px; }
+  .set .l small { display: block; color: var(--muted); font-size: 12px; }
+  .seg { display: inline-flex; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-2); padding: 2px; }
+  .seg span { padding: 3px 10px; font-size: 12px; border-radius: 4px; }
+  .seg span.on { background: var(--accent); color: var(--accent-ink); }
+  .tog { width: 34px; height: 20px; border-radius: 10px; background: var(--line); position: relative; }
+  .tog::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); }
+  .tog.on { background: var(--accent); } .tog.on::after { left: 17px; }
+  .range { width: 140px; height: 2px; background: var(--line); position: relative; }
+  .range::after { content: ""; position: absolute; left: 60%; top: -6px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
+  .swatch { width: 28px; height: 20px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line); }
+  .themes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 10px 0; }
+  .thm { border-radius: var(--r-2); padding: 8px; box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; }
+  .thm.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+  .thm .bar { height: 10px; border-radius: 3px; margin-bottom: 6px; display: flex; overflow: hidden; }
+  .thm .bar i { flex: 1; }
+  .kbdrow { display: flex; gap: 4px; }
+  .kbdrow kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 1px 6px; background: var(--surface); }
+
+  /* ---------- palette swatches / type ---------- */
+  .sw { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; max-width: 900px; }
+  .sw div { height: 56px; border-radius: var(--r-2); display: flex; align-items: flex-end; padding: 6px 8px; font: 500 11px/14px var(--font-mono); box-shadow: inset 0 0 0 1px var(--line); }
+  .type div { margin: 8px 0; }
+  .onb { display: flex; gap: 16px; }
+  .onb .card { width: 300px; height: 190px; background: var(--surface); border-radius: var(--r-3); box-shadow: 0 0 0 1px var(--line); padding: 18px; display: flex; flex-direction: column; }
+  .onb .card .n { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+  .onb .card .h { font: 400 22px/26px var(--font-display); margin: 6px 0 8px; }
+  .onb .card p { margin: 0; font-size: 13px; color: var(--muted); flex: 1; }
+  .gallery { display: grid; grid-template-columns: repeat(2, 640px); gap: 16px; }
+  .gallery .stage { width: 640px; }
+  .label { position: absolute; left: 8px; top: 6px; font: 500 11px var(--font-mono); color: var(--muted); z-index: 2; }
+</style>
+</head>
+<body>
+<h1>TimeBound</h1>
+<p class="lede">Design preview. Four themes, light and dark, built in OKLCH and AA-verified by <code>scripts/check-contrast.mjs</code>. Everything below is rendered at true pixel size so a 32&nbsp;px strip is a 32&nbsp;px strip.</p>
+<div class="switch" id="themeSwitch">
+  <button data-set="theme" data-v="ledger" aria-pressed="true">Ledger</button>
+  <button data-set="theme" data-v="kraft">Kraft</button>
+  <button data-set="theme" data-v="phosphor">Phosphor</button>
+  <button data-set="theme" data-v="slate">Slate</button>
+  <span style="width:16px"></span>
+  <button data-set="mode" data-v="light" aria-pressed="true">Light</button>
+  <button data-set="mode" data-v="dark">Dark</button>
+</div>
+
+<h2>Typography</h2>
+<div class="type">
+  <div style="font:400 40px/44px var(--font-display)">Today, Monday 14 September <em>— 3 of 7 done</em></div>
+  <div style="font:500 13px/16px var(--font-ui)">Strip title, 13/16 Plex Sans Medium: Write the baseline document for the focus strip</div>
+  <div style="font:400 14px/20px var(--font-ui)">Body 14/20 Plex Sans: The strip is the product. The planner is the back office where you decide what goes on the strip.</div>
+  <div class="mono" style="font:500 12px/20px var(--font-mono)">Timer chips 12/20 Plex Mono tabular: 24:59 · +02:14 · 1:04:00 · 3 of 7</div>
+  <div style="font:600 11px/14px var(--font-ui); letter-spacing:.06em; text-transform:uppercase; color:var(--muted)">Section labels 11/14 caps</div>
+</div>
+
+<h2>Palette</h2>
+<div class="sw">
+  <div style="background:var(--bg)">bg</div><div style="background:var(--surface)">surface</div><div style="background:var(--line)">line</div>
+  <div style="background:var(--ink);color:var(--bg)">ink</div><div style="background:var(--muted);color:var(--bg)">muted</div>
+  <div style="background:var(--accent);color:var(--accent-ink)">accent</div><div style="background:var(--accent-tint)">accent tint</div>
+  <div style="background:var(--ok);color:var(--bg)">ok</div><div style="background:var(--warn);color:var(--bg)">warn</div><div style="background:var(--danger);color:var(--bg)">danger</div>
+  <div style="background:var(--strip-bg)">strip bg</div><div style="background:var(--strip-ink);color:var(--strip-bg)">strip ink</div><div style="background:var(--strip-muted);color:var(--strip-bg)">strip muted</div>
+</div>
+
+<h2>Strip variants (design shotgun)</h2>
+<p class="lede">Same content, three constructions, docked to the bottom edge above the taskbar. A: Label. B: Ruled. C: Capsule.</p>
+<div class="row">
+  <div class="col">
+    <div class="stage"><span class="label">A · Label</span><div class="fakewin"></div><div class="taskbar"></div>
+      <div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document for the focus strip</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div></div>
+    <div class="caption">Flat backplate, 6 px radius on the free corners, 2 px progress hairline on the docked edge.</div>
+  </div>
+  <div class="col">
+    <div class="stage"><span class="label">B · Ruled</span><div class="fakewin"></div><div class="taskbar"></div>
+      <div class="strip vB"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document for the focus strip</div><div class="chip">24:59</div></div></div>
+    <div class="caption">Ledger rule along the edge, timer in its own column. 34 px because of the rule.</div>
+  </div>
+  <div class="col">
+    <div class="stage"><span class="label">C · Capsule</span><div class="fakewin"></div><div class="taskbar"></div>
+      <div class="strip vC"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document for the focus strip</div><div class="chip">24:59</div></div></div>
+    <div class="caption">Floating pill, 8 px off the edge. Prettier in isolation, costs 8 px and never reads as part of the OS.</div>
+  </div>
+</div>
+
+<h2>Strip states (variant A)</h2>
+<div class="gallery">
+  <div class="stage"><span class="label">running</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">paused</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot paused"></div></div><div class="title">Write the baseline document</div><div class="chip paused">‖ 18:20</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">overtime</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot overtime"></div></div><div class="title">Write the baseline document</div><div class="chip overtime">+02:14</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">no timer</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Email the bank about the wire</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">unplanned (Today empty)</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot unplanned"></div></div><div class="title">Email the bank about the wire <span class="dim">· Inbox</span></div><div class="chip plan">Plan today · 5</div></div></div>
+  <div class="stage"><span class="label">done for today</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot done"></div></div><div class="title">Done for today <span class="dim">· 7 of 7</span></div><div class="chip">2h 40m</div><div class="progress" style="width:100%"></div></div></div>
+  <div class="stage"><span class="label">empty</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot unplanned"></div></div><div class="title"><span class="dim">Nothing yet · Ctrl+Alt+Space to add a task</span></div></div></div>
+  <div class="stage"><span class="label">completing (1.2 s)</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot done"></div></div><div class="title"><span class="strike">Write the baseline document</span></div><div class="chip">Undo</div><div class="progress" style="width:57%"></div></div></div>
+  <div class="stage"><span class="label">click-through on</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip clickthrough"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">save failing</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot warnstate"></div></div><div class="title">Write the baseline document</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage top"><span class="label">top edge</span><div class="fakewin"></div><div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div></div>
+  <div class="stage"><span class="label">collapsed pill + auto-hide sliver</span><div class="fakewin"></div><div class="taskbar"></div>
+    <div style="position:absolute;left:50%;transform:translateX(-50%);bottom:52px"><div class="pill"><span class="dot"></span><span class="t">Write the baseline document for the strip</span><span class="m">24:59</span></div></div>
+    <div style="position:absolute;left:50%;transform:translateX(-50%);bottom:40px" class="sliver"></div></div>
+</div>
+
+<h2>Strip across all eight palettes</h2>
+<div class="gallery" id="allThemes"></div>
+
+<h2>Hover panel</h2>
+<div class="row">
+  <div class="panel">
+    <div class="head"><span>Today · 3 of 7 done</span><span>Next: Prepare the tax documents</span></div>
+    <div class="undo"><span>Completed <b>Email update</b></span><span style="color:var(--accent);font-weight:500">Undo · Ctrl+Alt+Backspace</span></div>
+    <div class="prow cur"><span class="cb"></span><span class="t">Write the baseline document</span><span class="due">25m</span><span class="acts"><span>✓</span><span>↷</span><span>zz</span></span></div>
+    <div class="prow"><span class="cb"></span><span class="t">Prepare the tax documents</span><span class="due over">due 9:00</span><span class="acts"><span>✓</span><span>↷</span><span>zz</span></span></div>
+    <div class="prow"><span class="cb"></span><span class="t">Call the bank about the wire transfer that bounced last week</span><span class="due">3:00 PM</span><span class="acts"><span>✓</span><span>↷</span><span>zz</span></span></div>
+    <div class="prow"><span class="cb"></span><span class="t">Deep work: feature X</span><span class="due">45m</span><span class="acts"><span>✓</span><span>↷</span><span>zz</span></span></div>
+    <div class="prow"><span class="cb"></span><span class="t">Book tickets</span><span class="due"></span><span class="acts"><span>✓</span><span>↷</span><span>zz</span></span></div>
+    <div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div>
+  </div>
+  <div class="caption" style="max-width:300px">Opens above a bottom-docked strip after 150 ms of stationary hover, or on Ctrl+Alt+Shift+Space. Rows are 28 px; actions appear on hover only (the window never takes focus). Click a title to make it current. Undo row lives for 5 s.</div>
+</div>
+
+<h2>Capture palette</h2>
+<div class="row">
+  <div class="palette">
+    <div class="in"><span>call bank tomorrow 3pm #finance /work 25m</span><span class="caret"></span></div>
+    <div class="tokens"><span class="tok"><span class="k">title</span> call bank</span><span class="tok"><span class="k">when</span> Tue 15 Sep · 3:00 PM</span><span class="tok"><span class="k">tag</span> #finance</span><span class="tok"><span class="k">list</span> Work</span><span class="tok"><span class="k">timer</span> 25 min</span></div>
+    <div class="hint"><span><kbd>Enter</kbd> add · <kbd>Shift+Enter</kbd> add and make current · <kbd>Esc</kbd> close</span><span>paste lines to add several</span></div>
+  </div>
+  <div class="palette">
+    <div class="title">Plan today</div>
+    <div class="hint" style="padding-top:0"><span>5 left from yesterday, 2 due today. Space toggles, Enter confirms.</span></div>
+    <div class="list">
+      <div class="pl sel"><span class="cb on"></span><span class="t">Write the baseline document</span><span class="why">rolled over</span></div>
+      <div class="pl"><span class="cb on"></span><span class="t">Prepare the tax documents</span><span class="why">due today</span></div>
+      <div class="pl"><span class="cb"></span><span class="t">Deep work: feature X</span><span class="why">rolled over</span></div>
+      <div class="pl"><span class="cb on"></span><span class="t">Call the bank about the wire</span><span class="why">due 3:00 PM</span></div>
+      <div class="pl"><span class="cb"></span><span class="t">Book tickets</span><span class="why">rolled over</span></div>
+    </div>
+    <div class="foot"><span>3 selected · about 1h 30m planned</span><span class="btn">Start the day</span></div>
+  </div>
+</div>
+
+<h2>Planner (main window) variants</h2>
+<p class="lede">A: three columns with a persistent detail pane. B: two panes; detail opens as a drawer over the list on Enter.</p>
+<div class="col">
+  <div class="planner">
+    <div class="tb"><span class="brand">TimeBound</span><div class="cap">Add a task… <kbd>Ctrl+Alt+Space</kbd></div><div class="wc"><span>Ctrl+K</span><span>—</span><span>✕</span></div></div>
+    <div class="body three">
+      <div class="rail">
+        <div class="i sel"><span>Today</span><span class="n">7</span></div><div class="i"><span>Upcoming</span><span class="n">12</span></div><div class="i"><span>Inbox</span><span class="n">4</span></div>
+        <div class="g">Lists</div><div class="i"><span>Work</span><span class="n">18</span></div><div class="i"><span>Home</span><span class="n">6</span></div><div class="i"><span>Side project</span><span class="n">9</span></div>
+        <div class="g">Tags</div><div class="i"><span>#finance</span></div><div class="i"><span>#deep</span></div>
+        <div class="g">Done</div><div class="i"><span>Logbook</span><span class="n">123</span></div>
+      </div>
+      <div class="main">
+        <div class="h"><span class="d">Today</span><span class="m">Monday 14 September · 3 of 7 done · 1h 20m focused</span><span class="plan btn ghost">Close the day</span></div>
+        <div class="sec">Current</div>
+        <div class="task cur sel"><span class="cb"></span><span class="t">Write the baseline document</span><span class="tag">#deep</span><span class="tm">24:59</span></div>
+        <div class="sec">Up next</div>
+        <div class="task"><span class="cb"></span><span class="t">Prepare the tax documents</span><span class="tag">#finance</span><span class="due over">due 9:00</span></div>
+        <div class="task"><span class="cb"></span><span class="t">Call the bank about the wire transfer</span><span class="tag">#finance</span><span class="due">3:00 PM</span></div>
+        <div class="task"><span class="cb sub"></span><span class="t">— confirm the reference number</span></div>
+        <div class="task"><span class="cb"></span><span class="t">Deep work: feature X</span><span class="tag">#deep</span><span class="tm">45m</span></div>
+        <div class="sec">Done</div>
+        <div class="task done"><span class="cb"></span><span class="t">Email update</span></div>
+        <div class="task done"><span class="cb"></span><span class="t">Market check</span></div>
+        <div class="task done"><span class="cb"></span><span class="t">Operations / M2M</span></div>
+      </div>
+      <div class="detail">
+        <div class="dt">Write the baseline document</div>
+        <div class="kv"><span>List</span><b>Work</b><span>Tags</span><b>#deep</b><span>Due</span><b>—</b><span>Repeats</span><b>Every weekday</b><span>Snooze</span><b>—</b></div>
+        <div class="notes">Screenshots first, then the audit table. Keep it under two pages.</div>
+        <div class="timer"><span class="big">24:59</span><span class="btn ghost">Pause</span><span class="btn ghost">Stop</span><span class="caption">of 25 min</span></div>
+        <div class="caption" style="margin-top:14px">Sub-tasks</div>
+        <div class="task" style="height:28px;font-size:13px"><span class="cb done" style="background:var(--ok);border-color:var(--ok)"></span><span class="t" style="text-decoration:line-through;color:var(--muted)">Capture every screen</span></div>
+        <div class="task" style="height:28px;font-size:13px"><span class="cb"></span><span class="t">Write the audit table</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">A · Three columns. Everything about the current task is visible without a click.</div>
+  <div class="planner" style="height:400px">
+    <div class="tb"><span class="brand">TimeBound</span><div class="cap">Add a task… <kbd>Ctrl+Alt+Space</kbd></div><div class="wc"><span>Ctrl+K</span><span>—</span><span>✕</span></div></div>
+    <div class="body">
+      <div class="rail">
+        <div class="i sel"><span>Today</span><span class="n">7</span></div><div class="i"><span>Upcoming</span><span class="n">12</span></div><div class="i"><span>Inbox</span><span class="n">4</span></div>
+        <div class="g">Lists</div><div class="i"><span>Work</span><span class="n">18</span></div><div class="i"><span>Home</span><span class="n">6</span></div>
+      </div>
+      <div class="main">
+        <div class="h"><span class="d">Today</span><span class="m">Monday 14 September</span></div>
+        <div class="task cur"><span class="cb"></span><span class="t">Write the baseline document</span><span class="tm">24:59</span></div>
+        <div class="task"><span class="cb"></span><span class="t">Prepare the tax documents</span><span class="due over">due 9:00</span></div>
+        <div class="task sel"><span class="cb"></span><span class="t">Call the bank about the wire transfer</span><span class="due">3:00 PM</span></div>
+        <div style="margin:4px 0 8px 26px;padding:10px 12px;background:var(--surface);border-radius:var(--r-2);box-shadow:inset 0 0 0 1px var(--line);font-size:13px">
+          <div class="kv" style="display:grid;grid-template-columns:70px 1fr;gap:4px 10px;color:var(--muted)"><span>List</span><b style="color:var(--ink)">Work</b><span>Due</span><b style="color:var(--ink)">Today 3:00 PM</b><span>Notes</span><b style="color:var(--ink);font-weight:400">Reference number is in the email thread.</b></div>
+        </div>
+        <div class="task"><span class="cb"></span><span class="t">Deep work: feature X</span><span class="tm">45m</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">B · Two panes; the selected task expands inline. Narrower windows, one fewer column to scan, but the current task's timer controls are a click away.</div>
+</div>
+
+<h2>Empty state</h2>
+<div class="planner" style="height:300px"><div class="tb"><span class="brand">TimeBound</span><div class="cap">Add a task… <kbd>Ctrl+Alt+Space</kbd></div></div><div class="body"><div class="rail"><div class="i sel"><span>Today</span></div><div class="i"><span>Inbox</span></div></div><div class="main"><div class="empty"><div class="e1">Nothing planned for today.</div><p>Press <kbd>Ctrl+Alt+Space</kbd> anywhere to add a task, or pick from Inbox.</p></div></div></div></div>
+
+<h2>Settings</h2>
+<div class="settings">
+  <div class="nav"><div class="sel">Strip</div><div>Hotkeys</div><div>Timer &amp; pomodoro</div><div>Theme</div><div>Data</div><div>Startup &amp; notifications</div><div>Score</div></div>
+  <div class="pane">
+    <h4>Strip</h4><div class="sub">The strip is the part of TimeBound that stays on screen.</div>
+    <div class="set"><div class="l">Dock to<small>Which edge of the screen the strip hugs.</small></div><div class="seg"><span>Top</span><span class="on">Bottom</span></div></div>
+    <div class="set"><div class="l">Width<small>Drag the strip's edge, or set it here.</small></div><div class="range"></div></div>
+    <div class="set"><div class="l">Auto-hide<small>Slide away after 3 s, peek when you touch the edge. Off while a timer runs.</small></div><div class="tog"></div></div>
+    <div class="set"><div class="l">Click-through<small>Clicks pass through to whatever is behind. Hover the dot to turn it off.</small></div><div class="tog"></div></div>
+    <div class="set"><div class="l">Backplate opacity<small>Text stays solid.</small></div><div class="range"></div></div>
+    <div class="set"><div class="l">Hide from screen sharing<small>Teams, Zoom and OBS won't see the strip.</small></div><div class="tog on"></div></div>
+    <div class="set"><div class="l">Reserve screen space<small>Maximised windows stop at the strip instead of going under it.</small></div><div class="tog"></div></div>
+    <div class="set"><div class="l">Hotkeys</div><div class="kbdrow"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd></div></div>
+    <div class="themes"><div class="thm sel"><div class="bar"><i style="background:oklch(.97 .012 85)"></i><i style="background:oklch(.24 .02 60)"></i><i style="background:oklch(.46 .15 25)"></i></div>Ledger</div><div class="thm"><div class="bar"><i style="background:oklch(.86 .05 75)"></i><i style="background:oklch(.24 .03 55)"></i><i style="background:oklch(.47 .165 45)"></i></div>Kraft</div><div class="thm"><div class="bar"><i style="background:oklch(.15 .012 150)"></i><i style="background:oklch(.88 .12 145)"></i><i style="background:oklch(.84 .15 90)"></i></div>Phosphor</div><div class="thm"><div class="bar"><i style="background:oklch(.265 .02 175)"></i><i style="background:oklch(.955 .008 90)"></i><i style="background:oklch(.87 .13 95)"></i></div>Slate</div></div>
+  </div>
+</div>
+
+<h2>Onboarding (first run, in the palette window)</h2>
+<div class="onb">
+  <div class="card"><div class="n">1 / 3</div><div class="h">Add your first task</div><p>Type it like you'd say it: <em>"call bank tomorrow 3pm #finance"</em>. It lands on the strip the moment you press Enter.</p><div class="row" style="gap:8px"><span class="btn">Next</span><span class="btn ghost">Skip</span></div></div>
+  <div class="card"><div class="n">2 / 3</div><div class="h">Pick an edge</div><p>The strip hugs the top or bottom of your screen and never covers the taskbar. Watch it move as you choose.</p><div class="seg"><span>Top</span><span class="on">Bottom</span></div></div>
+  <div class="card"><div class="n">3 / 3</div><div class="h">Five keys to remember</div><p>Ctrl+Alt+Space add · Ctrl+Alt+Enter done · Ctrl+Alt+Shift+Enter timer · Ctrl+Alt+Shift+Space show or hide · Ctrl+Alt+Backspace undo</p><span class="btn">Start</span></div>
+</div>
+
+<script>
+  const root = document.documentElement;
+  document.querySelectorAll('#themeSwitch button').forEach(b => b.addEventListener('click', () => {
+    root.setAttribute('data-' + b.dataset.set, b.dataset.v);
+    document.querySelectorAll(`#themeSwitch button[data-set="${b.dataset.set}"]`).forEach(x => x.setAttribute('aria-pressed', x === b));
+  }));
+  const params = new URLSearchParams(location.search);
+  if (params.get('theme')) root.setAttribute('data-theme', params.get('theme'));
+  if (params.get('mode')) root.setAttribute('data-mode', params.get('mode'));
+  const all = document.getElementById('allThemes');
+  for (const t of ['ledger','kraft','phosphor','slate']) for (const m of ['light','dark']) {
+    const d = document.createElement('div'); d.className = 'stage'; d.setAttribute('data-theme', t); d.setAttribute('data-mode', m);
+    d.innerHTML = `<span class="label">${t} · ${m}</span><div class="fakewin"></div><div class="taskbar"></div><div class="strip"><div class="handle"><div class="dot"></div></div><div class="title">Write the baseline document for the focus strip</div><div class="chip">24:59</div><div class="progress" style="width:43%"></div></div>`;
+    all.appendChild(d);
+  }
+</script>
+</body>
+</html>

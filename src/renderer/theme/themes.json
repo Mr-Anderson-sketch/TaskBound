@@ -1,0 +1,26 @@
+{
+  "$schema": "themes.schema.json",
+  "note": "OKLCH triples [L 0..1, C, H]. Roles: bg (window), surface (cards/rows), line (hairlines), ink (text), muted (secondary text), accent (brand/action), accentInk (text on accent), ok/warn/danger (status), stripBg/stripInk/stripMuted (the focus strip). Verified by scripts/check-contrast.mjs.",
+  "themes": {
+    "ledger": {
+      "label": "Ledger", "inspiration": "Cream ledger paper, india ink, oxblood stamp",
+      "light": { "bg": [0.970, 0.012, 85], "surface": [0.993, 0.006, 85], "line": [0.860, 0.015, 80], "ink": [0.240, 0.020, 60], "muted": [0.480, 0.020, 60], "accent": [0.460, 0.150, 25], "accentInk": [0.985, 0.010, 85], "ok": [0.520, 0.120, 150], "warn": [0.600, 0.140, 70], "danger": [0.500, 0.180, 25], "stripBg": [0.985, 0.010, 85], "stripInk": [0.240, 0.020, 60], "stripMuted": [0.480, 0.020, 60] },
+      "dark":  { "bg": [0.205, 0.012, 70], "surface": [0.245, 0.012, 70], "line": [0.330, 0.014, 70], "ink": [0.930, 0.012, 85], "muted": [0.700, 0.014, 80], "accent": [0.760, 0.130, 30], "accentInk": [0.180, 0.020, 30], "ok": [0.760, 0.130, 150], "warn": [0.800, 0.140, 80], "danger": [0.740, 0.160, 25], "stripBg": [0.235, 0.012, 70], "stripInk": [0.930, 0.012, 85], "stripMuted": [0.700, 0.014, 80] }
+    },
+    "kraft": {
+      "label": "Kraft", "inspiration": "Field Notes kraft cover, safety-orange ink",
+      "light": { "bg": [0.860, 0.050, 75], "surface": [0.905, 0.045, 78], "line": [0.740, 0.055, 75], "ink": [0.240, 0.030, 55], "muted": [0.440, 0.040, 55], "accent": [0.470, 0.165, 45], "accentInk": [0.985, 0.020, 80], "ok": [0.460, 0.110, 150], "warn": [0.520, 0.140, 70], "danger": [0.470, 0.180, 25], "stripBg": [0.905, 0.045, 78], "stripInk": [0.240, 0.030, 55], "stripMuted": [0.440, 0.040, 55] },
+      "dark":  { "bg": [0.230, 0.028, 65], "surface": [0.270, 0.028, 65], "line": [0.360, 0.030, 65], "ink": [0.935, 0.020, 80], "muted": [0.720, 0.030, 75], "accent": [0.780, 0.160, 55], "accentInk": [0.200, 0.030, 55], "ok": [0.780, 0.120, 150], "warn": [0.820, 0.130, 85], "danger": [0.750, 0.150, 25], "stripBg": [0.260, 0.028, 65], "stripInk": [0.935, 0.020, 80], "stripMuted": [0.720, 0.030, 75] }
+    },
+    "phosphor": {
+      "label": "Phosphor", "inspiration": "Green-phosphor terminal; platinum 1980s plastic in light mode",
+      "light": { "bg": [0.905, 0.010, 90], "surface": [0.950, 0.008, 90], "line": [0.790, 0.012, 90], "ink": [0.260, 0.040, 150], "muted": [0.460, 0.045, 150], "accent": [0.440, 0.120, 150], "accentInk": [0.980, 0.010, 90], "ok": [0.470, 0.120, 150], "warn": [0.560, 0.140, 70], "danger": [0.480, 0.180, 25], "stripBg": [0.950, 0.008, 90], "stripInk": [0.260, 0.040, 150], "stripMuted": [0.460, 0.045, 150] },
+      "dark":  { "bg": [0.150, 0.012, 150], "surface": [0.190, 0.014, 150], "line": [0.300, 0.020, 150], "ink": [0.880, 0.120, 145], "muted": [0.680, 0.090, 145], "accent": [0.840, 0.150, 90], "accentInk": [0.170, 0.020, 90], "ok": [0.820, 0.150, 145], "warn": [0.840, 0.150, 90], "danger": [0.760, 0.160, 25], "stripBg": [0.170, 0.012, 150], "stripInk": [0.880, 0.120, 145], "stripMuted": [0.680, 0.090, 145] }
+    },
+    "slate": {
+      "label": "Slate", "inspiration": "Chalk on a green-grey slate board; plaster wall in light mode",
+      "light": { "bg": [0.945, 0.008, 170], "surface": [0.985, 0.004, 170], "line": [0.840, 0.010, 170], "ink": [0.250, 0.018, 175], "muted": [0.470, 0.020, 175], "accent": [0.470, 0.120, 240], "accentInk": [0.985, 0.005, 240], "ok": [0.500, 0.110, 155], "warn": [0.580, 0.140, 70], "danger": [0.490, 0.180, 25], "stripBg": [0.985, 0.004, 170], "stripInk": [0.250, 0.018, 175], "stripMuted": [0.470, 0.020, 175] },
+      "dark":  { "bg": [0.265, 0.020, 175], "surface": [0.305, 0.020, 175], "line": [0.400, 0.022, 175], "ink": [0.955, 0.008, 90], "muted": [0.740, 0.015, 120], "accent": [0.870, 0.130, 95], "accentInk": [0.220, 0.030, 95], "ok": [0.800, 0.120, 150], "warn": [0.850, 0.130, 85], "danger": [0.760, 0.150, 25], "stripBg": [0.290, 0.020, 175], "stripInk": [0.955, 0.008, 90], "stripMuted": [0.740, 0.015, 120] }
+    }
+  }
+}
