@@ -1,11 +1,12 @@
 // Verifies WCAG contrast for every theme in src/renderer/theme/themes.json.
-// Usage: node scripts/check-contrast.mjs   (exit 1 on any failure)
+// CLI:  node scripts/check-contrast.mjs   (exit 1 on any failure)
+// Also imported by tests/theme/contrast.test.ts.
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const themes = JSON.parse(readFileSync(path.join(here, '../src/renderer/theme/themes.json'), 'utf8'));
+export const loadThemes = () => JSON.parse(readFileSync(path.join(here, '../src/renderer/theme/themes.json'), 'utf8'));
 
 // oklch(L C H) -> sRGB [0..1]
 export function oklchToRgb([L, C, H]) {
@@ -25,21 +26,33 @@ export const toHex = (rgb) => '#' + rgb.map((v) => Math.round(v * 255).toString(
 const lum = (rgb) => { const f = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4); const [r, g, b] = rgb.map(f); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
 export const contrast = (a, b) => { const la = lum(oklchToRgb(a)), lb = lum(oklchToRgb(b)); const [hi, lo] = la > lb ? [la, lb] : [lb, la]; return (hi + 0.05) / (lo + 0.05); };
 
-// pairs: [foreground, background, minimum]
-const PAIRS = [
+// pairs: [foreground, background, minimum ratio]
+export const PAIRS = [
   ['ink', 'bg', 7], ['ink', 'surface', 7], ['muted', 'bg', 4.5], ['muted', 'surface', 4.5],
   ['accent', 'bg', 4.5], ['accent', 'surface', 4.5], ['accentInk', 'accent', 4.5],
   ['ok', 'bg', 3], ['warn', 'bg', 3], ['danger', 'bg', 4.5],
   ['stripInk', 'stripBg', 7], ['stripMuted', 'stripBg', 4.5], ['accent', 'stripBg', 3],
 ];
-let failures = 0;
-for (const [name, theme] of Object.entries(themes.themes)) {
-  for (const mode of ['light', 'dark']) {
-    const t = theme[mode];
-    const rows = PAIRS.map(([fg, bg, min]) => { const c = contrast(t[fg], t[bg]); const ok = c >= min; if (!ok) failures++; return `${ok ? 'ok  ' : 'FAIL'} ${fg.padEnd(10)} on ${bg.padEnd(8)} ${c.toFixed(2).padStart(6)} (min ${min})`; });
-    console.log(`\n${name} / ${mode}`);
-    console.log(rows.join('\n'));
+
+/** Prints a report and returns the number of failing pairs. */
+export function checkAll(themes = loadThemes(), log = console.log) {
+  let failures = 0;
+  for (const [name, theme] of Object.entries(themes.themes)) {
+    for (const mode of ['light', 'dark']) {
+      const t = theme[mode];
+      const rows = PAIRS.map(([fg, bg, min]) => {
+        const c = contrast(t[fg], t[bg]);
+        const ok = c >= min;
+        if (!ok) failures++;
+        return `${ok ? 'ok  ' : 'FAIL'} ${fg.padEnd(10)} on ${bg.padEnd(8)} ${c.toFixed(2).padStart(6)} (min ${min})`;
+      });
+      log(`\n${name} / ${mode}\n${rows.join('\n')}`);
+    }
   }
+  log(failures ? `\n${failures} failure(s)` : '\nAll contrast checks pass.');
+  return failures;
 }
-console.log(failures ? `\n${failures} failure(s)` : '\nAll contrast checks pass.');
-process.exit(failures ? 1 : 0);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(checkAll() ? 1 : 0);
+}

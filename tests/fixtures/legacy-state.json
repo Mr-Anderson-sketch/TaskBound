@@ -1,0 +1,505 @@
+{
+  "score": 12,
+  "tasks": [
+    {
+      "id": "20221e19-1aa2-4037-92f5-be325cc283e9",
+      "title": "Draft project outline",
+      "createdAt": "2025-11-17T05:38:54.267Z",
+      "updatedAt": "2025-11-20T06:22:59.185Z",
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1198,
+          "at": "2025-11-20T06:22:59.185Z"
+        }
+      ],
+      "timeAssignedSeconds": 1200,
+      "remainingSeconds": 0,
+      "completedAt": "2025-11-20T06:22:59.185Z"
+    },
+    {
+      "id": "65a4364a-7819-4c63-9eb4-3ab30047c94e",
+      "title": "Call the bank about statements",
+      "createdAt": "2025-11-11T04:08:39.099Z",
+      "updatedAt": "2025-11-11T04:44:01.552Z",
+      "timeAssignedSeconds": 1620,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1320,
+          "at": "2025-11-11T04:30:41.556Z"
+        },
+        {
+          "type": "add_time",
+          "amountSeconds": 300,
+          "at": "2025-11-11T04:30:50.547Z"
+        },
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1620,
+          "at": "2025-11-11T04:44:01.552Z"
+        }
+      ],
+      "completedAt": "2025-11-11T04:44:01.552Z"
+    },
+    {
+      "id": "7241f4ab-e017-400e-8c7c-1a645c3fa4d8",
+      "title": "Research vendor options",
+      "createdAt": "2025-11-10T06:44:09.571Z",
+      "updatedAt": "2025-11-11T04:08:41.677Z",
+      "timeAssignedSeconds": 900,
+      "remainingSeconds": 0,
+      "status": "completed",
+      "history": [
+        {
+          "type": "manual_complete",
+          "amountSeconds": 833,
+          "at": "2025-11-11T04:08:41.677Z"
+        }
+      ],
+      "completedAt": "2025-11-11T04:08:41.677Z"
+    },
+    {
+      "id": "7f6d49f2-0e25-4744-bd7d-5720d46112ce",
+      "title": "Finish coding the side project",
+      "createdAt": "2025-11-07T15:31:34.877Z",
+      "updatedAt": "2025-11-07T15:32:22.209Z",
+      "timeAssignedSeconds": 1800,
+      "remainingSeconds": 0,
+      "status": "completed",
+      "history": [
+        {
+          "type": "manual_complete",
+          "amountSeconds": 1762,
+          "at": "2025-11-07T15:32:22.209Z"
+        }
+      ],
+      "completedAt": "2025-11-07T15:32:22.209Z"
+    },
+    {
+      "id": "daa97658-7a66-4036-b78f-0e9ccec9b6a9",
+      "title": "Review the app backlog",
+      "createdAt": "2025-11-07T08:55:01.868Z",
+      "updatedAt": "2025-11-07T15:08:25.181Z",
+      "timeAssignedSeconds": 1500,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-11-07T09:05:01.881Z"
+        },
+        {
+          "type": "add_time",
+          "amountSeconds": 300,
+          "at": "2025-11-07T14:53:38.935Z"
+        },
+        {
+          "type": "manual_complete",
+          "amountSeconds": 894,
+          "at": "2025-11-07T14:53:52.479Z"
+        },
+        {
+          "type": "add_time",
+          "amountSeconds": 300,
+          "at": "2025-11-07T14:54:21.964Z"
+        },
+        {
+          "type": "auto_complete",
+          "amountSeconds": 295,
+          "at": "2025-11-07T15:08:25.181Z"
+        }
+      ],
+      "completedAt": "2025-11-07T15:08:25.181Z"
+    },
+    {
+      "id": "c79ba6a1-46f6-4cef-8b0d-d123c0ac684b",
+      "title": "Update weekly status report",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T06:39:04.998Z",
+      "timeAssignedSeconds": 1800,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1800,
+          "at": "2025-12-06T06:39:04.998Z"
+        }
+      ],
+      "completedAt": "2025-12-06T06:39:04.998Z"
+    },
+    {
+      "id": "5e570206-b5fd-4a4b-8a08-7d18699dc2e5",
+      "title": "Follow up on shipment",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T06:44:05.006Z",
+      "timeAssignedSeconds": 300,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 300,
+          "at": "2025-12-06T06:44:05.006Z"
+        }
+      ],
+      "completedAt": "2025-12-06T06:44:05.006Z"
+    },
+    {
+      "id": "fe606d7a-c032-4260-9a55-0814385b14e8",
+      "title": "Pay monthly invoices",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T07:14:04.998Z",
+      "timeAssignedSeconds": 1800,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1800,
+          "at": "2025-12-06T07:14:04.998Z"
+        }
+      ],
+      "completedAt": "2025-12-06T07:14:04.998Z"
+    },
+    {
+      "id": "0d99966a-da9e-4266-beff-9d69769f48bd",
+      "title": "Finish online course module",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T08:14:05.007Z",
+      "timeAssignedSeconds": 3600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 3600,
+          "at": "2025-12-06T08:14:05.007Z"
+        }
+      ],
+      "completedAt": "2025-12-06T08:14:05.007Z"
+    },
+    {
+      "id": "b6e9ae39-ba3b-4c36-831e-33691b7efe30",
+      "title": "Follow up on shipment",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T08:19:05.000Z",
+      "timeAssignedSeconds": 300,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 300,
+          "at": "2025-12-06T08:19:05.000Z"
+        }
+      ],
+      "completedAt": "2025-12-06T08:19:05.000Z"
+    },
+    {
+      "id": "1d989e55-3a43-4949-97c8-f68d59aec104",
+      "title": "Build budget spreadsheet",
+      "createdAt": "2025-12-06T08:57:38.975Z",
+      "updatedAt": "2025-12-06T09:27:40.999Z",
+      "timeAssignedSeconds": 1800,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "add_time",
+          "amountSeconds": 600,
+          "at": "2025-12-06T08:57:52.811Z"
+        },
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1800,
+          "at": "2025-12-06T09:27:40.999Z"
+        }
+      ],
+      "completedAt": "2025-12-06T09:27:40.999Z"
+    },
+    {
+      "id": "a5a3a93f-59ed-4a27-9e2c-8fe604609d56",
+      "title": "Kickoff meeting prep",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-06T10:14:01.009Z",
+      "timeAssignedSeconds": 3600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 3600,
+          "at": "2025-12-06T10:14:01.009Z"
+        }
+      ],
+      "isPaused": false,
+      "completedAt": "2025-12-06T10:14:01.009Z"
+    },
+    {
+      "id": "02209a82-84c2-478c-a52b-091c918f5be6",
+      "title": "Schedule team sync",
+      "createdAt": "2025-12-06T04:54:02.815Z",
+      "updatedAt": "2025-12-10T05:54:15.666Z",
+      "timeAssignedSeconds": 3600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 3599,
+          "at": "2025-12-10T05:54:15.666Z"
+        }
+      ],
+      "completedAt": "2025-12-10T05:54:15.666Z"
+    },
+    {
+      "id": "9159c660-9f51-4ad1-8eec-1c1cbb50f5b4",
+      "title": "Wrap up meeting notes",
+      "createdAt": "2025-12-10T05:55:11.923Z",
+      "updatedAt": "2025-12-10T06:46:20.447Z",
+      "timeAssignedSeconds": 1800,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1800,
+          "at": "2025-12-10T06:46:20.447Z"
+        }
+      ],
+      "completedAt": "2025-12-10T06:46:20.447Z"
+    },
+    {
+      "id": "b737f4bb-3ce4-4aa0-9412-bf487c539a5a",
+      "title": "Fill in timesheet",
+      "createdAt": "2025-12-10T05:55:11.923Z",
+      "updatedAt": "2025-12-10T06:56:20.442Z",
+      "timeAssignedSeconds": 600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-12-10T06:56:20.442Z"
+        }
+      ],
+      "completedAt": "2025-12-10T06:56:20.442Z"
+    },
+    {
+      "id": "04c21695-e9ea-42ae-999f-17f22fe22f3d",
+      "title": "Quick break; 5 mins",
+      "createdAt": "2025-12-10T10:15:10.901Z",
+      "updatedAt": "2025-12-15T10:08:21.385Z",
+      "status": "completed",
+      "history": [
+        {
+          "type": "manual_complete",
+          "amountSeconds": 0,
+          "at": "2025-12-15T10:08:21.385Z"
+        }
+      ],
+      "remainingSeconds": 0,
+      "completedAt": "2025-12-15T10:08:21.385Z"
+    },
+    {
+      "id": "6d0fcf87-c783-4789-8007-57f9e8f51da6",
+      "title": "Plan weekend trip",
+      "createdAt": "2025-12-15T10:11:13.206Z",
+      "updatedAt": "2025-12-16T05:17:50.062Z",
+      "timeAssignedSeconds": 900,
+      "remainingSeconds": 0,
+      "status": "completed",
+      "history": [
+        {
+          "type": "manual_complete",
+          "amountSeconds": 782,
+          "at": "2025-12-16T05:17:50.062Z"
+        }
+      ],
+      "completedAt": "2025-12-16T05:17:50.062Z"
+    },
+    {
+      "id": "b4041ccb-ac42-4ac6-8b0e-679458e61e43",
+      "title": "Send status report",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T05:37:50.361Z",
+      "timeAssignedSeconds": 1200,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1200,
+          "at": "2025-12-16T05:37:50.361Z"
+        }
+      ],
+      "completedAt": "2025-12-16T05:37:50.361Z"
+    },
+    {
+      "id": "4af259a3-ecca-4b9a-98d3-cebf86a07647",
+      "title": "Write blog post draft",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T05:57:49.689Z",
+      "timeAssignedSeconds": 1200,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 1200,
+          "at": "2025-12-16T05:57:49.689Z"
+        }
+      ],
+      "completedAt": "2025-12-16T05:57:49.689Z"
+    },
+    {
+      "id": "89de21ef-c0e3-4c41-8e18-29fb2b311bd8",
+      "title": "Read industry news",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T06:07:50.099Z",
+      "timeAssignedSeconds": 600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-12-16T06:07:50.099Z"
+        }
+      ],
+      "completedAt": "2025-12-16T06:07:50.099Z"
+    },
+    {
+      "id": "dfccbfe2-6a1c-4905-87b2-50982b79270e",
+      "title": "Compare tool options",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T09:01:35.727Z",
+      "timeAssignedSeconds": 3600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 3599,
+          "at": "2025-12-16T09:01:35.727Z"
+        }
+      ],
+      "completedAt": "2025-12-16T09:01:35.727Z"
+    },
+    {
+      "id": "7e372faf-59ff-469c-9d01-9479737bf3aa",
+      "title": "Book train tickets",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T09:01:35.727Z",
+      "timeAssignedSeconds": 600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-12-16T09:01:35.727Z"
+        }
+      ],
+      "completedAt": "2025-12-16T09:01:35.727Z"
+    },
+    {
+      "id": "130ab4ac-a453-4c13-835d-966ef8f7ad09",
+      "title": "News check",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T09:01:35.727Z",
+      "timeAssignedSeconds": 600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-12-16T09:01:35.727Z"
+        }
+      ],
+      "completedAt": "2025-12-16T09:01:35.727Z"
+    },
+    {
+      "id": "9f89a693-c021-460a-be46-e3c90e2883d7",
+      "title": "Inbox zero",
+      "createdAt": "2025-12-16T05:17:43.737Z",
+      "updatedAt": "2025-12-16T09:01:35.727Z",
+      "timeAssignedSeconds": 3600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 3600,
+          "at": "2025-12-16T09:01:35.727Z"
+        }
+      ],
+      "completedAt": "2025-12-16T09:01:35.727Z"
+    },
+    {
+      "id": "e52f179a-6c6f-4642-8ee3-86d1313a2e47",
+      "title": "Reply to emails",
+      "createdAt": "2025-12-16T09:03:55.704Z",
+      "updatedAt": "2025-12-16T09:13:55.042Z",
+      "timeAssignedSeconds": 600,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 600,
+          "at": "2025-12-16T09:13:55.042Z"
+        }
+      ],
+      "completedAt": "2025-12-16T09:13:55.042Z"
+    },
+    {
+      "id": "c02e2173-177d-4569-a8db-cbe6cd43f264",
+      "title": "Operations review",
+      "createdAt": "2025-12-16T09:26:02.279Z",
+      "updatedAt": "2025-12-16T10:01:02.045Z",
+      "timeAssignedSeconds": 2100,
+      "remainingSeconds": 0,
+      "status": "struck",
+      "history": [
+        {
+          "type": "auto_complete",
+          "amountSeconds": 2100,
+          "at": "2025-12-16T10:01:02.045Z"
+        }
+      ],
+      "isPaused": false,
+      "completedAt": "2025-12-16T10:01:02.045Z"
+    },
+    {
+      "id": "83970329-d45d-42b2-b841-493d318877cd",
+      "title": "Write the baseline doc",
+      "createdAt": "2026-09-14T07:47:49.963Z",
+      "updatedAt": "2026-09-14T07:47:49.963Z",
+      "timeAssignedSeconds": 1500,
+      "remainingSeconds": 1500,
+      "status": "in_progress",
+      "history": []
+    }
+  ],
+  "stats": {
+    "totalCompleted": 123,
+    "todayCompleted": 10,
+    "lastCompletionDate": "2025-12-16"
+  },
+  "meta": {
+    "lastSavedAt": "2026-09-14T07:47:50.170Z",
+    "appVersion": "1.0.0"
+  },
+  "preferences": {
+    "alwaysOnTop": false
+  }
+}

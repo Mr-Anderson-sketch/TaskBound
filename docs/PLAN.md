@@ -101,23 +101,23 @@ scripts/
 
 ## Slice 0 — Setup (executed by the lead; already in progress)
 
-Deliverable: upgraded toolchain, test harness, skeleton, agent definition. The old app still builds and launches. See `CHANGELOG.md` "Unreleased / Setup".
+Deliverable: upgraded toolchain, test harness, skeleton, agent definition. The old app still builds and launches. **Done 2026-09-14** (fs-extra/uuid kept until Slice 1; see DECISIONS.md). See `CHANGELOG.md` "Unreleased / Setup".
 
 ### Task 0.1: Dependencies and scripts
 
 **Files:** Modify `package.json`; Create `vitest.config.ts`, `playwright.config.ts`, `e2e/launch.ts`, `.claude/agents/implementer.md`, `CHANGELOG.md`.
 
-- [ ] Upgrade `electron` to the current major and `electron-builder` to a matching version; add `zod`, `immer`, `date-fns`, `@tanstack/react-virtual`, `@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono`, `@fontsource/instrument-serif`; dev: `vitest`, `fast-check`, `@playwright/test`, `playwright`; optional: `koffi`. Remove `fs-extra`, `uuid`, `@types/fs-extra`, `@types/uuid`. Move `sharp` to `optionalDependencies` (icon script only).
-- [ ] Scripts: `test` (vitest, two TZ runs), `e2e`, `e2e:smoke`, `theme:build`, `theme:check`, `package`, `package:mac`, `typecheck`.
-- [ ] `npm run build` and `npm run e2e:smoke` pass on the old app.
-- [ ] Commit `chore: upgrade toolchain, add test harness`.
+- [x] Upgrade `electron` to the current major and `electron-builder` to a matching version; add `zod`, `immer`, `date-fns`, `@tanstack/react-virtual`, `@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono`, `@fontsource/instrument-serif`; dev: `vitest`, `fast-check`, `@playwright/test`, `playwright`; optional: `koffi`. Remove `fs-extra`, `uuid`, `@types/fs-extra`, `@types/uuid`. Move `sharp` to `optionalDependencies` (icon script only).
+- [x] Scripts: `test` (vitest, two TZ runs), `e2e`, `e2e:smoke`, `theme:build`, `theme:check`, `package`, `package:mac`, `typecheck`.
+- [x] `npm run build` and `npm run e2e:smoke` pass on the old app.
+- [x] Commit `chore: upgrade toolchain, add test harness`.
 
 ### Task 0.2: Skeleton and configs
 
-- [ ] Create empty module files per the file structure with a one-line header comment and `export {}` so `tsc` is happy; do not wire them.
-- [ ] Add `src/renderer/index.html` CSP meta (dev variant allows `ws://localhost:5173`).
-- [ ] Retire `pwa/` (`git rm -r pwa PWA_VS_ELECTRON.md`).
-- [ ] Commit `chore: scaffold focus-first module layout`.
+- [x] Create empty module files per the file structure with a one-line header comment and `export {}` so `tsc` is happy; do not wire them.
+- [x] Add `src/renderer/index.html` CSP meta (dev variant allows `ws://localhost:5173`).
+- [x] Retire `pwa/` (`git rm -r pwa PWA_VS_ELECTRON.md`).
+- [x] Commit `chore: scaffold focus-first module layout`.
 
 ---
 

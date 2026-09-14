@@ -4,12 +4,17 @@
     "outDir": "dist/preload",
     "rootDir": "src",
     "module": "NodeNext",
-    "lib": ["ES2021"],
-    "types": ["node"],
+    "lib": [
+      "ES2021"
+    ],
+    "types": [
+      "node"
+    ],
     "moduleResolution": "nodenext"
   },
   "include": [
     "src/main/preload.ts",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "src/core/**/*"
   ]
 }
