@@ -92,12 +92,18 @@ export function panelBounds(strip: Rect, edge: Edge, panelHeight: number): Rect 
 }
 
 /** The 4 px auto-hide sliver, spanning the strip's x/width but flush to the
- * *display's physical edge* (`displayBounds`, i.e. `DisplayLike.bounds`) rather than
- * the strip's own (possibly taskbar-auto-hide-reserved) y — otherwise slamming the
- * cursor into the true screen edge would land 2 px short of the sliver's hit area. */
-export function sliverBounds(strip: Rect, edge: Edge, displayBounds: Rect): Rect {
+ * *work area's* edge on the docked side (`workArea`, i.e. `DisplayLike.workArea`) —
+ * NOT the display's physical bounds. A normal (non-auto-hide) taskbar occupies the
+ * gap between the work area and the physical edge, so a sliver placed at the
+ * physical edge would land inside the taskbar and pointing at taskbar buttons would
+ * re-show the strip. When the taskbar itself auto-hides, `workArea` already reaches
+ * the physical edge (see `isTaskbarAutoHide`), so this is flush to the true screen
+ * edge in that case too — no separate handling needed. No 2 px reserve here (unlike
+ * `dockBounds`'s `taskbarAutoHide` nudge): the sliver is meant to be right at the
+ * work area boundary either way. */
+export function sliverBounds(strip: Rect, edge: Edge, workArea: Rect): Rect {
   const height = 4;
-  const y = edge === 'top' ? displayBounds.y : displayBounds.y + displayBounds.height - height;
+  const y = edge === 'top' ? workArea.y : workArea.y + workArea.height - height;
   return roundRect({ x: strip.x, y, width: strip.width, height });
 }
 

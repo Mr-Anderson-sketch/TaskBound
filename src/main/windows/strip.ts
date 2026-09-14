@@ -144,8 +144,12 @@ export class StripWindow {
       if (this.settings.enabled) this.showInactive();
     });
 
+    // Guard against a stale `closed` event: if this window has already been
+    // superseded (e.g. `destroy()` ran and a later `create()` made a new one before
+    // this listener's queued callback fires), `this.win` no longer points at `win`
+    // and this must not tear down the newer window's state.
     win.on('closed', () => {
-      this.cleanup();
+      if (this.win === win) this.cleanup();
     });
 
     screen.on('display-added', this.onDisplaysChanged);
@@ -155,6 +159,18 @@ export class StripWindow {
     this.unsubscribeStore = this.deps.store.subscribe((snapshot) => {
       this.applySettings(snapshot.data.settings.strip);
     });
+
+    // Store.subscribe never replays, and click-through/auto-hide are otherwise only
+    // ever applied from `applySettings`/`expand` — so a strip that starts already
+    // configured with `clickThrough`/`autoHide` (loaded from disk) would show with
+    // neither in effect (swallowing no clicks; never hiding) until the next
+    // unrelated dispatch. Apply the just-loaded initial settings once, now that the
+    // window exists.
+    if (this.settings.clickThrough) {
+      this.clickThroughIgnoring = true;
+      win.setIgnoreMouseEvents(true, { forward: true });
+    }
+    this.syncPollTimer();
   }
 
   destroy(): void {
@@ -320,6 +336,11 @@ export class StripWindow {
 
   expand(open: boolean): void {
     if (!this.win || this.win.isDestroyed() || this.hidden) return;
+    // A drag interval is driving `dockedRect`/`win`'s bounds at 60 Hz; expanding
+    // mid-drag would fight it every tick (and `beginDrag()` already collapses first,
+    // so a request to expand while dragging is stale by construction). Collapsing
+    // (`open === false`) is still allowed — `beginDrag()` itself relies on it.
+    if (open && this.dragTimer) return;
     if (this.expanded === open) return;
     this.expanded = open;
     this.outsideSince = undefined;
@@ -377,11 +398,14 @@ export class StripWindow {
     return screen.getPrimaryDisplay();
   }
 
-  /** The display whose `bounds` the sliver/handle math should use "right now": the
-   * last one we actually docked/dragged onto, falling back to a fresh lookup only
-   * if we somehow don't have one yet (shouldn't happen once `create()` has run). */
-  private currentDisplayBounds(): Rect {
-    return (this.lastDisplay ?? this.currentDisplay()).bounds;
+  /** The display whose `workArea` the sliver math should use "right now": the last
+   * one we actually docked/dragged onto, falling back to a fresh lookup only if we
+   * somehow don't have one yet (shouldn't happen once `create()` has run). The
+   * sliver sits flush to the WORK AREA edge (see `sliverBounds`'s doc comment), not
+   * the display's physical bounds — a normal taskbar occupies the gap between the
+   * two, and a sliver at the physical edge would land inside it. */
+  private currentWorkArea(): Rect {
+    return (this.lastDisplay ?? this.currentDisplay()).workArea;
   }
 
   private redock(): void {
@@ -401,7 +425,7 @@ export class StripWindow {
   private applyVisualBounds(): void {
     if (!this.win || this.win.isDestroyed()) return;
     const rect = this.hidden
-      ? sliverBounds(this.dockedRect, this.settings.edge, this.currentDisplayBounds())
+      ? sliverBounds(this.dockedRect, this.settings.edge, this.currentWorkArea())
       : this.expanded
         ? panelBounds(this.dockedRect, this.settings.edge, this.panelHeight)
         : this.dockedRect;
@@ -541,7 +565,7 @@ export class StripWindow {
       return;
     }
 
-    const sliver = sliverBounds(this.dockedRect, this.settings.edge, this.currentDisplayBounds());
+    const sliver = sliverBounds(this.dockedRect, this.settings.edge, this.currentWorkArea());
     if (pointIn(sliver, cursor)) {
       if (this.sliverHoverSince === undefined) this.sliverHoverSince = now;
       if (now - this.sliverHoverSince >= AUTO_HIDE_RESTORE_DELAY_MS) this.doAutoRestore();

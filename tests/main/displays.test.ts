@@ -145,34 +145,33 @@ describe('panelBounds', () => {
 });
 
 describe('sliverBounds', () => {
-  it('bottom sliver is a 4 px strip flush to the display bottom when the strip itself is already flush', () => {
-    const strip = { x: 100, y: 688, width: 420, height: 32 };
-    const displayBounds = { x: 0, y: 0, width: 1366, height: 720 };
-    const rect = sliverBounds(strip, 'bottom', displayBounds);
-    expect(rect).toEqual({ x: 100, y: 720 - 4, width: 420, height: 4 });
+  it('bottom sliver on a 1366x768 display with a 48 px taskbar (workArea height 720) is flush to the work area, y = 716', () => {
+    const strip = { x: 100, y: 720 - 32, width: 420, height: 32 };
+    const workArea = { x: 0, y: 0, width: 1366, height: 720 };
+    const rect = sliverBounds(strip, 'bottom', workArea);
+    expect(rect).toEqual({ x: 100, y: 716, width: 420, height: 4 });
   });
 
-  it('top sliver is a 4 px strip flush to the display top when the strip itself is already flush', () => {
-    const strip = { x: 100, y: 40, width: 420, height: 32 };
-    const displayBounds = { x: 0, y: 40, width: 1366, height: 728 };
-    const rect = sliverBounds(strip, 'top', displayBounds);
+  it('bottom sliver on an auto-hide taskbar display (workArea = bounds) is flush to the physical edge, y = 764', () => {
+    // workArea reaches the full display height when the taskbar auto-hides, so the
+    // work-area-edge sliver and the physical-edge sliver coincide here.
+    const strip = { x: 100, y: 768 - 32 - 2, width: 420, height: 32 }; // dockBounds' 2 px reserve
+    const workArea = { x: 0, y: 0, width: 1366, height: 768 };
+    const rect = sliverBounds(strip, 'bottom', workArea);
+    expect(rect).toEqual({ x: 100, y: 764, width: 420, height: 4 });
+  });
+
+  it('top sliver mirrors the bottom case: flush to workArea.y, not the taskbar-auto-hide-reserved strip y', () => {
+    const strip = { x: 100, y: 40 + 2, width: 420, height: 32 }; // reserved 2 px from the work area top
+    const workArea = { x: 0, y: 40, width: 1366, height: 728 };
+    const rect = sliverBounds(strip, 'top', workArea);
     expect(rect).toEqual({ x: 100, y: 40, width: 420, height: 4 });
   });
 
-  it('bottom sliver uses the display\'s physical bottom edge, not the taskbar-auto-hide-reserved strip y', () => {
-    // The strip is nudged 2 px off the true bottom edge (taskbarAutoHide reserve),
-    // but the sliver must still be flush to the real screen edge so the cursor can
-    // reach it by slamming into the corner.
-    const strip = { x: 100, y: 686, width: 420, height: 32 }; // 720 - 32 - 2
-    const displayBounds = { x: 0, y: 0, width: 1366, height: 720 };
-    const rect = sliverBounds(strip, 'bottom', displayBounds);
-    expect(rect).toEqual({ x: 100, y: 720 - 4, width: 420, height: 4 });
-  });
-
-  it('top sliver uses the display\'s physical top edge, not the taskbar-auto-hide-reserved strip y', () => {
-    const strip = { x: 100, y: 2, width: 420, height: 32 }; // reserved 2 px from the true top
-    const displayBounds = { x: 0, y: 0, width: 1366, height: 768 };
-    const rect = sliverBounds(strip, 'top', displayBounds);
+  it('top sliver on an auto-hide taskbar display (workArea = bounds) is flush to the physical top edge', () => {
+    const strip = { x: 100, y: 2, width: 420, height: 32 };
+    const workArea = { x: 0, y: 0, width: 1366, height: 768 };
+    const rect = sliverBounds(strip, 'top', workArea);
     expect(rect).toEqual({ x: 100, y: 0, width: 420, height: 4 });
   });
 });
