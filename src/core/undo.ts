@@ -52,7 +52,7 @@ export class UndoStack {
   }
 }
 
-export const UNDOABLE = new Set<Action['type']>([
+export const UNDOABLE_TYPES = [
   'task/add',
   'task/edit',
   'task/complete',
@@ -69,7 +69,17 @@ export const UNDOABLE = new Set<Action['type']>([
   'list/rename',
   'list/delete',
   'day/close'
-]);
+] as const;
+
+export type UndoableType = (typeof UNDOABLE_TYPES)[number];
+
+export const UNDOABLE: ReadonlySet<Action['type']> = new Set(UNDOABLE_TYPES);
+
+export type UndoableAction = Extract<Action, { type: UndoableType }>;
+
+export function isUndoable(action: Action): action is UndoableAction {
+  return UNDOABLE.has(action.type);
+}
 
 const MAX_TITLE_LENGTH = 40;
 
@@ -84,52 +94,56 @@ function titleFor(data: Data, id: string): string | undefined {
 /** Human, sentence-case copy for the undo/redo toast. Looks the title up in
  * `data.tasks` by `action.id` (BEFORE the action is applied — callers must
  * call this before `reduce`); falls back to a title-less noun when the task
- * is missing (e.g. the id was never added, or a property test's random id). */
+ * is missing (e.g. the id was never added, or a property test's random id).
+ * The switch below is over `UndoableAction`, so the compiler enforces that
+ * every member of `UNDOABLE_TYPES` has a case here — adding a type to the
+ * set without adding a case is a type error, not a silent fallthrough. */
 export function labelFor(action: Action, data: Data): string {
+  if (!isUndoable(action)) return 'Made a change';
   switch (action.type) {
     case 'task/add':
       return `Added "${truncate(action.title)}"`;
     case 'task/edit': {
       const title = titleFor(data, action.id);
-      return title ? `Edited "${truncate(title)}"` : 'Edited task';
+      return title !== undefined ? `Edited "${truncate(title)}"` : 'Edited task';
     }
     case 'task/complete': {
       const title = titleFor(data, action.id);
-      return title ? `Completed "${truncate(title)}"` : 'Completed task';
+      return title !== undefined ? `Completed "${truncate(title)}"` : 'Completed task';
     }
     case 'task/uncomplete': {
       const title = titleFor(data, action.id);
-      return title ? `Reopened "${truncate(title)}"` : 'Reopened task';
+      return title !== undefined ? `Reopened "${truncate(title)}"` : 'Reopened task';
     }
     case 'task/delete': {
       const title = titleFor(data, action.id);
-      return title ? `Deleted "${truncate(title)}"` : 'Deleted task';
+      return title !== undefined ? `Deleted "${truncate(title)}"` : 'Deleted task';
     }
     case 'task/move': {
       const title = titleFor(data, action.id);
-      return title ? `Moved "${truncate(title)}"` : 'Moved task';
+      return title !== undefined ? `Moved "${truncate(title)}"` : 'Moved task';
     }
     case 'task/makeCurrent': {
       const title = titleFor(data, action.id);
-      return title ? `Made "${truncate(title)}" current` : 'Made task current';
+      return title !== undefined ? `Made "${truncate(title)}" current` : 'Made task current';
     }
     case 'task/skip': {
       const title = titleFor(data, action.id);
-      return title ? `Skipped "${truncate(title)}"` : 'Skipped task';
+      return title !== undefined ? `Skipped "${truncate(title)}"` : 'Skipped task';
     }
     case 'task/snooze': {
       const title = titleFor(data, action.id);
-      return title ? `Snoozed "${truncate(title)}"` : 'Snoozed task';
+      return title !== undefined ? `Snoozed "${truncate(title)}"` : 'Snoozed task';
     }
     case 'task/setToday':
       return 'Updated today list';
     case 'timer/stop': {
       const title = titleFor(data, action.id);
-      return title ? `Stopped timer on "${truncate(title)}"` : 'Stopped timer';
+      return title !== undefined ? `Stopped timer on "${truncate(title)}"` : 'Stopped timer';
     }
     case 'timer/addTime': {
       const title = titleFor(data, action.id);
-      return title ? `Added time to "${truncate(title)}"` : 'Added time';
+      return title !== undefined ? `Added time to "${truncate(title)}"` : 'Added time';
     }
     case 'list/add':
       return `Added list "${truncate(action.name)}"`;
@@ -139,7 +153,9 @@ export function labelFor(action: Action, data: Data): string {
       return 'Deleted list';
     case 'day/close':
       return 'Closed the day';
-    default:
-      return 'Made a change';
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
   }
 }

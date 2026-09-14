@@ -117,6 +117,20 @@ describe('labelFor', () => {
     const label = labelFor({ type: 'task/add', id: 'a', now: t0, title: longTitle }, d);
     expect(label).toBe(`Added "${'x'.repeat(40)}…"`);
   });
+
+  it('leaves an exactly-40-character title untouched, and truncates a 41-character one', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    const title40 = 'x'.repeat(40);
+    const title41 = 'x'.repeat(41);
+    expect(labelFor({ type: 'task/add', id: 'a', now: t0, title: title40 }, d)).toBe(`Added "${title40}"`);
+    expect(labelFor({ type: 'task/add', id: 'a', now: t0, title: title41 }, d)).toBe(`Added "${'x'.repeat(40)}…"`);
+  });
+
+  it('renders an empty-string title as "" rather than falling back to the title-less noun', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: '' });
+    expect(labelFor({ type: 'task/complete', id: 'a', now: t0, by: 'user' }, d)).toBe('Completed ""');
+  });
 });
 
 // --- Property test -------------------------------------------------------
