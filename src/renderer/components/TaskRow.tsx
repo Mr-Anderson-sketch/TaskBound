@@ -7,10 +7,12 @@ interface TaskRowProps {
   index: number;
   isActive: boolean;
   isSelected?: boolean;
+  multiSelectCount?: number;
   onEdit: (task: Task) => void;
-  onSelect?: (task: Task) => void;
+  onSelect?: (task: Task, event?: React.MouseEvent) => void;
   onAddTime?: (task: Task) => void;
   onDelete?: (task: Task) => void;
+  onDeleteMultiple?: () => void;
   onMakeActive?: (task: Task) => void;
 }
 
@@ -29,7 +31,7 @@ const statusDecoration: Record<Task['status'], string> = {
 };
 
 export function TaskRow(props: TaskRowProps) {
-  const { task, index, isActive, isSelected = false, onEdit, onSelect, onAddTime, onDelete, onMakeActive } = props;
+  const { task, index, isActive, isSelected = false, multiSelectCount = 0, onEdit, onSelect, onAddTime, onDelete, onDeleteMultiple, onMakeActive } = props;
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const time = formatSeconds(task.remainingSeconds ?? task.timeAssignedSeconds);
@@ -52,7 +54,10 @@ export function TaskRow(props: TaskRowProps) {
   const containerClasses = [
     'flex items-center justify-between rounded-lg border border-brand-ice/10 bg-brand-dusk/70 px-3 py-2 transition-colors shadow-sm cursor-grab select-none focus:outline-none focus:ring-2 focus:ring-brand-coral/60 focus:ring-offset-2 focus:ring-offset-brand-navy active:cursor-grabbing',
     isActive ? 'border-brand-teal/60 bg-brand-teal/20 shadow-md' : '',
-    isSelected && !isActive ? 'border-brand-coral/60 bg-brand-coral/10 shadow-md' : ''
+    // Multi-select: white border for all selected tasks
+    // Single-select: coral border only for selected non-active task
+    isSelected && !isActive && multiSelectCount > 1 ? 'border-brand-ice bg-brand-ice/10 shadow-md' : '',
+    isSelected && !isActive && multiSelectCount <= 1 ? 'border-brand-coral/60 bg-brand-coral/10 shadow-md' : ''
   ]
     .filter(Boolean)
     .join(' ');
@@ -89,7 +94,7 @@ export function TaskRow(props: TaskRowProps) {
     <>
       <div
         className={containerClasses}
-        onClick={() => onSelect?.(task)}
+        onClick={(e) => onSelect?.(task, e)}
         onContextMenu={handleContextMenu}
         onDoubleClick={(e) => {
           e.stopPropagation();
@@ -103,7 +108,7 @@ export function TaskRow(props: TaskRowProps) {
         }}
         role="button"
         tabIndex={0}
-        title="Click to select, double-click to edit, right-click for options"
+        title="Click to select, Shift+Click to select range, Ctrl+Click to toggle, double-click to edit, right-click for options"
       >
         <span className="text-xs font-semibold tracking-wide text-brand-aqua/80">{displayIndex.toString().padStart(2, '0')}</span>
         <span className="w-20 text-xs font-mono text-brand-aqua/70">[{time}]</span>
@@ -116,29 +121,46 @@ export function TaskRow(props: TaskRowProps) {
           className="fixed z-50 min-w-[150px] rounded-lg border border-brand-ice/30 bg-brand-dusk shadow-xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          {!isActive && (
+          {multiSelectCount > 1 ? (
+            // Multi-select context menu: Only show bulk delete
             <button
               type="button"
-              className="w-full px-4 py-2 text-left text-sm text-brand-teal hover:bg-brand-teal/10 rounded-t-lg transition-colors"
-              onClick={handleMakeActive}
+              className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+              onClick={() => {
+                onDeleteMultiple?.();
+                setContextMenu(null);
+              }}
             >
-              Make Active
+              Delete Selected ({multiSelectCount} tasks)
             </button>
+          ) : (
+            // Single select context menu: Show all options
+            <>
+              {!isActive && (
+                <button
+                  type="button"
+                  className="w-full px-4 py-2 text-left text-sm text-brand-teal hover:bg-brand-teal/10 rounded-t-lg transition-colors"
+                  onClick={handleMakeActive}
+                >
+                  Make Active
+                </button>
+              )}
+              <button
+                type="button"
+                className={`w-full px-4 py-2 text-left text-sm text-brand-coral hover:bg-brand-coral/10 transition-colors ${isActive ? 'rounded-t-lg' : ''}`}
+                onClick={handleAddTime}
+              >
+                Add Time +
+              </button>
+              <button
+                type="button"
+                className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-400/10 rounded-b-lg transition-colors"
+                onClick={handleDelete}
+              >
+                Delete
+              </button>
+            </>
           )}
-          <button
-            type="button"
-            className={`w-full px-4 py-2 text-left text-sm text-brand-coral hover:bg-brand-coral/10 transition-colors ${isActive ? 'rounded-t-lg' : ''}`}
-            onClick={handleAddTime}
-          >
-            Add Time +
-          </button>
-          <button
-            type="button"
-            className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-400/10 rounded-b-lg transition-colors"
-            onClick={handleDelete}
-          >
-            Delete
-          </button>
         </div>
       )}
     </>

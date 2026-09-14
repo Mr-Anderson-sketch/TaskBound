@@ -16,6 +16,7 @@ export interface Task {
   timeAssignedSeconds?: number;
   remainingSeconds?: number;
   status: TaskStatus;
+  isPaused?: boolean;
   history: TaskHistoryEntry[];
 }
 
