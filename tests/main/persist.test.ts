@@ -105,6 +105,129 @@ describe('corruption recovery', () => {
   });
 });
 
+describe('read-error handling', () => {
+  it('retries a transient EBUSY reading data.json and succeeds without quarantining', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 1, 6);
+    const data = createEmptyData(now, APP_VERSION);
+    const dataJsonPath = path.join(dir, 'data.json');
+    await realFs.writeFile(dataJsonPath, JSON.stringify(data, null, 2), 'utf8');
+
+    let callCount = 0;
+    const readFileSpy = vi.fn(async (file: Parameters<typeof realFs.readFile>[0], enc: Parameters<typeof realFs.readFile>[1]) => {
+      callCount++;
+      if (callCount <= 2) {
+        throw Object.assign(new Error('fake EBUSY'), { code: 'EBUSY' });
+      }
+      return realFs.readFile(file, enc);
+    });
+
+    const logs: string[] = [];
+    const deps: PersistDeps = {
+      dir,
+      now: () => now,
+      fs: { ...realFs, readFile: readFileSpy } as typeof realFs,
+      log: (m) => logs.push(m)
+    };
+
+    const result = await load(deps, APP_VERSION);
+
+    expect(result.source).toBe('data');
+    expect(result.data).toEqual(data);
+    expect(logs.length).toBe(2);
+
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.corrupt-'))).toBe(false);
+  }, 10000);
+
+  it('propagates a persistent non-ENOENT read error instead of quarantining or falling back', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 1, 6);
+    const data = createEmptyData(now, APP_VERSION);
+    const dataJsonPath = path.join(dir, 'data.json');
+    await realFs.writeFile(dataJsonPath, JSON.stringify(data, null, 2), 'utf8');
+    const originalBytes = await realFs.readFile(dataJsonPath);
+
+    const readFileSpy = vi.fn(async () => {
+      throw Object.assign(new Error('fake EPERM'), { code: 'EPERM' });
+    });
+
+    const deps: PersistDeps = {
+      dir,
+      now: () => now,
+      fs: { ...realFs, readFile: readFileSpy } as typeof realFs
+    };
+
+    await expect(load(deps, APP_VERSION)).rejects.toMatchObject({ code: 'EPERM' });
+
+    const afterBytes = await realFs.readFile(dataJsonPath);
+    expect(afterBytes.equals(originalBytes)).toBe(true);
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.corrupt-'))).toBe(false);
+  }, 10000);
+
+  it('leaves the corrupt file in place when the quarantine rename cannot succeed, still recovering from backup', async () => {
+    const dir = await mkTmpDir();
+    const today = localMs(2026, 1, 7);
+
+    await realFs.mkdir(path.join(dir, 'backups'), { recursive: true });
+    const backupData = createEmptyData(today, APP_VERSION);
+    const backupPath = path.join(dir, 'backups', `data-${ymd(today)}.json`);
+    await realFs.writeFile(backupPath, JSON.stringify(backupData, null, 2), 'utf8');
+
+    const corruptContent = '{ this is not valid json';
+    const dataJsonPath = path.join(dir, 'data.json');
+    await realFs.writeFile(dataJsonPath, corruptContent, 'utf8');
+
+    const renameSpy = vi.fn(async (from: Parameters<typeof realFs.rename>[0], to: Parameters<typeof realFs.rename>[1]) => {
+      if (typeof to === 'string' && path.basename(to).startsWith('data.corrupt-')) {
+        throw Object.assign(new Error('fake EPERM'), { code: 'EPERM' });
+      }
+      return realFs.rename(from, to);
+    });
+
+    const deps: PersistDeps = { dir, now: () => today, fs: { ...realFs, rename: renameSpy } as typeof realFs };
+
+    const result = await load(deps, APP_VERSION);
+
+    expect(result.source).toBe('backup');
+    expect(result.corruptSavedAs).toBeUndefined();
+    expect(result.data).toEqual(backupData);
+
+    // No data.corrupt-*.json exists: the quarantine rename never succeeded, so
+    // the original corrupt bytes just stayed at data.json until save() overwrote them.
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.corrupt-'))).toBe(false);
+
+    // data.json now holds the recovered, valid data.
+    const finalOnDisk = JSON.parse(await realFs.readFile(dataJsonPath, 'utf8'));
+    expect(finalOnDisk).toEqual(backupData);
+  }, 10000);
+});
+
+describe('save write failures', () => {
+  it('cleans up the temp file when writeFile fails (e.g. ENOSPC)', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 1, 8);
+    const data = createEmptyData(now, APP_VERSION);
+
+    const writeFileSpy = vi.fn(async () => {
+      throw Object.assign(new Error('fake ENOSPC'), { code: 'ENOSPC' });
+    });
+
+    const deps: PersistDeps = {
+      dir,
+      now: () => now,
+      fs: { ...realFs, writeFile: writeFileSpy } as typeof realFs
+    };
+
+    await expect(save(deps, data)).rejects.toMatchObject({ code: 'ENOSPC' });
+
+    const entries = await realFs.readdir(dir).catch(() => [] as string[]);
+    expect(entries.some((f) => f.startsWith('data.tmp-'))).toBe(false);
+  });
+});
+
 describe('rename retries', () => {
   it('retries EPERM twice then succeeds via the real rename, logging each retry', async () => {
     const dir = await mkTmpDir();

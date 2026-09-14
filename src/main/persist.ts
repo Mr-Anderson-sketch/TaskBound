@@ -65,6 +65,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function errorCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | undefined)?.code;
+}
+
+function isRetryableFsError(err: unknown): boolean {
+  const code = errorCode(err);
+  return !!code && RETRYABLE_CODES.has(code);
+}
+
+/**
+ * Runs `op`, retrying on failure at 50/200/800ms (three retries, four attempts
+ * total) as long as `isRetryable(err)` says so; each retry is logged via
+ * `deps.log`. On final failure the error is rethrown to the caller. Shared by
+ * every fs operation in this module that needs the same crash-tolerant retry
+ * schedule (the save rename, the quarantine rename, and reading data.json).
+ */
+async function withRetry<T>(deps: PersistDeps, label: string, op: () => Promise<T>, isRetryable: (err: unknown) => boolean = isRetryableFsError): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await op();
+    } catch (err) {
+      if (attempt < RETRY_DELAYS_MS.length && isRetryable(err)) {
+        const delay = RETRY_DELAYS_MS[attempt];
+        deps.log?.(`persist: ${label} failed (${errorCode(err) ?? 'error'}), retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_DELAYS_MS.length})`);
+        await sleep(delay);
+        attempt++;
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function pathExists(fs: FsModule, p: string): Promise<boolean> {
   try {
     await fs.stat(p);
@@ -118,8 +152,10 @@ async function rotateBackup(deps: PersistDeps): Promise<void> {
 /**
  * Writes `data` atomically: temp file → rename over data.json. Rotates the daily
  * backup first (using whatever is currently on disk, before it's overwritten).
- * Renames retry on EPERM/EBUSY/EACCES at 50/200/800ms (three retries, four attempts
- * total); on final failure the temp file is removed and the error is rethrown.
+ * Both the temp-file write and the rename are covered by one try/catch: any
+ * failure (a failed write, e.g. ENOSPC, or a rename that's still failing after
+ * retries) removes the temp file before rethrowing, so a failed save never
+ * leaves a partial data.tmp-*.json behind.
  */
 export async function save(deps: PersistDeps, data: Data): Promise<void> {
   const fs = fsOf(deps);
@@ -127,26 +163,13 @@ export async function save(deps: PersistDeps, data: Data): Promise<void> {
   await rotateBackup(deps);
 
   const tmp = tempPath(deps);
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
-
   const dp = dataPath(deps);
-  let attempt = 0;
-  for (;;) {
-    try {
-      await fs.rename(tmp, dp);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code && RETRYABLE_CODES.has(code) && attempt < RETRY_DELAYS_MS.length) {
-        const delay = RETRY_DELAYS_MS[attempt];
-        deps.log?.(`persist: rename failed (${code}), retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_DELAYS_MS.length})`);
-        await sleep(delay);
-        attempt++;
-        continue;
-      }
-      await fs.rm(tmp, { force: true }).catch(() => {});
-      throw err;
-    }
+  try {
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+    await withRetry(deps, 'save rename', () => fs.rename(tmp, dp));
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
   }
 }
 
@@ -191,7 +214,50 @@ export async function cleanOrphans(deps: PersistDeps): Promise<void> {
   }
 }
 
-async function readValidData(fs: FsModule, file: string): Promise<Data | undefined> {
+/**
+ * Reads `file` as text, retrying on any error other than ENOENT (a transient
+ * EBUSY/EPERM/EMFILE on an otherwise-fine file must not be mistaken for
+ * "missing"). Returns `undefined` for ENOENT ("no such file"); rethrows any
+ * other error once retries are exhausted, so the caller can tell "could not
+ * read" apart from "read but invalid".
+ */
+async function readFileRetrying(deps: PersistDeps, file: string): Promise<string | undefined> {
+  const fs = fsOf(deps);
+  try {
+    return await withRetry(deps, `read ${path.basename(file)}`, () => fs.readFile(file, 'utf8'), (err) => errorCode(err) !== 'ENOENT');
+  } catch (err) {
+    if (errorCode(err) === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+type ReadOutcome = { kind: 'missing' } | { kind: 'invalid' } | { kind: 'valid'; data: Data };
+
+/**
+ * Reads and validates `file`. Distinguishes three outcomes: the file doesn't
+ * exist ('missing'); it was read successfully but isn't valid JSON or doesn't
+ * pass parseData ('invalid' — this, and only this, is "corrupt"); or it read
+ * and parsed fine ('valid'). A persistent read error (see readFileRetrying)
+ * propagates out of this function rather than resolving to any of the three.
+ */
+async function readAndValidate(deps: PersistDeps, file: string): Promise<ReadOutcome> {
+  const raw = await readFileRetrying(deps, file);
+  if (raw === undefined) return { kind: 'missing' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: 'invalid' };
+  }
+  try {
+    return { kind: 'valid', data: parseData(parsed) };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+/** Swallows every read/parse/validate failure — used for the backup scan, where any candidate that isn't readable is simply skipped in favor of the next. */
+async function readValidDataLoose(fs: FsModule, file: string): Promise<Data | undefined> {
   let raw: string;
   try {
     raw = await fs.readFile(file, 'utf8');
@@ -212,12 +278,20 @@ async function readValidData(fs: FsModule, file: string): Promise<Data | undefin
 }
 
 /**
- * Loads persisted data, in order: clean orphaned temp files; read+validate data.json
- * (source 'data'); if data.json exists but is invalid, quarantine it as
- * data.corrupt-<ts>.json and try each backup newest→oldest (source 'backup',
- * rewriting data.json with the recovered copy); if there's still nothing usable,
- * import legacyPath if given and readable (source 'legacy', copying the original file
- * to legacy-state.json, never touching it); otherwise start fresh (source 'empty').
+ * Loads persisted data, in order: clean orphaned temp files; read+validate data.json.
+ *  - Read succeeds and validates → source 'data'.
+ *  - Read succeeds but the bytes are invalid JSON or fail parseData → quarantine it
+ *    as data.corrupt-<ts>.json (retried the same way as the save rename; if the
+ *    rename still fails, log it and leave the corrupt file in place rather than
+ *    throwing — corruptSavedAs stays undefined), then try each backup newest→oldest,
+ *    first valid one wins (source 'backup', rewriting data.json via save).
+ *  - Read itself fails for anything other than "no such file" (e.g. a stuck EPERM
+ *    even after retries) → propagate the error. This is a transient failure on a
+ *    perfectly good file, not corruption: it must never be quarantined or silently
+ *    reverted to a backup.
+ *  - No data.json and no valid backup: import legacyPath if given and readable
+ *    (source 'legacy', copying — never modifying — the original to legacy-state.json).
+ *  - Otherwise start fresh (source 'empty').
  */
 export async function load(deps: PersistDeps, appVersion: string, legacyPath?: string): Promise<LoadResult> {
   await cleanOrphans(deps);
@@ -226,18 +300,24 @@ export async function load(deps: PersistDeps, appVersion: string, legacyPath?: s
   const dp = dataPath(deps);
   let corruptSavedAs: string | undefined;
 
-  if (await pathExists(fs, dp)) {
-    const data = await readValidData(fs, dp);
-    if (data) {
-      return { data, source: 'data' };
-    }
+  const outcome = await readAndValidate(deps, dp);
+
+  if (outcome.kind === 'valid') {
+    return { data: outcome.data, source: 'data' };
+  }
+
+  if (outcome.kind === 'invalid') {
     const cp = corruptPath(deps);
-    await fs.rename(dp, cp);
-    corruptSavedAs = cp;
+    try {
+      await withRetry(deps, 'quarantine rename', () => fs.rename(dp, cp));
+      corruptSavedAs = cp;
+    } catch (err) {
+      deps.log?.(`persist: quarantine rename failed permanently (${errorCode(err) ?? 'error'}), leaving corrupt data.json in place`);
+    }
   }
 
   for (const backupPath of await listBackups(deps)) {
-    const data = await readValidData(fs, backupPath);
+    const data = await readValidDataLoose(fs, backupPath);
     if (data) {
       await save(deps, data);
       return { data, source: 'backup', recoveredFrom: backupPath, ...(corruptSavedAs ? { corruptSavedAs } : {}) };
