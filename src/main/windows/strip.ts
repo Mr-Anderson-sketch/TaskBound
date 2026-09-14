@@ -3,13 +3,15 @@
 // it owns the Electron window, timers, and a small state machine (collapsed /
 // expanded / hidden-sliver), and calls into `./displays` for every rect it computes.
 // See docs/PLAN.md Task 1.7 and the state-machine writeup in
-// .superpowers/sdd/PLAN/task-1.7-report.md.
+// .superpowers/sdd/PLAN/task-1.7-report.md (plus its "Fix round 1" appendix).
 import { BrowserWindow, screen } from 'electron';
+import type { WebContents } from 'electron';
 import type { Edge, Settings } from '../../core/types';
 import type { Store } from '../store';
 import {
   clampAlong,
   displayKey,
+  displaySignature,
   dockBounds,
   handleRect,
   isTaskbarAutoHide,
@@ -48,11 +50,12 @@ export class StripWindow {
   private win: BrowserWindow | undefined;
   private readonly stateListeners = new Set<(s: StripState) => void>();
   private unsubscribeStore: (() => void) | undefined;
-  private firstSnapshotHandled = false;
 
   private settings: Settings['strip'];
   /** Content size while collapsed (dock/pill), as last reported by the renderer
-   * (or the settings-configured width, before any report arrives). */
+   * (or the settings-configured width, before any report arrives). Always integers
+   * (renderer reports are `Math.ceil`'d on intake — Electron's `setBounds` requires
+   * integer `Rectangle`s). */
   private size: { width: number; height: number };
   /** The docked (collapsed) rect — the anchor every other state is computed from. */
   private dockedRect: Rect;
@@ -68,7 +71,7 @@ export class StripWindow {
   private dragTimeout: ReturnType<typeof setTimeout> | undefined;
   private dragGrabOffsetX = 0;
 
-  // Hover/click-through/auto-hide poll (100 Hz.. 100 ms, i.e. 10 Hz, while needed)
+  // Hover/click-through/auto-hide poll (10 Hz, i.e. every 100 ms, while needed)
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private outsideSince: number | undefined; // expand -> collapse-on-leave
   private hideOutsideSince: number | undefined; // auto-hide countdown
@@ -81,6 +84,12 @@ export class StripWindow {
     this.settings = snapshot.data.settings.strip;
     this.size = { width: this.settings.width, height: STRIP_HEIGHT_DEFAULT };
     this.dockedRect = { x: 0, y: 0, width: this.size.width, height: this.size.height };
+  }
+
+  /** Task 1.9 needs this to send `strip:state` (and other) events to the strip's
+   * renderer. `undefined` before `create()` and after `destroy()`/an external close. */
+  get webContents(): WebContents | undefined {
+    return this.win?.webContents;
   }
 
   // --- lifecycle -----------------------------------------------------------------
@@ -127,22 +136,40 @@ export class StripWindow {
 
     void win.loadURL(this.deps.rendererUrl('strip'));
 
+    // Never call show()/focus() — only showInactive(), and only once the renderer has
+    // actually painted (Store.subscribe does not replay the current state to a new
+    // subscriber, so gating the first show on a store snapshot would mean it never
+    // shows at all unless something happens to dispatch first).
+    win.webContents.once('did-finish-load', () => {
+      if (this.settings.enabled) this.showInactive();
+    });
+
+    win.on('closed', () => {
+      this.cleanup();
+    });
+
     screen.on('display-added', this.onDisplaysChanged);
     screen.on('display-removed', this.onDisplaysChanged);
     screen.on('display-metrics-changed', this.onDisplaysChanged);
 
-    // Never call show()/focus() — only showInactive(), and only once the store has
-    // delivered its first snapshot through this subscription.
     this.unsubscribeStore = this.deps.store.subscribe((snapshot) => {
       this.applySettings(snapshot.data.settings.strip);
-      if (!this.firstSnapshotHandled) {
-        this.firstSnapshotHandled = true;
-        if (this.settings.enabled) this.showInactive();
-      }
     });
   }
 
   destroy(): void {
+    const win = this.win;
+    this.cleanup();
+    if (win && !win.isDestroyed()) {
+      win.destroy();
+    }
+  }
+
+  /** Shared by `destroy()` and the window's own `closed` event (the window can be
+   * closed out from under us — e.g. the OS killing it during a display/session
+   * change — so this must not assume `destroy()` is the only way out). Idempotent:
+   * safe to run twice (once from `destroy()`, once more if `closed` then fires). */
+  private cleanup(): void {
     this.stopDragTimers();
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -156,24 +183,35 @@ export class StripWindow {
     screen.removeListener('display-removed', this.onDisplaysChanged);
     screen.removeListener('display-metrics-changed', this.onDisplaysChanged);
     this.stateListeners.clear();
-    if (this.win && !this.win.isDestroyed()) {
-      this.win.destroy();
-    }
+    // Reset per-create transient state so a later create() (if the app ever does
+    // that) starts clean rather than inheriting a stale mid-gesture state.
+    this.expanded = false;
+    this.hidden = false;
+    this.pointerInside = false;
+    this.outsideSince = undefined;
+    this.hideOutsideSince = undefined;
+    this.sliverHoverSince = undefined;
+    this.autoHideDelayMs = AUTO_HIDE_DELAY_MS;
+    this.clickThroughIgnoring = undefined;
+    this.panelHeight = DEFAULT_PANEL_HEIGHT;
+    this.lastDisplay = undefined;
     this.win = undefined;
   }
 
   // --- visibility ------------------------------------------------------------------
 
   showInactive(): void {
-    this.win?.showInactive();
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.showInactive();
   }
 
   hide(): void {
-    this.win?.hide();
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.hide();
   }
 
   toggle(): void {
-    if (!this.win) return;
+    if (!this.win || this.win.isDestroyed()) return;
     if (this.win.isVisible()) {
       this.hide();
     } else {
@@ -182,7 +220,8 @@ export class StripWindow {
   }
 
   isVisible(): boolean {
-    return this.win?.isVisible() ?? false;
+    if (!this.win || this.win.isDestroyed()) return false;
+    return this.win.isVisible();
   }
 
   // --- docking / edge --------------------------------------------------------------
@@ -197,32 +236,83 @@ export class StripWindow {
   applySettings(s: Settings['strip']): void {
     const prev = this.settings;
     this.settings = s;
-    this.size = { ...this.size, width: s.width };
+
+    const widthChanged = s.width !== prev.width;
+    if (widthChanged) {
+      this.size = { ...this.size, width: s.width };
+    }
+
     if (!this.win || this.win.isDestroyed()) return;
+
     if (prev.hideFromCapture !== s.hideFromCapture) {
       this.win.setContentProtection(s.hideFromCapture);
     }
+
+    if (prev.clickThrough !== s.clickThrough) {
+      // Apply synchronously rather than waiting for the next poll tick: leaving the
+      // old ignore-state in place even one tick longer means a strip that just had
+      // click-through turned off keeps swallowing clicks until the poll catches up
+      // (or, if the poll was only running *because* of clickThrough, forever).
+      this.clickThroughIgnoring = s.clickThrough;
+      if (s.clickThrough) {
+        this.win.setIgnoreMouseEvents(true, { forward: true });
+      } else {
+        this.win.setIgnoreMouseEvents(false);
+      }
+    }
+
     if (!s.autoHide && this.hidden) {
       this.doAutoRestore();
     }
-    this.redock();
+
+    if (prev.enabled !== s.enabled) {
+      if (s.enabled) {
+        this.showInactive();
+      } else {
+        this.hide();
+      }
+    }
+
+    // Only redock when something that actually affects docking changed — NOT on
+    // every snapshot (most dispatches are unrelated task/list edits). This also
+    // guards the earlier unconditional `this.size.width = s.width`, which used to
+    // stomp a renderer-reported collapsed-pill width back to the full strip width
+    // on every store notification.
+    const dockingRelevantChanged =
+      prev.edge !== s.edge ||
+      widthChanged ||
+      prev.positions !== s.positions ||
+      prev.enabled !== s.enabled ||
+      prev.collapsed !== s.collapsed ||
+      prev.autoHide !== s.autoHide ||
+      prev.clickThrough !== s.clickThrough ||
+      prev.hideFromCapture !== s.hideFromCapture;
+
+    if (dockingRelevantChanged) {
+      this.redock();
+    }
+
     this.syncPollTimer();
   }
 
   handleReportedSize(size: { width: number; height: number }): void {
     if (!this.win || this.win.isDestroyed()) return;
+    // Electron's `Rectangle` requires integers; round up so the reported content
+    // is never clipped by a downward round.
+    const width = Math.ceil(size.width);
+    const height = Math.ceil(size.height);
     if (this.expanded) {
       // While expanded, the reported height is the WHOLE window height (strip row +
       // panel content); only the width feeds back into the collapsed anchor rect.
-      if (size.width !== this.size.width) {
-        this.size = { ...this.size, width: size.width };
+      if (width !== this.size.width) {
+        this.size = { ...this.size, width };
         this.redock();
       }
-      this.panelHeight = Math.max(0, size.height - this.dockedRect.height);
+      this.panelHeight = Math.max(0, height - this.dockedRect.height);
       this.applyVisualBounds();
       return;
     }
-    this.size = { width: size.width, height: Math.min(size.height, MAX_COLLAPSED_HEIGHT) };
+    this.size = { width, height: Math.min(height, MAX_COLLAPSED_HEIGHT) };
     this.redock();
   }
 
@@ -240,6 +330,7 @@ export class StripWindow {
   }
 
   hover(inside: boolean): void {
+    if (!this.win || this.win.isDestroyed()) return;
     this.pointerInside = inside;
     if (inside) {
       this.outsideSince = undefined;
@@ -255,6 +346,10 @@ export class StripWindow {
 
   beginDrag(): void {
     if (!this.win || this.win.isDestroyed() || this.dragTimer) return;
+    // An expanded panel must not get dragged around (and must not have its drag
+    // ticks shrink it back to the collapsed strip's width/anchor mid-gesture):
+    // collapse first, synchronously, before the drag interval starts.
+    if (this.expanded) this.expand(false);
     const bounds = this.win.getBounds();
     const cursor = screen.getCursorScreenPoint();
     this.dragGrabOffsetX = cursor.x - bounds.x;
@@ -269,9 +364,8 @@ export class StripWindow {
   endDrag(): void {
     if (!this.dragTimer && !this.dragTimeout) return;
     this.stopDragTimers();
-    if (this.win && !this.win.isDestroyed()) {
-      this.persistDock(this.lastDisplay ?? this.currentDisplay());
-    }
+    if (!this.win || this.win.isDestroyed()) return;
+    this.persistDock(this.lastDisplay ?? this.currentDisplay());
   }
 
   // --- internals: docking ----------------------------------------------------------
@@ -283,8 +377,19 @@ export class StripWindow {
     return screen.getPrimaryDisplay();
   }
 
+  /** The display whose `bounds` the sliver/handle math should use "right now": the
+   * last one we actually docked/dragged onto, falling back to a fresh lookup only
+   * if we somehow don't have one yet (shouldn't happen once `create()` has run). */
+  private currentDisplayBounds(): Rect {
+    return (this.lastDisplay ?? this.currentDisplay()).bounds;
+  }
+
   private redock(): void {
-    if (!this.win || this.win.isDestroyed()) return;
+    // A drag interval is the source of truth for `dockedRect` while it's running
+    // (60 Hz, tracking the live cursor); a redock triggered by a store notification
+    // or a display event mid-drag would snap the strip back to its pre-drag/restored
+    // position and fight the drag on every tick.
+    if (!this.win || this.win.isDestroyed() || this.dragTimer) return;
     const d = this.currentDisplay();
     this.lastDisplay = d;
     const auto = isTaskbarAutoHide(d, this.settings.edge);
@@ -296,10 +401,17 @@ export class StripWindow {
   private applyVisualBounds(): void {
     if (!this.win || this.win.isDestroyed()) return;
     const rect = this.hidden
-      ? sliverBounds(this.dockedRect, this.settings.edge)
+      ? sliverBounds(this.dockedRect, this.settings.edge, this.currentDisplayBounds())
       : this.expanded
         ? panelBounds(this.dockedRect, this.settings.edge, this.panelHeight)
         : this.dockedRect;
+    this.setBoundsIfChanged(rect);
+  }
+
+  /** Every `setBounds` call (docked, expanded, sliver, or a live drag tick) routes
+   * through here so an unchanged rect never triggers a redundant native call. */
+  private setBoundsIfChanged(rect: Rect): void {
+    if (!this.win || this.win.isDestroyed()) return;
     const current = this.win.getBounds();
     if (
       current.x === rect.x &&
@@ -313,7 +425,15 @@ export class StripWindow {
   }
 
   private persistDock(d: DisplayLike): void {
-    const positions = { ...this.settings.positions, [displayKey(d)]: { x: this.dockedRect.x, y: this.dockedRect.y } };
+    // Stored under both the stable id AND the resolution+scale signature, so
+    // `restorePosition` can still find this display's remembered spot after an id
+    // reassignment (driver update / reconnect) — see `displays.ts`.
+    const entry = { x: this.dockedRect.x, y: this.dockedRect.y };
+    const positions = {
+      ...this.settings.positions,
+      [displayKey(d)]: entry,
+      [displaySignature(d)]: entry
+    };
     this.deps.store.dispatch({
       type: 'settings/patch',
       now: Date.now(),
@@ -333,7 +453,7 @@ export class StripWindow {
     const auto = isTaskbarAutoHide(d, this.settings.edge);
     const x = clampAlong(d, cursor.x - this.dragGrabOffsetX, this.size.width);
     this.dockedRect = dockBounds(d, this.settings.edge, this.size, x, auto);
-    this.win.setBounds(this.dockedRect, false);
+    this.setBoundsIfChanged(this.dockedRect);
   }
 
   private stopDragTimers(): void {
@@ -421,7 +541,7 @@ export class StripWindow {
       return;
     }
 
-    const sliver = sliverBounds(this.dockedRect, this.settings.edge);
+    const sliver = sliverBounds(this.dockedRect, this.settings.edge, this.currentDisplayBounds());
     if (pointIn(sliver, cursor)) {
       if (this.sliverHoverSince === undefined) this.sliverHoverSince = now;
       if (now - this.sliverHoverSince >= AUTO_HIDE_RESTORE_DELAY_MS) this.doAutoRestore();

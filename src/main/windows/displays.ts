@@ -19,6 +19,13 @@ export interface DisplayLike {
   scaleFactor: number;
 }
 
+// Electron's `Rectangle` (what `BrowserWindow.setBounds` takes) requires integers;
+// every rect-shaped value this module hands back to strip.ts is rounded before it
+// leaves here, so callers never have to round (or forget to).
+function roundRect(r: Rect): Rect {
+  return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+}
+
 /** Primary key for per-display position memory: the Electron display id, stringified. */
 export function displayKey(d: DisplayLike): string {
   return String(d.id);
@@ -32,15 +39,15 @@ export function displaySignature(d: DisplayLike): string {
 
 /** Keeps the strip's horizontal span `[x, x + width]` inside the display's work area.
  * If the strip is wider than the work area, it is pinned to the work area's left edge
- * (there is nowhere else to put it). */
+ * (there is nowhere else to put it). Result is rounded to an integer. */
 export function clampAlong(d: DisplayLike, x: number, width: number): number {
   const { workArea } = d;
   if (width > workArea.width) {
-    return workArea.x;
+    return Math.round(workArea.x);
   }
   const min = workArea.x;
   const max = workArea.x + workArea.width - width;
-  return Math.min(Math.max(x, min), max);
+  return Math.round(Math.min(Math.max(x, min), max));
 }
 
 /** True when the OS taskbar on this edge is set to auto-hide: the work area reaches
@@ -58,7 +65,7 @@ export function isTaskbarAutoHide(d: DisplayLike, edge: Edge): boolean {
  * `along` (if given) is the desired x, restored from position memory or the drag
  * cursor; otherwise the strip is horizontally centred. When `taskbarAutoHide` is
  * true, the strip is nudged 2 px further from that edge so it doesn't sit flush
- * against a taskbar that can reveal itself over it. */
+ * against a taskbar that can reveal itself over it. Every field is rounded. */
 export function dockBounds(
   d: DisplayLike,
   edge: Edge,
@@ -71,7 +78,7 @@ export function dockBounds(
   const x = clampAlong(d, along ?? centred, size.width);
   const reserve = taskbarAutoHide ? 2 : 0;
   const y = edge === 'top' ? workArea.y + reserve : workArea.y + workArea.height - size.height - reserve;
-  return { x, y, width: size.width, height: size.height };
+  return roundRect({ x, y, width: size.width, height: size.height });
 }
 
 /** The hover panel's bounds: the union of the strip's own rect and the panel that
@@ -79,23 +86,25 @@ export function dockBounds(
  * "Hover panel") and the window never has to move the strip itself. */
 export function panelBounds(strip: Rect, edge: Edge, panelHeight: number): Rect {
   if (edge === 'bottom') {
-    return { x: strip.x, y: strip.y - panelHeight, width: strip.width, height: strip.height + panelHeight };
+    return roundRect({ x: strip.x, y: strip.y - panelHeight, width: strip.width, height: strip.height + panelHeight });
   }
-  return { x: strip.x, y: strip.y, width: strip.width, height: strip.height + panelHeight };
+  return roundRect({ x: strip.x, y: strip.y, width: strip.width, height: strip.height + panelHeight });
 }
 
-/** The 4 px auto-hide sliver, flush to the edge, spanning the same x/width as the
- * strip (DESIGN.md "Auto-hide sliver: 4 px"). */
-export function sliverBounds(strip: Rect, edge: Edge): Rect {
+/** The 4 px auto-hide sliver, spanning the strip's x/width but flush to the
+ * *display's physical edge* (`displayBounds`, i.e. `DisplayLike.bounds`) rather than
+ * the strip's own (possibly taskbar-auto-hide-reserved) y — otherwise slamming the
+ * cursor into the true screen edge would land 2 px short of the sliver's hit area. */
+export function sliverBounds(strip: Rect, edge: Edge, displayBounds: Rect): Rect {
   const height = 4;
-  const y = edge === 'top' ? strip.y : strip.y + strip.height - height;
-  return { x: strip.x, y, width: strip.width, height };
+  const y = edge === 'top' ? displayBounds.y : displayBounds.y + displayBounds.height - height;
+  return roundRect({ x: strip.x, y, width: strip.width, height });
 }
 
 /** The 24×24 drag/click-through handle, vertically centred in the strip, 4 px from
  * its left edge (DESIGN.md pixel spec: "|◂4▸[ 24×24 handle ]"). */
 export function handleRect(strip: Rect): Rect {
-  return { x: strip.x + 4, y: strip.y + (strip.height - 24) / 2, width: 24, height: 24 };
+  return roundRect({ x: strip.x + 4, y: strip.y + (strip.height - 24) / 2, width: 24, height: 24 });
 }
 
 /** Point-in-rect hit test, inclusive of the rect's edges. */

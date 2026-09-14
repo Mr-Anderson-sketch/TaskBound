@@ -70,6 +70,33 @@ describe('dockBounds', () => {
     const rect = dockBounds(d, 'bottom', { width: 420, height: 32 }, 5000);
     expect(rect.x).toBe(1366 - 420);
   });
+
+  it('rounds a fractional centred x to an integer (odd width)', () => {
+    const d = makeDisplay(); // workArea.x = 0, width 1366 -> (1366-421)/2 = 472.5
+    const rect = dockBounds(d, 'bottom', { width: 421, height: 32 });
+    expect(Number.isInteger(rect.x)).toBe(true);
+    expect(rect.x).toBe(473);
+  });
+
+  it('centres correctly on a display with a non-zero workArea.x (secondary monitor to the right)', () => {
+    const d = makeDisplay({
+      bounds: { x: 1366, y: 0, width: 1280, height: 720 },
+      workArea: { x: 1366, y: 0, width: 1280, height: 720 }
+    });
+    const rect = dockBounds(d, 'bottom', { width: 420, height: 32 });
+    expect(rect.x).toBe(1366 + (1280 - 420) / 2);
+    expect(Number.isInteger(rect.x)).toBe(true);
+  });
+
+  it('centres correctly on a display with a negative workArea.x (secondary monitor to the left)', () => {
+    const d = makeDisplay({
+      bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
+      workArea: { x: -1920, y: 0, width: 1920, height: 1080 }
+    });
+    const rect = dockBounds(d, 'bottom', { width: 421, height: 32 }); // odd width -> fractional centring
+    expect(rect.x).toBe(Math.round(-1920 + (1920 - 421) / 2));
+    expect(Number.isInteger(rect.x)).toBe(true);
+  });
 });
 
 describe('clampAlong', () => {
@@ -92,6 +119,11 @@ describe('clampAlong', () => {
     const d = makeDisplay({ workArea: { x: 50, y: 0, width: 300, height: 720 } });
     expect(clampAlong(d, 100, 420)).toBe(50);
   });
+
+  it('rounds a fractional x to an integer', () => {
+    const d = makeDisplay();
+    expect(clampAlong(d, 100.6, 420)).toBe(101);
+  });
 });
 
 describe('panelBounds', () => {
@@ -113,16 +145,35 @@ describe('panelBounds', () => {
 });
 
 describe('sliverBounds', () => {
-  it('bottom sliver is a 4 px strip flush to the display bottom', () => {
+  it('bottom sliver is a 4 px strip flush to the display bottom when the strip itself is already flush', () => {
     const strip = { x: 100, y: 688, width: 420, height: 32 };
-    const rect = sliverBounds(strip, 'bottom');
-    expect(rect).toEqual({ x: 100, y: 688 + 32 - 4, width: 420, height: 4 });
+    const displayBounds = { x: 0, y: 0, width: 1366, height: 720 };
+    const rect = sliverBounds(strip, 'bottom', displayBounds);
+    expect(rect).toEqual({ x: 100, y: 720 - 4, width: 420, height: 4 });
   });
 
-  it('top sliver is a 4 px strip flush to the display top', () => {
+  it('top sliver is a 4 px strip flush to the display top when the strip itself is already flush', () => {
     const strip = { x: 100, y: 40, width: 420, height: 32 };
-    const rect = sliverBounds(strip, 'top');
+    const displayBounds = { x: 0, y: 40, width: 1366, height: 728 };
+    const rect = sliverBounds(strip, 'top', displayBounds);
     expect(rect).toEqual({ x: 100, y: 40, width: 420, height: 4 });
+  });
+
+  it('bottom sliver uses the display\'s physical bottom edge, not the taskbar-auto-hide-reserved strip y', () => {
+    // The strip is nudged 2 px off the true bottom edge (taskbarAutoHide reserve),
+    // but the sliver must still be flush to the real screen edge so the cursor can
+    // reach it by slamming into the corner.
+    const strip = { x: 100, y: 686, width: 420, height: 32 }; // 720 - 32 - 2
+    const displayBounds = { x: 0, y: 0, width: 1366, height: 720 };
+    const rect = sliverBounds(strip, 'bottom', displayBounds);
+    expect(rect).toEqual({ x: 100, y: 720 - 4, width: 420, height: 4 });
+  });
+
+  it('top sliver uses the display\'s physical top edge, not the taskbar-auto-hide-reserved strip y', () => {
+    const strip = { x: 100, y: 2, width: 420, height: 32 }; // reserved 2 px from the true top
+    const displayBounds = { x: 0, y: 0, width: 1366, height: 768 };
+    const rect = sliverBounds(strip, 'top', displayBounds);
+    expect(rect).toEqual({ x: 100, y: 0, width: 420, height: 4 });
   });
 });
 
