@@ -27,7 +27,7 @@ import { BulkTaskModal } from './components/BulkTaskModal';
 import { FocusSpotlight } from './components/FocusSpotlight';
 import { TitleBar } from './components/TitleBar';
 import { formatSeconds } from './utils/time';
-import type { ElectronApi } from '../shared/ipc';
+import type { ElectronApi } from '../shared/ipc-legacy';
 import { v4 as uuidv4 } from 'uuid';
 
 const REMINDER_INTERVAL_MS = 3 * 60 * 1000;

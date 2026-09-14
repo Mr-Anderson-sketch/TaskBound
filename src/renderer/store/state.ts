@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import type { AppState, Task } from '../../shared/types';
 import { createEmptyState, ensureAlignedTasks } from '../../shared/stateHelpers';
-import type { ElectronApi } from '../../shared/ipc';
+import type { ElectronApi } from '../../shared/ipc-legacy';
 
 const initialState: AppState = createEmptyState('0.0.0');
 
