@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { longDayLabel } from '../../lib/dateLabels';
 import { SettingRow } from '../SettingRow';
-import { backupDateMs } from '../dataModel';
+import { backupDateMs, isPreRestoreBackup } from '../dataModel';
 
 export interface DataSectionProps {
   dataDir?: string;
@@ -23,7 +23,11 @@ const SAVED_MESSAGE_MS = 5000;
 
 function backupLabel(path: string): string {
   const ms = backupDateMs(path);
-  return ms !== undefined ? longDayLabel(ms) : path;
+  if (ms === undefined) return path;
+  if (!isPreRestoreBackup(path)) return longDayLabel(ms);
+  const d = new Date(ms);
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `Before restoring, ${longDayLabel(ms)} ${hhmm}`;
 }
 
 export function DataSection({ dataDir, dataLocationUnavailable }: DataSectionProps) {

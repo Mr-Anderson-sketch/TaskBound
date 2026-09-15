@@ -9,13 +9,29 @@
 import { parseYmd } from '../../core/dates';
 
 const BACKUP_FILENAME_RE = /^data-(\d{4}-\d{2}-\d{2})\.json$/;
+// Final-review fix 1: the copy main keeps of the current data right before a restore
+// (`data.pre-restore-YYYYMMDD-HHmmss[-n].json`, see `snapshotBeforeRestore` in persist.ts).
+const PRE_RESTORE_FILENAME_RE = /^data\.pre-restore-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:-\d+)?\.json$/;
 
-/** Epoch ms of local midnight on the date named by `backupPath`'s filename, or
- * `undefined` if the filename doesn't match the `data-YYYY-MM-DD.json` backup shape. */
-export function backupDateMs(backupPath: string): number | undefined {
+function filenameOf(backupPath: string): string {
   const segments = backupPath.split(/[\\/]/);
-  const filename = segments[segments.length - 1] ?? '';
+  return segments[segments.length - 1] ?? '';
+}
+
+/** Epoch ms of local midnight on the date named by a daily backup's filename
+ * (`data-YYYY-MM-DD.json`), or the exact local time a pre-restore snapshot was taken;
+ * `undefined` for any other filename. */
+export function backupDateMs(backupPath: string): number | undefined {
+  const filename = filenameOf(backupPath);
   const match = BACKUP_FILENAME_RE.exec(filename);
-  if (!match) return undefined;
-  return parseYmd(match[1]).getTime();
+  if (match) return parseYmd(match[1]).getTime();
+  const pre = PRE_RESTORE_FILENAME_RE.exec(filename);
+  if (!pre) return undefined;
+  const [y, mo, d, h, mi, se] = pre.slice(1).map(Number);
+  return new Date(y, mo - 1, d, h, mi, se).getTime();
+}
+
+/** Whether `backupPath` is a pre-restore snapshot rather than a daily backup. */
+export function isPreRestoreBackup(backupPath: string): boolean {
+  return PRE_RESTORE_FILENAME_RE.test(filenameOf(backupPath));
 }
