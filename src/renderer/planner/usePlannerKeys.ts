@@ -139,6 +139,12 @@ export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
         setPaletteOpen(true);
         return;
       }
+      case 'openSettings': {
+        clearChord();
+        setView('settings:strip');
+        setSelectedId(undefined);
+        return;
+      }
       case 'nav': {
         moveSelection(command.dir);
         return;

@@ -20,6 +20,10 @@ export function useApplyTheme(snapshot: Snapshot | undefined): void {
   const name = snapshot?.data.settings.theme.name;
   const mode = snapshot?.data.settings.theme.mode;
   const systemDark = snapshot?.systemDark;
+  // Task 5.1 addendum ruling 5: also mirrors settings.textSize onto <html> as
+  // `data-text-size`, driving app.css's `--text-scale` (and the strip's own exact
+  // 12/13/14 px title sizing) in every window.
+  const textSize = snapshot?.data.settings.textSize;
 
   useEffect(() => {
     if (!name || !mode) return;
@@ -27,4 +31,9 @@ export function useApplyTheme(snapshot: Snapshot | undefined): void {
     document.documentElement.setAttribute('data-theme', name);
     document.documentElement.setAttribute('data-mode', resolved);
   }, [name, mode, systemDark]);
+
+  useEffect(() => {
+    if (!textSize) return;
+    document.documentElement.setAttribute('data-text-size', textSize);
+  }, [textSize]);
 }

@@ -15,6 +15,16 @@ export interface RailProps {
   onSelect: (view: ViewId) => void;
 }
 
+// Minimal geometric glyph matching the rest of the app's flat, functional icon style
+// (see strip/Panel.tsx's PlayIcon/PauseIcon) — DESIGN.md gives no explicit spec for a
+// settings icon.
+const GearIcon = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+    <circle cx="8" cy="8" r="2.4" />
+    <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4M12.5 12.5l-1.4-1.4M4.9 4.9 3.5 3.5" />
+  </svg>
+);
+
 function openTagsSorted(data: Data): string[] {
   const set = new Set<string>();
   for (const t of data.tasks) {
@@ -58,6 +68,17 @@ export function Rail({ data, view, now, onSelect }: RailProps) {
       )}
       <div className="g">Done</div>
       {item('logbook', 'Logbook', logbookCount)}
+      <div className="foot">
+        <button
+          type="button"
+          aria-label="Settings"
+          className={view.startsWith('settings:') ? 'i sel' : 'i'}
+          onClick={() => onSelect('settings:strip')}
+        >
+          {GearIcon}
+          <span>Settings</span>
+        </button>
+      </div>
     </nav>
   );
 }

@@ -74,4 +74,41 @@ describe('schema', () => {
       positions: {}
     });
   });
+
+  // Task 5.1 addendum ruling 4: idlePauseMinutes (0 = never) 0..120, awayThresholdMinutes
+  // 1..120, defaultPlannedMinutes 1..240 — all integers.
+  it('bounds settings.timer.idlePauseMinutes/awayThresholdMinutes/defaultPlannedMinutes, and defaultSettings still parses', () => {
+    const d = createEmptyData(1_000, '2.0.0');
+    expect(parseData(JSON.parse(JSON.stringify(d))).settings.timer).toEqual(defaultSettings().timer);
+
+    expect(
+      ActionSchema.safeParse({
+        type: 'settings/patch',
+        now: 1,
+        patch: { timer: { idlePauseMinutes: 0, awayThresholdMinutes: 1, defaultPlannedMinutes: 1 } }
+      }).success
+    ).toBe(true);
+    expect(
+      ActionSchema.safeParse({
+        type: 'settings/patch',
+        now: 1,
+        patch: { timer: { idlePauseMinutes: 120, awayThresholdMinutes: 120, defaultPlannedMinutes: 240 } }
+      }).success
+    ).toBe(true);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { idlePauseMinutes: -1 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { idlePauseMinutes: 121 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { idlePauseMinutes: 1.5 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { awayThresholdMinutes: 0 } } }).success).toBe(
+      false
+    );
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { awayThresholdMinutes: 121 } } }).success).toBe(
+      false
+    );
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { defaultPlannedMinutes: 0 } } }).success).toBe(
+      false
+    );
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { defaultPlannedMinutes: 241 } } }).success).toBe(
+      false
+    );
+  });
 });

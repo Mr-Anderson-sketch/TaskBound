@@ -20,7 +20,9 @@ export type Command =
   /** A bare `g` with no chord pending: the caller arms a 1 s chord window in response. */
   | { type: 'chordStart' }
   | { type: 'goto'; view: 'today' | 'upcoming' | 'inbox' | 'logbook' }
-  | { type: 'commandPalette' };
+  | { type: 'commandPalette' }
+  /** Task 5.1 addendum ruling 1: Ctrl+, / ⌘, opens Settings. */
+  | { type: 'openSettings' };
 
 /** `'g'` while the caller's 1 s chord window (armed by a `chordStart` command) is still
  * open; `undefined` otherwise (no chord pending, or it already timed out). */
@@ -55,6 +57,11 @@ export function commandForKey(e: KeyLike, platform: Platform, chordState: ChordS
   // Ctrl+K / Cmd+K (platform-appropriate) always opens the command palette, chord or not.
   if (isPlatformMod(e, platform) && !e.altKey && lower === 'k') {
     return { type: 'commandPalette' };
+  }
+
+  // Ctrl+, / Cmd+, always opens Settings, chord or not (Task 5.1 addendum ruling 1).
+  if (isPlatformMod(e, platform) && !e.altKey && e.key === ',') {
+    return { type: 'openSettings' };
   }
 
   if (chordState === 'g') {

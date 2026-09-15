@@ -29,10 +29,17 @@ const ALLOWED_INVOKE = new Set<keyof InvokeMap>([
   'data:import',
   'data:chooseDir',
   'hotkeys:test',
+  'hotkeys:status',
   'timer:toggle'
 ]);
 
-const ALLOWED_EVENTS = new Set<keyof EventMap>(['store:changed', 'palette:mode', 'strip:state', 'timer:break']);
+const ALLOWED_EVENTS = new Set<keyof EventMap>([
+  'store:changed',
+  'palette:mode',
+  'strip:state',
+  'timer:break',
+  'planner:navigate'
+]);
 
 const tb: Bridge = {
   invoke(channel, ...args) {

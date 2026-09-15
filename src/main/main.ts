@@ -257,6 +257,20 @@ if (!gotLock) {
     // again (called synchronously a few lines down, before any other code runs).
     let hotkeyHandlers!: HotkeyHandlers;
 
+    // Task 5.2 binding ruling: `hotkeys:status` reports the last `Hotkeys.apply`
+    // result, keyed by hotkey NAME (Hotkeys.apply itself returns a map keyed by
+    // accelerator STRING — see hotkeys.ts) — the Hotkeys settings section polls this
+    // after saving a new accelerator to show "In use by another app" when the OS
+    // didn't actually grant the registration. Starts all-false; applyHotkeys() below
+    // runs synchronously before any IPC can reach it.
+    let hotkeyStatus: Record<'capture' | 'toggleStrip' | 'completeAdvance' | 'toggleTimer' | 'undo', boolean> = {
+      capture: false,
+      toggleStrip: false,
+      completeAdvance: false,
+      toggleTimer: false,
+      undo: false
+    };
+
     function applyHotkeys(settings: Settings): void {
       hotkeyHandlers = {
         capture: () => palette.show('capture'),
@@ -273,7 +287,14 @@ if (!gotLock) {
           store.undo();
         }
       };
-      hotkeys.apply(settings, hotkeyHandlers);
+      const result = hotkeys.apply(settings, hotkeyHandlers);
+      hotkeyStatus = {
+        capture: result[settings.hotkeys.capture] === true,
+        toggleStrip: result[settings.hotkeys.toggleStrip] === true,
+        completeAdvance: result[settings.hotkeys.completeAdvance] === true,
+        toggleTimer: result[settings.hotkeys.toggleTimer] === true,
+        undo: result[settings.hotkeys.undo] === true
+      };
     }
 
     applyHotkeys(store.get().data.settings);
@@ -315,6 +336,22 @@ if (!gotLock) {
       onCapture: () => palette.show('capture'),
       onToggleStrip: () => strip.toggle(),
       onOpenPlanner: () => plannerWindow.show(),
+      // Task 5.1 addendum ruling 1: opens the planner and routes it straight to
+      // Settings. `plannerWindow.show()` calls `create()` lazily (first open), so the
+      // webContents can still be mid-load; wait for `did-finish-load` in that case so
+      // the navigate event never arrives before the renderer's listener is attached.
+      onOpenSettings: () => {
+        plannerWindow.show();
+        const wc = plannerWindow.webContents;
+        if (!wc || wc.isDestroyed()) return;
+        if (wc.isLoading()) {
+          wc.once('did-finish-load', () => {
+            if (!wc.isDestroyed()) wc.send('planner:navigate', 'settings:strip');
+          });
+        } else {
+          wc.send('planner:navigate', 'settings:strip');
+        }
+      },
       onPlanToday: () => palette.show('plan'),
       onCloseDay: () => palette.show('close'),
       onQuit: () => app.quit()
@@ -346,6 +383,7 @@ if (!gotLock) {
         dataImport: () => ({ error: 'not yet' }),
         dataChooseDir: () => ({}),
         hotkeysTest: (accelerator) => validateAccelerator(accelerator),
+        hotkeysStatus: () => hotkeyStatus,
         timerToggle: () => toggleTimer()
       }
     });

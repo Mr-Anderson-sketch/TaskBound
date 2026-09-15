@@ -46,6 +46,13 @@ function makeWindows(): WindowCommands {
     dataImport: vi.fn(async () => ({})),
     dataChooseDir: vi.fn(async () => ({})),
     hotkeysTest: vi.fn(() => ({ ok: true })),
+    hotkeysStatus: vi.fn(() => ({
+      capture: true,
+      toggleStrip: true,
+      completeAdvance: true,
+      toggleTimer: true,
+      undo: true
+    })),
     timerToggle: vi.fn()
   };
 }
@@ -95,6 +102,7 @@ const VALID_PAYLOADS: Record<string, unknown[]> = {
   'data:import': [],
   'data:chooseDir': [],
   'hotkeys:test': ['Control+Alt+Space'],
+  'hotkeys:status': [],
   'timer:toggle': []
 };
 
@@ -125,9 +133,19 @@ describe('registerIpc', () => {
         'data:import',
         'data:chooseDir',
         'hotkeys:test',
+        'hotkeys:status',
         'timer:toggle'
       ].sort()
     );
+  });
+
+  it('forwards hotkeys:status to windows', async () => {
+    const { handlers, windows } = setup();
+
+    const result = await handlers.get('hotkeys:status')!(eventFrom(ALLOWED_ORIGIN));
+
+    expect(windows.hotkeysStatus).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ capture: true, toggleStrip: true, completeAdvance: true, toggleTimer: true, undo: true });
   });
 
   it('forwards timer:toggle to windows', async () => {

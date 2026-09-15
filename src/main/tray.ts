@@ -23,6 +23,7 @@ export interface AppTrayDeps {
   onCapture: () => void;
   onToggleStrip: () => void;
   onOpenPlanner: () => void;
+  onOpenSettings: () => void;
   onPlanToday: () => void;
   onCloseDay: () => void;
   onQuit: () => void;
@@ -100,6 +101,7 @@ export class AppTray {
       { label: 'Close the day', click: () => this.deps.onCloseDay() },
       { label: 'Show/Hide strip', click: () => this.deps.onToggleStrip() },
       { label: 'Open planner', click: () => this.deps.onOpenPlanner() },
+      { label: 'Settings…', click: () => this.deps.onOpenSettings() },
       { type: 'separator' },
       { label: 'Quit', click: () => this.deps.onQuit() }
     ]);
