@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react';
 import { dispatch } from '../lib/useStore';
 import type { List } from '../../core/types';
-import { actionsFor, chipsFor, isQuoted, quoteInput, splitPastedLines } from './captureModel';
+import { actionsFor, actionsForLines, chipsFor, isQuoted, quoteInput, splitPastedLines } from './captureModel';
 import type { CaptureContext } from './captureModel';
 import { TokenChips } from './TokenChips';
 
@@ -53,10 +53,17 @@ export function Capture({ lists }: CaptureProps) {
     newId: () => crypto.randomUUID()
   });
 
-  const showAddedMessage = (n: number): void => {
+  // Fix round 1, defect 2: hiding the palette in the same tick as the paste meant the
+  // "Added N tasks" confirmation was never actually visible. Ruling: keep the palette
+  // open showing the message for ADDED_MESSAGE_MS, then hide — cleared (no hide fires)
+  // on unmount or when a new `palette:mode` arrives (see the effects above).
+  const showAddedMessageThenHide = (n: number): void => {
     setMessage(`Added ${n} task${n === 1 ? '' : 's'}`);
     if (messageTimer.current) clearTimeout(messageTimer.current);
-    messageTimer.current = setTimeout(() => setMessage(null), ADDED_MESSAGE_MS);
+    messageTimer.current = setTimeout(() => {
+      setMessage(null);
+      void window.tb.invoke('palette:hide');
+    }, ADDED_MESSAGE_MS);
   };
 
   const clearAndHide = (): void => {
@@ -93,17 +100,15 @@ export function Capture({ lists }: CaptureProps) {
     if (lines.length < 2) return; // a single-line paste behaves like typing
 
     e.preventDefault();
-    const ctx = makeCtx();
-    let added = 0;
-    for (const line of lines) {
-      const actions = actionsFor(line, ctx, { makeCurrent: false });
-      if (actions.length === 0) continue;
-      for (const action of actions) dispatch(action);
-      added += 1;
-    }
+    // actionsForLines (not a per-line actionsFor loop) threads newly-minted lists across
+    // lines, so two lines that share the same new /list mint exactly one list/add instead
+    // of each other's task/add ending up with a dangling listId (fix round 1, defect 1).
+    const actions = actionsForLines(lines, makeCtx());
+    for (const action of actions) dispatch(action);
+    const added = actions.filter((a) => a.type === 'task/add').length;
+
     setValue('');
-    showAddedMessage(added);
-    void window.tb.invoke('palette:hide');
+    showAddedMessageThenHide(added);
   };
 
   const chips = chipsFor(value, makeCtx());

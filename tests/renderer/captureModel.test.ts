@@ -5,6 +5,7 @@ import {
   quoteInput,
   splitPastedLines,
   actionsFor,
+  actionsForLines,
   type CaptureContext
 } from '../../src/renderer/palette/captureModel';
 import { ActionSchema } from '../../src/core/schema';
@@ -137,6 +138,58 @@ describe('captureModel: actionsFor', () => {
         const result = ActionSchema.safeParse(action);
         expect(result.success, result.success ? '' : JSON.stringify(result.error?.issues)).toBe(true);
       }
+    }
+  });
+});
+
+describe('captureModel: actionsForLines', () => {
+  // Fix round 1, defect 1: Capture.tsx used to build one CaptureContext before the whole
+  // paste loop, so two lines that both mint the SAME new list each emitted their own
+  // list/add with a fresh id — the reducer no-ops the second list/add by name, but its
+  // paired task/add still pointed at the id that was never created (a dangling listId).
+  // actionsForLines threads a mutable copy of ctx.lists across lines so the second line
+  // sees the first line's newly-minted list.
+  it('two lines referencing the same new list produce exactly one list/add and share its id', () => {
+    const ctx = makeCtx();
+    const actions = actionsForLines(['buy stamps /errands', 'mail package /errands'], ctx);
+    const listAdds = actions.filter((a) => a.type === 'list/add');
+    const taskAdds = actions.filter((a) => a.type === 'task/add') as Array<{ listId?: string; title: string }>;
+    expect(listAdds).toHaveLength(1);
+    expect(taskAdds).toHaveLength(2);
+    const listId = (listAdds[0] as { id: string }).id;
+    expect(taskAdds[0].listId).toBe(listId);
+    expect(taskAdds[1].listId).toBe(listId);
+    expect(taskAdds.map((t) => t.title)).toEqual(['buy stamps', 'mail package']);
+  });
+
+  it('mixed-case /list references to the same new list resolve to one list', () => {
+    const ctx = makeCtx();
+    const actions = actionsForLines(['buy stamps /Errands', 'mail package /errands'], ctx);
+    const listAdds = actions.filter((a) => a.type === 'list/add');
+    const taskAdds = actions.filter((a) => a.type === 'task/add') as Array<{ listId?: string }>;
+    expect(listAdds).toHaveLength(1);
+    expect(taskAdds[0].listId).toBe(taskAdds[1].listId);
+  });
+
+  it('lines that resolve to no actions (blank/whitespace) are simply skipped', () => {
+    const ctx = makeCtx();
+    const actions = actionsForLines(['buy stamps', '   ', 'call bank'], ctx);
+    expect(actions.filter((a) => a.type === 'task/add')).toHaveLength(2);
+  });
+
+  it('does not mutate the CaptureContext passed in', () => {
+    const ctx = makeCtx();
+    const before = [...ctx.lists];
+    actionsForLines(['buy stamps /errands', 'mail package /errands'], ctx);
+    expect(ctx.lists).toEqual(before);
+  });
+
+  it('every returned action passes ActionSchema', () => {
+    const ctx = makeCtx();
+    const actions = actionsForLines(['buy stamps /errands', 'mail package /errands', '"tomorrow"'], ctx);
+    for (const action of actions) {
+      const result = ActionSchema.safeParse(action);
+      expect(result.success, result.success ? '' : JSON.stringify(result.error?.issues)).toBe(true);
     }
   });
 });

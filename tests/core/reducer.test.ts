@@ -10,6 +10,20 @@ describe('reducer: tasks', () => {
     d = add(d, 'a', 'A'); d = add(d, 'b', 'B');
     expect(d.tasks.map(t => [t.id, t.listId, t.order])).toEqual([['a', INBOX_ID, 1000], ['b', INBOX_ID, 2000]]);
   });
+  // Fix round 1, defect 1b (controller ruling, defence in depth): a task/add whose
+  // listId doesn't reference a real list (e.g. a paired list/add for the same new list
+  // was no-op'd by the reducer because an earlier line in the same paste already
+  // created it) must not silently produce a task pointing at a list that doesn't exist.
+  it('task/add falls back to Inbox when listId does not reference an existing list', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', listId: 'ghost-list' });
+    expect(d.tasks[0].listId).toBe(INBOX_ID);
+  });
+  it('task/add drops parentId when it does not reference an existing task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', parentId: 'ghost-task' });
+    expect(d.tasks[0].parentId).toBeUndefined();
+  });
   it('makeCurrent moves a task to the front of Today', () => {
     let d = createEmptyData(t0, '2.0.0');
     d = add(d, 'a', 'A'); d = add(d, 'b', 'B');

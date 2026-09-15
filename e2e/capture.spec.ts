@@ -143,6 +143,11 @@ test('pasting multiple lines adds one task per line', async () => {
       el.dispatchEvent(event);
     });
 
+    // Fix round 1, defect 2: the "Added N tasks" confirmation must actually be visible
+    // (palette stays open) before the palette hides itself ~1.5s later.
+    await expect(palette.locator('.palette .foot')).toContainText('Added 3 tasks', { timeout: 1000 });
+    expect((await windowInfo(launched.app)).find((w) => w.url.includes('#/palette'))?.visible).toBe(true);
+
     await expect
       .poll(
         async () => {
@@ -158,6 +163,64 @@ test('pasting multiple lines adds one task per line', async () => {
       return tb.store.get().data.tasks as Array<{ title: string }>;
     });
     expect(tasks.map((t) => t.title).sort()).toEqual(['buy milk', 'call bank', 'write report']);
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});
+
+// Fix round 1, defect 1: two pasted lines that both mint the SAME new /list must not
+// leave either task pointing at a listId that was never created (the reducer no-ops the
+// second list/add by name; without threading the new list across lines in the renderer,
+// its paired task/add would keep the id of the list/add that got dropped).
+test('pasting two lines that share a new list creates the list once, with no dangling listId', async () => {
+  const launched = await launchApp();
+  try {
+    await launched.window('strip');
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { palette: { show: (m: string) => void } } }).__tb.palette.show('capture');
+    });
+    const palette = await launched.window('palette', 5000);
+
+    const input = palette.locator('.palette input');
+    await input.click();
+
+    await palette.evaluate(() => {
+      const el = document.querySelector('.palette input') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'buy stamps /errands\nmail package /errands');
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      el.dispatchEvent(event);
+    });
+
+    await expect(palette.locator('.palette .foot')).toContainText('Added 2 tasks', { timeout: 1000 });
+
+    await expect
+      .poll(
+        async () => {
+          const infos = await windowInfo(launched.app);
+          return infos.find((w) => w.url.includes('#/palette'))?.visible ?? false;
+        },
+        { timeout: 3000 }
+      )
+      .toBe(false);
+
+    const data = await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: { store: { get: () => { data: unknown } } } }).__tb;
+      return tb.store.get().data as { tasks: Array<{ title: string; listId: string }>; lists: Array<{ id: string; name: string }> };
+    });
+
+    const errandsLists = data.lists.filter((l) => l.name === 'Errands');
+    expect(errandsLists).toHaveLength(1);
+
+    const listIds = new Set(data.lists.map((l) => l.id));
+    for (const task of data.tasks) {
+      expect(listIds.has(task.listId)).toBe(true);
+    }
+    const pastedTasks = data.tasks.filter((t) => t.title === 'buy stamps' || t.title === 'mail package');
+    expect(pastedTasks).toHaveLength(2);
+    expect(pastedTasks.every((t) => t.listId === errandsLists[0].id)).toBe(true);
 
     expect(launched.errors()).toEqual([]);
   } finally {

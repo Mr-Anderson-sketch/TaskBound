@@ -105,3 +105,26 @@ export function actionsFor(input: string, ctx: CaptureContext, opts: { makeCurre
 
   return actions;
 }
+
+/** The actions to dispatch for several capture lines (a multi-line paste), processed in
+ * order: each line is resolved with `actionsFor` against a running copy of `ctx.lists`
+ * that is extended with every `list/add` a previous line minted, so two lines that both
+ * reference the SAME new list (e.g. two lines with `/errands` and no existing "Errands"
+ * list) produce exactly one `list/add` and share its id — instead of each line minting
+ * its own `list/add` (the second of which the reducer no-ops by name, leaving its paired
+ * `task/add` pointing at an id that was never created). `ctx` itself is never mutated;
+ * lines that resolve to no actions (blank/whitespace, after parsing) are simply skipped. */
+export function actionsForLines(lines: string[], ctx: CaptureContext): Action[] {
+  const actions: Action[] = [];
+  let lists = ctx.lists;
+  for (const line of lines) {
+    const lineActions = actionsFor(line, { now: ctx.now, lists, newId: ctx.newId }, { makeCurrent: false });
+    for (const action of lineActions) {
+      if (action.type === 'list/add') {
+        lists = [...lists, { id: action.id, name: action.name }];
+      }
+    }
+    actions.push(...lineActions);
+  }
+  return actions;
+}

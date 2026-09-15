@@ -43,13 +43,20 @@ export function reduce(data: Data, action: Action): Data {
   return produce(data, (draft) => {
     switch (action.type) {
       case 'task/add': {
-        const listId = action.listId ?? INBOX_ID;
-        const siblings = draft.tasks.filter((t) => t.listId === listId && t.parentId === action.parentId);
+        // Controller ruling (fix round 1, defect 1b, defence in depth): a listId/parentId
+        // that doesn't reference anything real (e.g. a paste's second line reused a
+        // /list name whose paired list/add the reducer just no-op'd because an earlier
+        // line in the same paste already created it) must not silently persist a
+        // dangling reference — fall back to Inbox, and drop an unresolvable parentId.
+        const requestedListId = action.listId ?? INBOX_ID;
+        const listId = draft.lists.some((l) => l.id === requestedListId) ? requestedListId : INBOX_ID;
+        const parentId = action.parentId !== undefined && draft.tasks.some((t) => t.id === action.parentId) ? action.parentId : undefined;
+        const siblings = draft.tasks.filter((t) => t.listId === listId && t.parentId === parentId);
         const task: Task = {
           id: action.id,
           title: action.title,
           listId,
-          parentId: action.parentId,
+          parentId,
           tags: action.tags ?? [],
           order: nextOrder(siblings),
           today: action.makeCurrent ? true : (action.today ?? false),
