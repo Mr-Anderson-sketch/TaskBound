@@ -3,6 +3,7 @@
 // time locally." Ticks with a 1 s interval ONLY while `runningSince` is set.
 import { useEffect, useState } from 'react';
 import type { TaskTimer } from '../../core/types';
+import { elapsedSeconds, remainingSeconds } from '../../core/timer';
 
 export interface DisplayTime {
   seconds: number;
@@ -10,18 +11,16 @@ export interface DisplayTime {
   overtime: boolean;
 }
 
+// Task 3.1: derives from core/timer's elapsedSeconds/remainingSeconds so the strip
+// and main agree on the math — this hook only supplies `now` and re-renders it.
 function compute(timer: TaskTimer | undefined, now: number): DisplayTime {
   if (!timer) return { seconds: 0, mode: 'none', overtime: false };
 
-  const running = timer.runningSince !== undefined;
-  const liveElapsed = running ? Math.max(0, now - timer.runningSince!) / 1000 : 0;
-  const totalElapsed = timer.spentSeconds + liveElapsed;
-
-  if (timer.plannedSeconds !== undefined) {
-    const remaining = timer.plannedSeconds - totalElapsed;
+  const remaining = remainingSeconds(timer, now);
+  if (remaining !== undefined) {
     return { seconds: remaining, mode: 'remaining', overtime: remaining < 0 };
   }
-  return { seconds: totalElapsed, mode: 'elapsed', overtime: false };
+  return { seconds: elapsedSeconds(timer, now), mode: 'elapsed', overtime: false };
 }
 
 export function useDisplayTime(timer?: TaskTimer): DisplayTime {

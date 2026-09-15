@@ -7,12 +7,16 @@ import type { Data, Action, Task, Rule, Settings, DayRecord, Ymd } from './types
 import { INBOX_ID } from './defaults';
 import { addDays, rolloverCutoffMs, ymd } from './dates';
 import { nextOrder } from './select';
+import { elapsedSeconds } from './timer';
 
 const NOTE_MAX_LENGTH = 500;
+const MIN_ADD_TIME_SECONDS = 60;
+const MAX_ADD_TIME_SECONDS = 14400;
 
 /** Finds `draft.days`' record for `date`, creating (and inserting, keeping `days`
  * sorted by date) a zeroed one if it doesn't exist yet. Used by `task/complete`,
- * `task/uncomplete`, `day/rollover`, and `day/close` — the only places a `DayRecord`
+ * `task/uncomplete`, `day/rollover`, `day/close`, and `foldTimerSegment` (so, since
+ * Task 3.1, by `timer/pause` and `timer/stop` too) — the only places a `DayRecord`
  * is ever created or touched. */
 function upsertDay(draft: Data, date: Ymd): DayRecord {
   let rec = draft.days.find((d) => d.date === date);
@@ -22,6 +26,28 @@ function upsertDay(draft: Data, date: Ymd): DayRecord {
     draft.days.sort((a, b) => a.date.localeCompare(b.date));
   }
   return rec;
+}
+
+/** Folds a running timer's segment (from `task.timer.runningSince` up to `at`) into
+ * `spentSeconds`, clears `runningSince`, and records the folded seconds on
+ * `days[ymd(clampedAt)].focusSeconds` (via `upsertDay`). `at` is clamped to
+ * `>= runningSince` first (a clock moved backwards, or an explicit `at` before the
+ * timer started, folds 0 — Task 3.1 rulings 2/5). No-op (returns 0, no day touched)
+ * when `task` has no timer or it isn't running. The elapsed math itself is
+ * `elapsedSeconds` from `./timer` (spentSeconds: 0 baseline) so this and every other
+ * "fold the running segment" site — `task/complete` included — share one
+ * implementation. Simplification (documented per ruling 5): a segment that spans
+ * local midnight (e.g. 23:50 → 00:10) is recorded wholly on `ymd(at)`, not split
+ * across the two calendar days. */
+function foldTimerSegment(draft: Data, task: Task, at: number): number {
+  const timer = task.timer;
+  if (!timer || timer.runningSince === undefined) return 0;
+  const clampedAt = Math.max(at, timer.runningSince);
+  const elapsed = elapsedSeconds({ spentSeconds: 0, runningSince: timer.runningSince }, clampedAt);
+  timer.spentSeconds += elapsed;
+  timer.runningSince = undefined;
+  upsertDay(draft, ymd(clampedAt)).focusSeconds += elapsed;
+  return elapsed;
 }
 
 /** Move a task to the front of Today: `today = true`, order below every other open Today task. */
@@ -94,15 +120,10 @@ export function reduce(data: Data, action: Action): Data {
 
         // Task 2.3, addendum ruling 2: the seconds folded into spentSeconds by THIS
         // completion (0 if no timer was running) also land in the day's focusSeconds.
-        // Focus recorded outside of a completion (timer/pause, timer/stop) arrives
-        // with the timer reducers in Task 3.1.
-        let foldedSeconds = 0;
-        if (task.timer?.runningSince !== undefined) {
-          const elapsed = Math.max(0, action.now - task.timer.runningSince) / 1000;
-          foldedSeconds = Math.round(elapsed);
-          task.timer.spentSeconds = Math.round(task.timer.spentSeconds + elapsed);
-          task.timer.runningSince = undefined;
-        }
+        // Task 3.1 ruling 3: routed through the shared `foldTimerSegment` helper —
+        // the same one `timer/pause`/`timer/stop` use — so this logic lives in one
+        // place. It already records the folded seconds on `days[ymd(now)]`.
+        foldTimerSegment(draft, task, action.now);
 
         task.status = 'done';
         task.completedAt = action.now;
@@ -111,7 +132,6 @@ export function reduce(data: Data, action: Action): Data {
 
         const completionDay = upsertDay(draft, ymd(action.now));
         completionDay.completed += 1;
-        completionDay.focusSeconds += foldedSeconds;
 
         if (draft.settings.score.enabled && action.by === 'user') {
           draft.settings.score.value += 1;
@@ -221,11 +241,60 @@ export function reduce(data: Data, action: Action): Data {
       case 'task/move': // implemented in Task 4.3
         break;
 
-      case 'timer/start': // implemented in Task 3.1
-      case 'timer/pause': // implemented in Task 3.1
-      case 'timer/stop': // implemented in Task 3.1
-      case 'timer/addTime': // implemented in Task 3.1
+      case 'timer/start': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task || task.status === 'done') break;
+        if (task.timer?.runningSince !== undefined) break; // already running: no-op
+
+        // Any OTHER task with a running timer is paused first — fold its segment
+        // into spent and into that day's focus (Task 3.1 ruling 3).
+        for (const other of draft.tasks) {
+          if (other.id === task.id || other.timer?.runningSince === undefined) continue;
+          foldTimerSegment(draft, other, action.now);
+          other.updatedAt = action.now;
+        }
+
+        // Controller clarification: create `{ spentSeconds: 0 }` with `plannedSeconds`
+        // left undefined — pomodoro/default durations are applied elsewhere, not here.
+        if (!task.timer) task.timer = { spentSeconds: 0 };
+        task.timer.runningSince = action.now;
+        task.timer.pausedAtSuspend = undefined;
+        task.updatedAt = action.now;
         break;
+      }
+
+      case 'timer/pause': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task || task.timer?.runningSince === undefined) break;
+        const at = Math.min(action.at ?? action.now, action.now); // foldTimerSegment clamps at >= runningSince
+        foldTimerSegment(draft, task, at);
+        task.updatedAt = action.now;
+        break;
+      }
+
+      case 'timer/stop': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task || task.timer?.runningSince === undefined) break;
+        // Controller clarification: identical to timer/pause at `now`, plus clearing
+        // pausedAtSuspend. plannedSeconds/spentSeconds are otherwise unchanged.
+        foldTimerSegment(draft, task, action.now);
+        task.timer.pausedAtSuspend = undefined;
+        task.updatedAt = action.now;
+        break;
+      }
+
+      case 'timer/addTime': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task) break;
+        // The zod schema doesn't bound `seconds` (schema.ts's TimerAddTimeSchema is a
+        // plain z.number()); clamp here per the brief (60..14400).
+        const seconds = Math.min(MAX_ADD_TIME_SECONDS, Math.max(MIN_ADD_TIME_SECONDS, action.seconds));
+        if (!task.timer) task.timer = { spentSeconds: 0 };
+        task.timer.plannedSeconds = (task.timer.plannedSeconds ?? 0) + seconds;
+        task.updatedAt = action.now;
+        if (draft.settings.score.enabled) draft.settings.score.value -= 1;
+        break;
+      }
 
       case 'list/add': {
         const name = action.name.trim();

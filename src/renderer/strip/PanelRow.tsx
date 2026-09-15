@@ -2,7 +2,7 @@
 // panel": "Five task rows, 28 px: 14 px radio, title, mono due/timer, hover-only
 // actions (done · skip · snooze)").
 import type { Task } from '../../core/types';
-import { fmtClock } from '../lib/format';
+import { fmtClock } from '../../core/timer';
 import { IconButton } from '../ui/IconButton';
 
 export interface PanelRowProps {

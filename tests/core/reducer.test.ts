@@ -3,6 +3,7 @@ import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
 import { todayView } from '../../src/core/select';
 import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
+import { UNDOABLE } from '../../src/core/undo';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -81,12 +82,17 @@ describe('reducer: tasks', () => {
     const before = d;
     expect(reduce(d, { type: 'task/edit', id: 'a', now: t0, patch: { title: 'x' } })).toBe(before);
     expect(reduce(d, { type: 'task/move', id: 'a', now: t0 })).toBe(before);
-    expect(reduce(d, { type: 'timer/start', id: 'a', now: t0 })).toBe(before);
-    expect(reduce(d, { type: 'timer/pause', id: 'a', now: t0 })).toBe(before);
-    expect(reduce(d, { type: 'timer/stop', id: 'a', now: t0 })).toBe(before);
-    expect(reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 5 })).toBe(before);
     expect(reduce(d, { type: 'list/rename', id: INBOX_ID, now: t0, name: 'Inbox2' })).toBe(before);
     expect(reduce(d, { type: 'list/delete', id: INBOX_ID, now: t0, moveTasksTo: INBOX_ID })).toBe(before);
+  });
+  // Task 3.1: timer/pause and timer/stop on a task with no running timer are no-ops
+  // (same reference) — distinct from "not yet implemented"; these ARE implemented.
+  it('timer/pause and timer/stop on a task with no running timer are no-ops', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    expect(reduce(d, { type: 'timer/pause', id: 'a', now: t0 })).toBe(before);
+    expect(reduce(d, { type: 'timer/stop', id: 'a', now: t0 })).toBe(before);
   });
   it('uncomplete reopens a task and clears completion fields', () => {
     let d = createEmptyData(t0, '2.0.0');
@@ -117,7 +123,8 @@ describe('reducer: tasks', () => {
   it('complete folds a running timer into spentSeconds and clears runningSince', () => {
     let d = createEmptyData(t0, '2.0.0');
     d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', plannedSeconds: 1500 });
-    // timer/start is a no-op until Task 3.1; set runningSince directly to exercise task/complete's fold.
+    // Set runningSince directly (rather than via timer/start) to exercise task/complete's
+    // fold in isolation from timer/start's own logic.
     d = { ...d, tasks: d.tasks.map(t => t.id === 'a' ? { ...t, timer: { ...t.timer!, runningSince: t0 } } : t) };
     d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 12_000, by: 'timer' });
     const a = d.tasks.find(t => t.id === 'a')!;
@@ -405,5 +412,152 @@ describe('reducer: day/close (Task 2.3)', () => {
     const rec = d.days.find((r) => r.date === ymd(t0))!;
     expect(rec.closedAt).toBe(t0);
     expect(rec.note).toBeUndefined();
+  });
+});
+
+describe('reducer: timer/* (Task 3.1)', () => {
+  it('start creates a timer with plannedSeconds left undefined and sets runningSince', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 + 1 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 0, runningSince: t0 + 1, pausedAtSuspend: undefined });
+    expect(a.updatedAt).toBe(t0 + 1);
+  });
+
+  it('start is a no-op on a done or missing task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 1, by: 'user' });
+    const before = d;
+    expect(reduce(d, { type: 'timer/start', id: 'a', now: t0 + 2 })).toBe(before);
+    expect(reduce(d, { type: 'timer/start', id: 'ghost', now: t0 + 2 })).toBe(before);
+  });
+
+  it('start on an already-running timer is a no-op', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 + 1 });
+    const before = d;
+    expect(reduce(d, { type: 'timer/start', id: 'a', now: t0 + 999 })).toBe(before);
+  });
+
+  it('start pauses another running task, folding its elapsed into spent and recording focus on the right day', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    d = reduce(d, { type: 'timer/start', id: 'b', now: t0 + 30_000 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    const b = d.tasks.find((t) => t.id === 'b')!;
+    expect(a.timer).toEqual({ spentSeconds: 30, runningSince: undefined });
+    expect(a.updatedAt).toBe(t0 + 30_000);
+    expect(b.timer).toEqual({ spentSeconds: 0, runningSince: t0 + 30_000, pausedAtSuspend: undefined });
+    const rec = d.days.find((r) => r.date === ymd(t0 + 30_000))!;
+    expect(rec.focusSeconds).toBe(30);
+  });
+
+  it('pause folds the elapsed segment into spent, clears runningSince, and records focus on the day', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    d = reduce(d, { type: 'timer/pause', id: 'a', now: t0 + 45_000 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 45, runningSince: undefined, pausedAtSuspend: undefined });
+    expect(d.days.find((r) => r.date === ymd(t0))!.focusSeconds).toBe(45);
+  });
+
+  it('pause with an `at` in the past records focus on ymd(at), including across local midnight', () => {
+    // Simplification documented on `foldTimerSegment` (Task 3.1 ruling 5): a segment
+    // that spans local midnight is recorded wholly on the `at` day, not split.
+    const start = new Date(2026, 8, 14, 23, 50, 0).getTime(); // 23:50 on 14 Sep
+    const at = new Date(2026, 8, 15, 0, 10, 0).getTime(); // 00:10 on 15 Sep, 20 min later
+    const now = at + 5_000; // pause is dispatched slightly after `at`
+    let d = createEmptyData(start, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: start });
+    d = reduce(d, { type: 'timer/pause', id: 'a', now, at });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer?.spentSeconds).toBe(20 * 60);
+    expect(d.days.find((r) => r.date === '2026-09-15')?.focusSeconds).toBe(20 * 60);
+    expect(d.days.find((r) => r.date === '2026-09-14')).toBeUndefined();
+  });
+
+  it('pause with an `at` before runningSince folds 0', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    d = reduce(d, { type: 'timer/pause', id: 'a', now: t0 + 10_000, at: t0 - 5_000 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer?.spentSeconds).toBe(0);
+    expect(a.timer?.runningSince).toBeUndefined();
+  });
+
+  it('pause is a no-op when not running', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    expect(reduce(d, { type: 'timer/pause', id: 'a', now: t0 })).toBe(before);
+  });
+
+  it('stop folds like pause at now, records focus, and clears pausedAtSuspend', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    // Simulate a prior sleep-gap pause having set pausedAtSuspend, to prove stop clears it.
+    d = { ...d, tasks: d.tasks.map((t) => (t.id === 'a' ? { ...t, timer: { ...t.timer!, pausedAtSuspend: t0 + 1 } } : t)) };
+    d = reduce(d, { type: 'timer/stop', id: 'a', now: t0 + 20_000 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 20, runningSince: undefined, pausedAtSuspend: undefined });
+    expect(d.days.find((r) => r.date === ymd(t0))!.focusSeconds).toBe(20);
+  });
+
+  it('stop is a no-op when not running', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    expect(reduce(d, { type: 'timer/stop', id: 'a', now: t0 })).toBe(before);
+  });
+
+  it('addTime creates a timer and adds seconds to plannedSeconds', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 300 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 0, plannedSeconds: 300 });
+    d = reduce(d, { type: 'timer/addTime', id: 'a', now: t0 + 1, seconds: 300 });
+    expect(d.tasks.find((t) => t.id === 'a')!.timer?.plannedSeconds).toBe(600);
+  });
+
+  it('addTime clamps seconds to 60..14400', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 1 });
+    expect(d.tasks.find((t) => t.id === 'a')!.timer?.plannedSeconds).toBe(60);
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'timer/addTime', id: 'b', now: t0, seconds: 999_999 });
+    expect(d.tasks.find((t) => t.id === 'b')!.timer?.plannedSeconds).toBe(14400);
+  });
+
+  it('addTime decrements score.value only when scoring is enabled', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 300 });
+    expect(d.settings.score.value).toBe(0);
+    d = reduce(d, { type: 'settings/patch', now: t0, patch: { score: { enabled: true, value: 5 } } });
+    d = reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 300 });
+    expect(d.settings.score.value).toBe(4);
+  });
+
+  it('addTime is a no-op on a missing task', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'timer/addTime', id: 'ghost', now: t0, seconds: 300 })).toBe(d);
+  });
+
+  it('stop is undoable and pause is not', () => {
+    expect(UNDOABLE.has('timer/stop')).toBe(true);
+    expect(UNDOABLE.has('timer/pause')).toBe(false);
+    expect(UNDOABLE.has('timer/start')).toBe(false);
+    expect(UNDOABLE.has('timer/addTime')).toBe(true);
   });
 });
