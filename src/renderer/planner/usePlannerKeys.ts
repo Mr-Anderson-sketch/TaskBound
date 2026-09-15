@@ -44,9 +44,13 @@ export interface UsePlannerKeysResult {
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
   closePalette: () => void;
-  /** Task 4.3 builds the real detail pane; this task only tracks which task (if any)
-   * `Enter` requested one for and renders nothing for it. // Task 4.3 */
+  /** Which task's detail pane (if any) is open — Enter, a row double-click, or a row's
+   * "Open details" chevron all funnel through `openDetail` (Task 4.3 addendum ruling 3). */
   detailOpenId: string | undefined;
+  openDetail: (id: string) => void;
+  /** Escape (handled by Detail.tsx itself) and the pane's own close button both call
+   * this — closes and returns focus to the list, same as `closeMenu`/`closePalette`. */
+  closeDetail: () => void;
 }
 
 export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
@@ -95,6 +99,20 @@ export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
     setPaletteOpen(false);
     taskListRef.current?.el?.focus();
   };
+  const openDetail = (id: string): void => setDetailOpenId(id);
+  const closeDetail = (): void => {
+    setDetailOpenId(undefined);
+    taskListRef.current?.el?.focus();
+  };
+
+  // Closes the detail pane if the task it's showing no longer exists (deleted from
+  // under it, e.g. via Undo racing a delete on another window) — it would otherwise
+  // keep referencing a stale id with nothing to render.
+  useEffect(() => {
+    if (detailOpenId !== undefined && !data.tasks.some((t) => t.id === detailOpenId)) {
+      setDetailOpenId(undefined);
+    }
+  }, [data.tasks, detailOpenId]);
 
   const selectedTask = useMemo(() => data.tasks.find((t) => t.id === selectedId), [data.tasks, selectedId]);
 
@@ -153,7 +171,7 @@ export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
         return;
       }
       case 'openDetail': {
-        if (selectedId) setDetailOpenId(selectedId); // Task 4.3
+        if (selectedId) openDetail(selectedId);
         return;
       }
       case 'editTitle': {
@@ -195,7 +213,7 @@ export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (isEditableTarget(e.target)) return;
-    if (menu || paletteOpen || editingId !== undefined) return;
+    if (menu || paletteOpen || editingId !== undefined || detailOpenId !== undefined) return;
 
     const command = commandForKey(e, platform, chordRef.current);
     if (chordRef.current === 'g' && command?.type !== 'commandPalette') clearChord();
@@ -216,7 +234,9 @@ export function usePlannerKeys(args: UsePlannerKeysArgs): UsePlannerKeysResult {
     paletteOpen,
     setPaletteOpen,
     closePalette,
-    detailOpenId
+    detailOpenId,
+    openDetail,
+    closeDetail
   };
 }
 

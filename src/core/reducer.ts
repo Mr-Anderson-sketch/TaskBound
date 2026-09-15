@@ -498,9 +498,65 @@ export function reduce(data: Data, action: Action): Data {
         break;
       }
 
-      case 'list/rename': // implemented in Task 4.3
-      case 'list/delete': // implemented in Task 4.3
+      // Task 4.3 addendum ruling 1: trims, ignores empty, ignores renaming Inbox, no-op
+      // when a DIFFERENT list already has the name (case-insensitive) — renaming a list
+      // to its own current name (even with different casing) is fine, it's not a clash
+      // with itself.
+      case 'list/rename': {
+        const list = draft.lists.find((l) => l.id === action.id);
+        if (!list || list.id === INBOX_ID) break;
+        const name = action.name.trim();
+        if (name === '') break;
+        const clash = draft.lists.some((l) => l.id !== list.id && l.name.toLowerCase() === name.toLowerCase());
+        if (clash) break;
+        if (list.name !== name) list.name = name;
         break;
+      }
+
+      // Task 4.3 addendum ruling 1: Inbox cannot be deleted; `moveTasksTo` must be an
+      // existing list different from the deleted one, else it falls back to Inbox — same
+      // "dangling reference" defence-in-depth as task/add's listId/parentId. Every task
+      // (open and done, including children, matched by listId directly) moves to the
+      // target with orders appended after its existing tasks, preserving the moved
+      // tasks' own current relative order (sorted by order then createdAt first).
+      case 'list/delete': {
+        const list = draft.lists.find((l) => l.id === action.id);
+        if (!list || list.id === INBOX_ID) break;
+        const targetExists = draft.lists.some((l) => l.id === action.moveTasksTo && l.id !== list.id);
+        const targetId = targetExists ? action.moveTasksTo : INBOX_ID;
+
+        const targetTasks = draft.tasks.filter((t) => t.listId === targetId);
+        let nextOrderValue = targetTasks.length > 0 ? Math.max(...targetTasks.map((t) => t.order)) + 1000 : 1000;
+
+        // Hierarchical traversal (top-level tasks in order, each immediately followed by
+        // its own children in order) rather than one flat sort — order values are only
+        // unique WITHIN a sibling group (same listId+parentId), so a flat sort by order
+        // alone can't tell a top-level task and someone else's child apart when their
+        // order values collide. This also keeps "including children" literal: a child
+        // always lands right after its parent.
+        const byOrderCreated = (a: Task, b: Task) => a.order - b.order || a.createdAt - b.createdAt;
+        const inList = draft.tasks.filter((t) => t.listId === list.id);
+        const topLevel = inList.filter((t) => t.parentId === undefined).sort(byOrderCreated);
+        const moving: Task[] = [];
+        for (const t of topLevel) {
+          moving.push(t);
+          const kids = inList.filter((c) => c.parentId === t.id).sort(byOrderCreated);
+          moving.push(...kids);
+        }
+        const covered = new Set(moving.map((t) => t.id));
+        const orphans = inList.filter((t) => !covered.has(t.id)).sort(byOrderCreated);
+        moving.push(...orphans);
+
+        for (const t of moving) {
+          t.listId = targetId;
+          t.order = nextOrderValue;
+          nextOrderValue += 1000;
+          t.updatedAt = action.now;
+        }
+
+        draft.lists = draft.lists.filter((l) => l.id !== list.id);
+        break;
+      }
 
       case 'day/rollover': {
         // Addendum ruling 3: idempotent per `date` — a record already carrying

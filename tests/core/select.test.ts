@@ -13,7 +13,8 @@ import {
   todayTasks,
   upcomingGroups,
   tasksWithTag,
-  logbook
+  logbook,
+  childrenOf
 } from '../../src/core/select';
 import { dayKeyForRollover, addDays, ymd } from '../../src/core/dates';
 import type { Task } from '../../src/core/types';
@@ -363,5 +364,28 @@ describe('logbook (Task 4.1)', () => {
     d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
     d = reduce(d, { type: 'task/complete', id: 'b', now: t0, by: 'user' });
     expect(logbook(d).map((t) => t.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('childrenOf (Task 4.3)', () => {
+  it('returns open and done children, ordered by order then createdAt', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'p', now: t0, title: 'Parent' });
+    d = reduce(d, { type: 'task/add', id: 'c2', now: t0 + 1, title: 'C2', parentId: 'p' }); // order 1000
+    d = reduce(d, { type: 'task/add', id: 'c1', now: t0 + 2, title: 'C1', parentId: 'p' }); // order 2000
+    d = reduce(d, { type: 'task/complete', id: 'c2', now: t0 + 3, by: 'user' });
+    expect(childrenOf(d, 'p').map((t) => t.id)).toEqual(['c2', 'c1']);
+  });
+  it('returns an empty array for a task with no children', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'p', now: t0, title: 'Parent' });
+    expect(childrenOf(d, 'p')).toEqual([]);
+  });
+  it('does not include grandchildren or unrelated tasks', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'p', now: t0, title: 'Parent' });
+    d = reduce(d, { type: 'task/add', id: 'c', now: t0 + 1, title: 'Child', parentId: 'p' });
+    d = reduce(d, { type: 'task/add', id: 'other', now: t0 + 2, title: 'Other' });
+    expect(childrenOf(d, 'p').map((t) => t.id)).toEqual(['c']);
   });
 });

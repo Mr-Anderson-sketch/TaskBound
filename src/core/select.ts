@@ -213,6 +213,14 @@ export function logbook(data: Data): Task[] {
   return data.tasks.filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
 }
 
+/** Open and done children of `parentId` (Task 4.3 addendum ruling 2), ordered by
+ * `order` then `createdAt` — the detail pane's sub-task list and the flattened row
+ * model's indented children share this one query. Does not recurse (sub-tasks are one
+ * level only, per ruling 3's "Only one level"). */
+export function childrenOf(data: Data, parentId: Id): Task[] {
+  return data.tasks.filter((t) => t.parentId === parentId).sort(byOrderThenCreated);
+}
+
 export interface DayStats {
   date: Ymd;
   completed: number;

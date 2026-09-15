@@ -2,13 +2,20 @@
 // (Task 4.1 addendum rulings 1 and 4) and renders them, virtualising any section over
 // 60 rows (always, for the Logbook) with `@tanstack/react-virtual`.
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { CSSProperties, KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { CSS } from '@dnd-kit/utilities';
 import type { Data, Task } from '../../core/types';
 import { INBOX_ID } from '../../core/defaults';
-import { todayTasks, upcomingGroups, tasksInList, tasksWithTag, logbook, dayStats } from '../../core/select';
+import { todayTasks, upcomingGroups, tasksInList, tasksWithTag, logbook, dayStats, childrenOf } from '../../core/select';
 import { ymd, addDays, dayKeyForRollover } from '../../core/dates';
 import { longDayLabel } from '../lib/dateLabels';
+import { flattenWithChildren, childProgress } from './rowModel';
+import type { FlatRow } from './rowModel';
 import { TaskRow, shortDateLabel, rowDomId } from './TaskRow';
 
 export type ViewId = 'today' | 'upcoming' | 'inbox' | 'logbook' | `list:${string}` | `tag:${string}`;
@@ -21,6 +28,13 @@ export interface TaskListSection {
   /** The single task (if any) to render with the "current" row styling. */
   currentId?: string;
   forceVirtual?: boolean;
+  /** Task 4.3 addendum ruling 2: Today, Inbox, list, and tag sections show a task's
+   * open sub-tasks indented directly under it; Upcoming and Logbook never do. */
+  showChildren?: boolean;
+  /** Task 4.3 addendum ruling 4: drag reorder is scoped to Today's "Up next", Inbox,
+   * list, and tag sections — never Upcoming, Logbook, or Today's "Current"/"Done"
+   * (a 1-task section, and a section not ordered by `order` at all, respectively). */
+  draggable?: boolean;
 }
 
 export interface ResolvedView {
@@ -48,9 +62,9 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
   if (view === 'today') {
     const { current, upNext, done } = todayTasks(data, now);
     const sections: TaskListSection[] = [];
-    if (current) sections.push({ key: 'current', label: 'Current', ariaLabel: 'Current', tasks: [current], currentId: current.id });
-    if (upNext.length > 0) sections.push({ key: 'upnext', label: 'Up next', ariaLabel: 'Up next', tasks: upNext });
-    if (done.length > 0) sections.push({ key: 'done', label: 'Done', ariaLabel: 'Done', tasks: done });
+    if (current) sections.push({ key: 'current', label: 'Current', ariaLabel: 'Current', tasks: [current], currentId: current.id, showChildren: true });
+    if (upNext.length > 0) sections.push({ key: 'upnext', label: 'Up next', ariaLabel: 'Up next', tasks: upNext, showChildren: true, draggable: true });
+    if (done.length > 0) sections.push({ key: 'done', label: 'Done', ariaLabel: 'Done', tasks: done, showChildren: true });
     const stats = dayStats(data, dayKeyForRollover(now), now);
     const meta = `${longDayLabel(now)} · ${stats.done} of ${stats.planned} done · ${formatFocus(stats.focusSeconds)} focused`;
     return { title: 'Today', meta, sections, isEmpty: !current && upNext.length === 0 && done.length === 0 };
@@ -69,7 +83,12 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
 
   if (view === 'inbox') {
     const tasks = tasksInList(data, INBOX_ID);
-    return { title: 'Inbox', meta: `${tasks.length} open`, sections: [{ key: 'inbox', ariaLabel: 'Inbox', tasks }], isEmpty: tasks.length === 0 };
+    return {
+      title: 'Inbox',
+      meta: `${tasks.length} open`,
+      sections: [{ key: 'inbox', ariaLabel: 'Inbox', tasks, showChildren: true, draggable: true }],
+      isEmpty: tasks.length === 0
+    };
   }
 
   if (view === 'logbook') {
@@ -87,13 +106,23 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
     const list = data.lists.find((l) => l.id === listId);
     const title = list?.name ?? 'List';
     const tasks = tasksInList(data, listId);
-    return { title, meta: `${tasks.length} open`, sections: [{ key: listId, ariaLabel: title, tasks }], isEmpty: tasks.length === 0 };
+    return {
+      title,
+      meta: `${tasks.length} open`,
+      sections: [{ key: listId, ariaLabel: title, tasks, showChildren: true, draggable: true }],
+      isEmpty: tasks.length === 0
+    };
   }
 
   const tag = view.slice('tag:'.length);
   const title = `#${tag}`;
   const tasks = tasksWithTag(data, tag);
-  return { title, meta: `${tasks.length} open`, sections: [{ key: `tag:${tag}`, ariaLabel: title, tasks }], isEmpty: tasks.length === 0 };
+  return {
+    title,
+    meta: `${tasks.length} open`,
+    sections: [{ key: `tag:${tag}`, ariaLabel: title, tasks, showChildren: true, draggable: true }],
+    isEmpty: tasks.length === 0
+  };
 }
 
 /** The flat, ordered list of every visible task id across `sections` (section headers
@@ -125,8 +154,74 @@ export interface SectionHandle {
   scrollToId: (id: string) => boolean;
 }
 
+interface RenderRow {
+  task: Task;
+  depth: 0 | 1;
+  posinset: number;
+  setsize: number;
+  progress?: string;
+}
+
+/** Expands `section.tasks` into the rows TaskRow actually renders (Task 4.3 addendum
+ * ruling 2): each open sub-task gets its own indented row right after its parent
+ * (`section.showChildren` sections only — Upcoming/Logbook never call this with
+ * children present). `posinset`/`setsize` keep the ORIGINAL top-level numbering scheme
+ * for top-level rows (child rows "don't count as top-level rows") and get their own,
+ * scoped to the parent's own open children, for indented rows. `progress` ("<done>/
+ * <total>") is computed for every top-level row that has any children, regardless of
+ * whether this section shows them as their own rows. */
+function decorateRows(section: TaskListSection, data: Data): RenderRow[] {
+  const flat: FlatRow[] = section.showChildren ? flattenWithChildren(section.tasks, data) : section.tasks.map((t) => ({ task: t, depth: 0 as const }));
+  const out: RenderRow[] = [];
+  let topIndex = 0;
+  let childIndex = 0;
+  let currentParentId: string | undefined;
+  for (const r of flat) {
+    if (r.depth === 0) {
+      topIndex += 1;
+      childIndex = 0;
+      currentParentId = r.task.id;
+      out.push({ task: r.task, depth: 0, posinset: topIndex, setsize: section.tasks.length, progress: childProgress(data, r.task.id) });
+    } else {
+      childIndex += 1;
+      const setsize = currentParentId !== undefined ? childrenOf(data, currentParentId).filter((c) => c.status === 'open').length : 1;
+      out.push({ task: r.task, depth: 1, posinset: childIndex, setsize });
+    }
+  }
+  return out;
+}
+
+interface RowRenderProps {
+  now: number;
+  current: boolean;
+  selected: boolean;
+  editing: boolean;
+  onSelect: (task: Task) => void;
+  onToggle: (task: Task) => void;
+  onEditSave?: (task: Task, title: string) => void;
+  onEditCancel?: () => void;
+  onOpenDetail?: (task: Task) => void;
+  onTagClick?: (tag: string) => void;
+}
+
+/** A top-level row inside a DRAGGABLE, non-virtualised section's `SortableContext`
+ * (Task 4.3 addendum ruling 4): `useSortable` supplies the drag handle behaviour
+ * (`attributes`/`listeners`), the live drag transform, and `isDragging` for the "lifts
+ * with --surface and a 1 px --line outline" styling. Only ever mounted inside that
+ * `SortableContext` — see `Section` below — so the hook always has a provider. */
+function DraggableRow({ r, ...rest }: { r: RenderRow } & RowRenderProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.task.id });
+  const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition: transition ?? undefined };
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? 'drag-lift' : undefined} {...attributes} {...listeners}>
+      <TaskRow task={r.task} posinset={r.posinset} setsize={r.setsize} depth={r.depth} progress={r.progress} {...rest} />
+    </div>
+  );
+}
+
 interface SectionProps {
   section: TaskListSection;
+  data: Data;
   now: number;
   selectedId?: string;
   onSelect: (task: Task) => void;
@@ -134,18 +229,33 @@ interface SectionProps {
   editingId?: string;
   onEditSave?: (task: Task, title: string) => void;
   onEditCancel?: () => void;
+  onOpenDetail?: (task: Task) => void;
+  onTagClick?: (tag: string) => void;
+  /** `task/move { afterId }` for a drop within this section (Task 4.3 addendum ruling
+   * 4) — `afterId: null` for "dropped at the top". */
+  onReorder?: (taskId: string, afterId: string | null) => void;
   fill: boolean;
 }
 
 const Section = forwardRef<SectionHandle, SectionProps>(function Section(
-  { section, now, selectedId, onSelect, onToggle, editingId, onEditSave, onEditCancel, fill },
+  { section, data, now, selectedId, onSelect, onToggle, editingId, onEditSave, onEditCancel, onOpenDetail, onTagClick, onReorder, fill },
   ref
 ) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const virtual = section.forceVirtual === true || section.tasks.length > VIRTUALIZE_THRESHOLD;
+  const rows = decorateRows(section, data);
+  // Virtualisation uses the flattened row model INCLUDING children (ruling 2) — a
+  // section with few top-level tasks but many open sub-tasks can still cross the
+  // threshold. Drag, conversely, is disabled once virtualised (ruling 4).
+  const virtual = section.forceVirtual === true || rows.length > VIRTUALIZE_THRESHOLD;
+  const dragEnabled = section.draggable === true && !virtual;
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const virtualizer = useVirtualizer({
-    count: section.tasks.length,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: OVERSCAN,
@@ -156,7 +266,7 @@ const Section = forwardRef<SectionHandle, SectionProps>(function Section(
     ref,
     () => ({
       scrollToId(id: string) {
-        const index = section.tasks.findIndex((t) => t.id === id);
+        const index = rows.findIndex((r) => r.task.id === id);
         if (index === -1) return false;
         if (virtual) {
           virtualizer.scrollToIndex(index, { align: 'auto' });
@@ -166,29 +276,51 @@ const Section = forwardRef<SectionHandle, SectionProps>(function Section(
         return true;
       }
     }),
-    [section.tasks, virtual, virtualizer]
+    [rows, virtual, virtualizer]
   );
 
-  // aria-setsize/aria-posinset (fix round 1, item 3): every option row reports its
-  // 1-based position and the section's total count, for virtualised and plain
-  // rendering alike — a screen reader can't otherwise tell a virtualised listbox's true
-  // extent from the handful of rows actually in the DOM at once.
-  const setsize = section.tasks.length;
-  const row = (task: Task, index: number) => (
-    <TaskRow
-      key={task.id}
-      task={task}
-      now={now}
-      current={section.currentId === task.id}
-      selected={selectedId === task.id}
-      posinset={index + 1}
-      setsize={setsize}
-      onSelect={onSelect}
-      onToggle={onToggle}
-      editing={editingId === task.id}
-      onEditSave={onEditSave}
-      onEditCancel={onEditCancel}
-    />
+  const rowProps = (r: RenderRow): RowRenderProps => ({
+    now,
+    current: section.currentId === r.task.id,
+    selected: selectedId === r.task.id,
+    editing: editingId === r.task.id,
+    onSelect,
+    onToggle,
+    onEditSave,
+    onEditCancel,
+    onOpenDetail,
+    onTagClick
+  });
+
+  const renderRow = (r: RenderRow) =>
+    dragEnabled && r.depth === 0 ? (
+      <DraggableRow key={r.task.id} r={r} {...rowProps(r)} />
+    ) : (
+      <TaskRow key={r.task.id} task={r.task} posinset={r.posinset} setsize={r.setsize} depth={r.depth} progress={r.progress} {...rowProps(r)} />
+    );
+
+  // task/move's afterId reorders within the task's CURRENT sibling group — dnd-kit's
+  // SortableContext is scoped to just this section's TOP-LEVEL ids (children move with
+  // their parent automatically: they're looked up by parentId, not array position, so a
+  // parent's new order never detaches them). Dropping outside this SortableContext (a
+  // different section) leaves `over` unmatched below and dnd-kit snaps the row back on
+  // its own — "dropping onto another section is not supported".
+  const topLevelIds = section.tasks.map((t) => t.id);
+  const handleDragEnd = (event: DragEndEvent): void => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !onReorder) return;
+    const oldIndex = topLevelIds.indexOf(String(active.id));
+    const newIndex = topLevelIds.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(topLevelIds, oldIndex, newIndex);
+    const pos = reordered.indexOf(String(active.id));
+    onReorder(String(active.id), pos === 0 ? null : reordered[pos - 1]);
+  };
+
+  const listbox = (
+    <div role="listbox" aria-label={section.ariaLabel}>
+      {rows.map((r) => renderRow(r))}
+    </div>
   );
 
   // No wrapping element around the label + listbox pair: both are direct children of
@@ -211,15 +343,19 @@ const Section = forwardRef<SectionHandle, SectionProps>(function Section(
                 key={vi.key}
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, height: vi.size, transform: `translateY(${vi.start}px)` }}
               >
-                {row(section.tasks[vi.index], vi.index)}
+                {renderRow(rows[vi.index])}
               </div>
             ))}
           </div>
         </div>
+      ) : dragEnabled ? (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis]} onDragEnd={handleDragEnd}>
+          <SortableContext items={topLevelIds} strategy={verticalListSortingStrategy}>
+            {listbox}
+          </SortableContext>
+        </DndContext>
       ) : (
-        <div role="listbox" aria-label={section.ariaLabel}>
-          {section.tasks.map((task, i) => row(task, i))}
-        </div>
+        listbox
       )}
     </>
   );
@@ -239,6 +375,7 @@ export interface TaskListHandle {
 
 export interface TaskListProps {
   sections: TaskListSection[];
+  data: Data;
   now: number;
   selectedId?: string;
   onSelect: (task: Task) => void;
@@ -246,6 +383,14 @@ export interface TaskListProps {
   editingId?: string;
   onEditSave?: (task: Task, title: string) => void;
   onEditCancel?: () => void;
+  /** Task 4.3 addendum ruling 3: opens the detail pane (Enter is wired by
+   * usePlannerKeys directly against `selectedId`; this handles a row's own
+   * double-click/chevron). */
+  onOpenDetail?: (task: Task) => void;
+  /** Task 4.3 addendum ruling 6: clicking a row's tag chip navigates to that tag's view. */
+  onTagClick?: (tag: string) => void;
+  /** Task 4.3 addendum ruling 4: a drop within a draggable section. */
+  onReorder?: (taskId: string, afterId: string | null) => void;
   /** Task 4.2 addendum ruling 6: the container is focusable and owns the keyboard
    * model — `usePlannerKeys` supplies the keydown handler and which row id is
    * "active" for `aria-activedescendant`. */
@@ -258,7 +403,22 @@ export interface TaskListProps {
  * virtualised Logbook needs to actually get the vertical space to scroll in. With
  * several sections (Today, Upcoming) the whole list scrolls together instead. */
 export const TaskList = forwardRef<TaskListHandle, TaskListProps>(function TaskList(
-  { sections, now, selectedId, onSelect, onToggle, editingId, onEditSave, onEditCancel, onKeyDown, activeDescendantId },
+  {
+    sections,
+    data,
+    now,
+    selectedId,
+    onSelect,
+    onToggle,
+    editingId,
+    onEditSave,
+    onEditCancel,
+    onOpenDetail,
+    onTagClick,
+    onReorder,
+    onKeyDown,
+    activeDescendantId
+  },
   ref
 ) {
   const fill = sections.length === 1;
@@ -317,6 +477,7 @@ export const TaskList = forwardRef<TaskListHandle, TaskListProps>(function TaskL
             sectionRefs.current.set(s.key, el);
           }}
           section={s}
+          data={data}
           now={now}
           selectedId={selectedId}
           onSelect={onSelect}
@@ -324,6 +485,9 @@ export const TaskList = forwardRef<TaskListHandle, TaskListProps>(function TaskL
           editingId={editingId}
           onEditSave={onEditSave}
           onEditCancel={onEditCancel}
+          onOpenDetail={onOpenDetail}
+          onTagClick={onTagClick}
+          onReorder={onReorder}
           fill={fill}
         />
       ))}

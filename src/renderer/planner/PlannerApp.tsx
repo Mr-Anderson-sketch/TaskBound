@@ -25,6 +25,7 @@ import { rowDomId } from './TaskRow';
 import { usePlannerKeys, runPaletteAction } from './usePlannerKeys';
 import type { MenuState } from './usePlannerKeys';
 import { snoozeOptions } from './keys';
+import { Detail } from './Detail';
 
 const THREE_COL_MIN_WIDTH = 900;
 
@@ -151,6 +152,16 @@ export function PlannerApp() {
     return () => ro.disconnect();
   }, []);
 
+  // --- reduced motion: fold prefers-reduced-motion + the in-app setting (same as
+  // StripApp.tsx) — drives the drag-reorder transform animation off via the existing
+  // `body[data-reduced-motion='true'] *` rule (Task 4.3 addendum ruling 4). -----------
+  useEffect(() => {
+    const setting = snapshot?.data.settings.reducedMotion ?? 'system';
+    const systemReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const reduced = setting === 'on' || (setting === 'system' && systemReduced);
+    document.body.dataset.reducedMotion = String(reduced);
+  }, [snapshot?.data.settings.reducedMotion]);
+
   // --- keyboard undo/redo (addendum ruling 3, Task 2.4): Ctrl+Z / ⌘Z -> undo; Ctrl+Shift+Z,
   // Ctrl+Y / ⌘⇧Z -> redo. Skipped while focus is inside a text input or textarea. ---
   useEffect(() => {
@@ -219,6 +230,12 @@ export function PlannerApp() {
   const defaultListId = view.startsWith('list:') ? view.slice('list:'.length) : undefined;
   const menuTask = keys.menu ? snapshot.data.tasks.find((t) => t.id === keys.menu!.taskId) : undefined;
   const menuAnchor = keys.menu ? document.getElementById(rowDomId(keys.menu.taskId)) : null;
+  // Task 4.3 addendum ruling 3: layout "three" gets a fixed 300 px column; layout "two"
+  // expands inline under the row as a card anchored to that row's own DOM element (the
+  // same "anchor a floating card under the selected row" technique the snooze/due/move
+  // menu above already uses).
+  const detailTask = keys.detailOpenId ? snapshot.data.tasks.find((t) => t.id === keys.detailOpenId) : undefined;
+  const detailAnchor = detailTask && layout === 'two' ? document.getElementById(rowDomId(detailTask.id)) : null;
 
   // No prop on TitleBar (out of this task's file scope) exposes its capture field
   // programmatically — clicking its own trigger button reuses TitleBar's existing
@@ -238,8 +255,8 @@ export function PlannerApp() {
         onMinimize={() => void window.tb.invoke('planner:minimize')}
         onClose={() => void window.tb.invoke('planner:hide')}
       />
-      <div className="body">
-        <Rail data={snapshot.data} view={view} now={now} onSelect={selectView} />
+      <div className={detailTask && layout === 'three' ? 'body has-detail' : 'body'}>
+        <Rail data={snapshot.data} view={view} now={now} onSelect={selectView} dispatchOwn={dispatchOwn} />
         <div className="main">
           <div className="h">
             <span className="d">{resolved.title}</span>
@@ -251,6 +268,7 @@ export function PlannerApp() {
             <TaskList
               ref={taskListRef}
               sections={resolved.sections}
+              data={snapshot.data}
               now={now}
               selectedId={selectedId}
               activeDescendantId={selectedId}
@@ -259,11 +277,45 @@ export function PlannerApp() {
               editingId={keys.editingId}
               onEditSave={keys.onEditSave}
               onEditCancel={keys.onEditCancel}
+              onOpenDetail={(task) => keys.openDetail(task.id)}
+              onTagClick={(tag) => selectView(`tag:${tag}`)}
+              onReorder={(taskId, afterId) => dispatchOwn({ type: 'task/move', id: taskId, afterId })}
               onKeyDown={keys.onKeyDown}
             />
           )}
         </div>
+        {detailTask && layout === 'three' && (
+          <Detail
+            task={detailTask}
+            data={snapshot.data}
+            now={now}
+            dispatchOwn={dispatchOwn}
+            onClose={keys.closeDetail}
+            onNavigateTag={(tag) => selectView(`tag:${tag}`)}
+          />
+        )}
       </div>
+
+      {detailTask && layout === 'two' && detailAnchor && (
+        <div
+          className="detail-inline"
+          style={{
+            position: 'fixed',
+            top: detailAnchor.getBoundingClientRect().bottom + 4,
+            left: detailAnchor.getBoundingClientRect().left,
+            width: Math.max(340, detailAnchor.getBoundingClientRect().width)
+          }}
+        >
+          <Detail
+            task={detailTask}
+            data={snapshot.data}
+            now={now}
+            dispatchOwn={dispatchOwn}
+            onClose={keys.closeDetail}
+            onNavigateTag={(tag) => selectView(`tag:${tag}`)}
+          />
+        </div>
+      )}
 
       {keys.menu && menuTask && menuAnchor && (
         <TaskActionMenu
