@@ -12,6 +12,13 @@ export interface LaunchOptions {
   legacyStateFixture?: string;
   /** Extra environment variables. */
   env?: Record<string, string>;
+  /** Task 5.4: most specs launch a clean data dir and don't expect the first-run
+   * onboarding palette to appear (it would steal the window they're about to assert
+   * on). By default this launcher sets `TIMEBOUND_SKIP_ONBOARDING=1`, which main.ts
+   * honours only under `TIMEBOUND_E2E=1` (inert in production), so onboarding never
+   * shows unless a spec opts in with `onboarding: true` — e2e/onboarding.spec.ts is
+   * the only one that does, to exercise the real first-run path. */
+  onboarding?: boolean;
 }
 
 export interface Launched {
@@ -55,6 +62,8 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<Launched> {
   // Exposes globalThis.__tb (store/strip/palette/planner/hotkeys/tray) for e2e specs.
   // Never set outside of tests — see main.ts's "test seam" comment.
   env.TIMEBOUND_E2E = '1';
+  // See LaunchOptions.onboarding above: default on (skip), off only when opted in.
+  if (!opts.onboarding) env.TIMEBOUND_SKIP_ONBOARDING = '1';
   Object.assign(env, opts.env ?? {});
 
   const executablePath = path.join(ROOT, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');

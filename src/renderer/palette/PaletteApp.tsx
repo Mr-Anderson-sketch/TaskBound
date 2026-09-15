@@ -1,11 +1,11 @@
 // renderer/palette/PaletteApp — the keyboard-sheets window shell. Capture, PlanToday,
-// and CloseDay are built out; `commands`/`onboarding` are still a deliberate `// Slice 2`
+// CloseDay, and Onboarding are built out; `commands` is still a deliberate `// Slice 2`
 // stub. `key={sessionId}` (bumped on every `palette:mode`, even a re-show of the SAME
 // mode) forces a full remount of whichever child is active, so each session starts with
 // fresh state — Capture already achieved this itself via its own `palette:mode`
 // listener (unaffected: remounting it is equivalent, and its unmount-cleanup effect
-// still cancels any pending post-paste hide timer); PlanToday/CloseDay rely on the
-// remount instead of duplicating that listener logic.
+// still cancels any pending post-paste hide timer); PlanToday/CloseDay/Onboarding rely
+// on the remount instead of duplicating that listener logic.
 import { useEffect, useRef, useState } from 'react';
 import type { PaletteMode } from '../../shared/ipc';
 import { useApplyTheme } from '../theme/ThemeProvider';
@@ -13,6 +13,7 @@ import { useSnapshot } from '../lib/useStore';
 import { Capture } from './Capture';
 import { PlanToday } from './PlanToday';
 import { CloseDay } from './CloseDay';
+import { Onboarding } from './Onboarding';
 
 // Task 2.3, addendum ruling 6: cap what we ever report so a very long candidate list
 // (its own `.list` already scrolls internally) can't grow the window past this.
@@ -72,8 +73,10 @@ export function PaletteApp() {
         <PlanToday key={sessionId} snapshot={snapshot} />
       ) : mode === 'close' ? (
         <CloseDay key={sessionId} data={snapshot.data} />
+      ) : mode === 'onboarding' ? (
+        <Onboarding key={sessionId} snapshot={snapshot} />
       ) : (
-        <div className="stub">Coming soon</div> /* Slice 2: commands, onboarding */
+        <div className="stub">Coming soon</div> /* Slice 2: commands */
       )}
     </div>
   );

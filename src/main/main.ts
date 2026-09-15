@@ -264,6 +264,33 @@ if (!gotLock) {
     const plannerWindow = new PlannerWindow({ preloadPath, rendererUrl });
     planner = plannerWindow;
 
+    // --- onboarding (Task 5.4) ----------------------------------------------------
+
+    // Clarification (supersedes the plan's original wording): e2e/launch.ts sets
+    // TIMEBOUND_SKIP_ONBOARDING=1 by default so the many existing specs that launch a
+    // clean data dir and don't expect onboarding stay unaffected; only main honouring
+    // it, and only under TIMEBOUND_E2E=1, keeps this env var inert in production (a
+    // real user's env could never accidentally suppress their own first run).
+    // e2e/onboarding.spec.ts passes `{ onboarding: true }` to the launcher, which
+    // omits the var so the real first-run path runs end to end.
+    const skipOnboardingForE2E = process.env.TIMEBOUND_E2E === '1' && process.env.TIMEBOUND_SKIP_ONBOARDING === '1';
+    if (!store.get().data.settings.onboardingDone && !skipOnboardingForE2E) {
+      // Binding ruling: "after the strip appears, main shows the palette in
+      // `onboarding` mode" — strip.create() already arranged its own first
+      // `did-finish-load` -> showInactive() above; registering a second listener for
+      // the same event (Node's EventEmitter calls listeners in registration order)
+      // guarantees this fires strictly after that, never racing it.
+      const showOnboarding = (): void => {
+        if (!palette.webContents?.isDestroyed()) palette.show('onboarding');
+      };
+      const stripWc = strip.webContents;
+      if (stripWc && !stripWc.isDestroyed()) {
+        stripWc.once('did-finish-load', showOnboarding);
+      } else {
+        showOnboarding();
+      }
+    }
+
     // --- broadcast: store changes and system theme changes reach every live window ---
 
     function liveWebContents(): WebContents[] {

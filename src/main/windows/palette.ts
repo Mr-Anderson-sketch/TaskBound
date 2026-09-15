@@ -17,7 +17,11 @@ const MODE_CONTENT_HEIGHT: Record<PaletteMode, number> = {
   plan: 360,
   close: 260,
   commands: HEIGHT,
-  onboarding: HEIGHT
+  // Task 5.4: onboarding's three cards run noticeably taller than capture's fixed
+  // 132 px (spacious density, a title, body copy, and an embedded control) — 320 px
+  // pre-sizes close to the real content so the ResizeObserver-driven
+  // `palette:reportSize` refinement below only has to make a small correction.
+  onboarding: 320
 };
 // Task 2.3, addendum ruling 9b: a `blur` that lands within this window of `show()`
 // is treated as the stray tail of a `hide()` that happened earlier in the same tick

@@ -121,13 +121,8 @@ export function StripSection({ strip, capabilities, platform, dispatchOwn }: Str
       </SettingRow>
 
       {platform === 'darwin' && (
-        <SettingRow
-          label="Menu bar mode"
-          hint="Shows the current task in the menu bar instead."
-          disabled
-          disabledHint="Coming in a later update"
-        >
-          {(id) => <Toggle checked={strip.menuBarMode} onChange={() => {}} labelledBy={id} disabled />}
+        <SettingRow label="Menu bar mode" hint="Shows the current task in the menu bar instead.">
+          {(id) => <Toggle checked={strip.menuBarMode} onChange={(v) => patch({ menuBarMode: v })} labelledBy={id} />}
         </SettingRow>
       )}
     </>
