@@ -45,6 +45,8 @@ function makeWindows(): WindowCommands {
     dataExport: vi.fn(async () => ({})),
     dataImport: vi.fn(async () => ({})),
     dataChooseDir: vi.fn(async () => ({})),
+    dataListBackups: vi.fn(async () => []),
+    dataRestoreBackup: vi.fn(async () => ({ ok: true })),
     hotkeysTest: vi.fn(() => ({ ok: true })),
     timerToggle: vi.fn()
   };
@@ -94,6 +96,8 @@ const VALID_PAYLOADS: Record<string, unknown[]> = {
   'data:export': ['json'],
   'data:import': [],
   'data:chooseDir': [],
+  'data:listBackups': [],
+  'data:restoreBackup': ['/tmp/backups/data-2026-01-01.json'],
   'hotkeys:test': ['Control+Alt+Space'],
   'timer:toggle': []
 };
@@ -124,6 +128,8 @@ describe('registerIpc', () => {
         'data:export',
         'data:import',
         'data:chooseDir',
+        'data:listBackups',
+        'data:restoreBackup',
         'hotkeys:test',
         'timer:toggle'
       ].sort()
@@ -263,6 +269,30 @@ describe('registerIpc', () => {
     const { handlers } = setup();
 
     await expect(handlers.get('strip:setEdge')!(eventFrom(ALLOWED_ORIGIN), 'left')).rejects.toThrow(IpcRejected);
+  });
+
+  it('forwards data:listBackups to windows', async () => {
+    const { handlers, windows } = setup();
+    (windows.dataListBackups as ReturnType<typeof vi.fn>).mockResolvedValueOnce(['/data/backups/data-2026-01-01.json']);
+
+    const result = await handlers.get('data:listBackups')!(eventFrom(ALLOWED_ORIGIN));
+
+    expect(result).toEqual(['/data/backups/data-2026-01-01.json']);
+  });
+
+  it('forwards a valid data:restoreBackup path to windows', async () => {
+    const { handlers, windows } = setup();
+
+    await handlers.get('data:restoreBackup')!(eventFrom(ALLOWED_ORIGIN), '/data/backups/data-2026-01-01.json');
+
+    expect(windows.dataRestoreBackup).toHaveBeenCalledWith('/data/backups/data-2026-01-01.json');
+  });
+
+  it('rejects data:restoreBackup with an empty path', async () => {
+    const { handlers, windows } = setup();
+
+    await expect(handlers.get('data:restoreBackup')!(eventFrom(ALLOWED_ORIGIN), '')).rejects.toThrow(IpcRejected);
+    expect(windows.dataRestoreBackup).not.toHaveBeenCalled();
   });
 
   it('forwards store:undo/redo results from the Store', async () => {

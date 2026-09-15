@@ -2,6 +2,7 @@
 // daily backup rotation (rolling 30), corruption recovery, and legacy state.json import.
 // No Electron import: main.ts supplies `dir` (derived via paths.ts) and `now`.
 import * as fsReal from 'node:fs/promises';
+import { watch as fsWatch } from 'node:fs';
 import path from 'node:path';
 import type { Data } from '../core/types';
 import { parseData } from '../core/schema';
@@ -351,4 +352,113 @@ export async function load(deps: PersistDeps, appVersion: string, legacyPath?: s
   const data = createEmptyData(deps.now(), appVersion);
   await save(deps, data);
   return { data, source: 'empty', ...(corruptSavedAs ? { corruptSavedAs } : {}) };
+}
+
+// --- watcher (Task 5.3) -----------------------------------------------------------
+
+const WATCH_DEBOUNCE_MS = 500;
+
+export interface WatchDataFileDeps extends PersistDeps {
+  /** Reads the CURRENT in-memory Data, fresh on every check — never cached across
+   * events (the store may have dispatched more actions between watch callbacks). */
+  getCurrentData: () => Data;
+}
+
+export interface DataWatcher {
+  stop: () => void;
+}
+
+/**
+ * Watches `dir/data.json` for changes made OUTSIDE this process (another TimeBound
+ * instance, a synced-folder tool, manual editing) and reconciles them against the
+ * live in-memory `Data`, debounced 500 ms:
+ *  - Same `meta.lastSavedAt` as in memory: an echo of our own `save()` (which persists
+ *    the in-memory data verbatim, `lastSavedAt` included) — ignored.
+ *  - A strictly NEWER `meta.lastSavedAt`: a genuine external update — `onExternalChange`
+ *    is called with the parsed `Data` so the caller can `store.replace(newData)`.
+ *  - An OLDER `meta.lastSavedAt`: the in-memory data has unsaved changes newer than
+ *    what just landed on disk (divergence) — the external file is preserved at
+ *    `data.conflict-<ts>.json` and `data.json` is overwritten with the current
+ *    in-memory data via `save()`, keeping the in-memory data as the source of truth.
+ *    `onExternalChange` is NOT called (nothing changed in memory).
+ * An unreadable/invalid file (e.g. a transient partial write by whatever external
+ * tool is writing) is silently ignored — the next change event retries.
+ *
+ * Watches the DIRECTORY rather than the file path itself: `save()`'s own
+ * temp-file-then-rename (and most "atomic" external writers, e.g. a synced-folder
+ * client) replaces the file's inode, which stops a file-level `fs.watch` dead on some
+ * platforms. Directory-level events are filtered down to the data file by name (a
+ * `null` filename — some platforms never report one — is treated as "check anyway").
+ * Stop with `.stop()` on quit and when switching data folders.
+ */
+export function watchDataFile(deps: WatchDataFileDeps, onExternalChange: (data: Data) => void): DataWatcher {
+  const fs = fsOf(deps);
+  const dp = dataPath(deps);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  let handling = false;
+  let pending = false;
+
+  async function handleChange(): Promise<void> {
+    if (handling) {
+      pending = true;
+      return;
+    }
+    handling = true;
+    try {
+      const outcome = await readAndValidate(deps, dp);
+      if (outcome.kind !== 'valid') return; // missing or invalid: ignore, next event retries
+
+      const current = deps.getCurrentData();
+      const incoming = outcome.data;
+      if (incoming.meta.lastSavedAt === current.meta.lastSavedAt) return; // our own write, echoed back
+
+      if (incoming.meta.lastSavedAt > current.meta.lastSavedAt) {
+        onExternalChange(incoming);
+        return;
+      }
+
+      // Divergence: in-memory is newer than what just landed on disk. Preserve the
+      // external file, then reassert the in-memory data as data.json.
+      const conflictPath = path.join(deps.dir, `data.conflict-${deps.now()}.json`);
+      await fs.copyFile(dp, conflictPath).catch(() => {});
+      await save(deps, current);
+    } catch (err) {
+      deps.log?.(`persist: watcher reconciliation failed (${errorCode(err) ?? 'error'})`);
+    } finally {
+      handling = false;
+      if (!stopped && pending) {
+        pending = false;
+        void handleChange();
+      }
+    }
+  }
+
+  function scheduleCheck(): void {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      void handleChange();
+    }, WATCH_DEBOUNCE_MS);
+  }
+
+  const watcher = fsWatch(deps.dir, (_eventType, filename) => {
+    if (stopped) return;
+    if (filename === null || filename === DATA_FILE) scheduleCheck();
+  });
+  watcher.on('error', (err) => {
+    deps.log?.(`persist: data dir watcher error (${errorCode(err) ?? 'error'})`);
+  });
+
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      watcher.close();
+    }
+  };
 }

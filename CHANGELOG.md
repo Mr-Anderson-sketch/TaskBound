@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Data (2026-09-15)
+- Data: export and import JSON or Markdown, keep your data in any folder (even a synced one), and restore from daily backups.
+
 ### Windows integration (2026-09-15)
 - Windows: optionally reserve screen space for the strip, and hide it over full-screen apps.
 

@@ -51,6 +51,8 @@ export type InvokeMap = {
   'data:export': (format: 'json' | 'md') => { path?: string };
   'data:import': () => { imported?: number; error?: string };
   'data:chooseDir': () => { dir?: string };
+  'data:listBackups': () => string[];
+  'data:restoreBackup': (backupPath: string) => { ok: boolean; error?: string };
   'hotkeys:test': (accelerator: string) => { ok: boolean; reason?: string };
   /** Starts or pauses the current task's timer (main resolves "current"; in pomodoro
    * mode, starting dispatches `timer/startSession` instead of `timer/start` — see

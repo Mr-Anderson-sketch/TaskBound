@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { save, load, listBackups, cleanOrphans } from '../../src/main/persist';
-import type { PersistDeps } from '../../src/main/persist';
+import { save, load, listBackups, cleanOrphans, watchDataFile } from '../../src/main/persist';
+import type { PersistDeps, WatchDataFileDeps } from '../../src/main/persist';
 import { createEmptyData } from '../../src/core/defaults';
 import { ymd } from '../../src/core/dates';
 import type { Data } from '../../src/core/types';
@@ -370,4 +370,108 @@ describe('cleanOrphans', () => {
     const deps = makeDeps(dir, () => localMs(2026, 1, 5));
     await expect(cleanOrphans(deps)).resolves.toBeUndefined();
   });
+});
+
+describe('watchDataFile', () => {
+  // Real fs.watch + real timers: give the 500 ms debounce real time to settle, plus
+  // slack for filesystem event latency.
+  const SETTLE_MS = 900;
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  it('calls onExternalChange with the parsed data when a newer, valid file appears', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 5, 1);
+    const inMemory = createEmptyData(now, APP_VERSION);
+    await save(makeDeps(dir, () => now), inMemory);
+
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+    const onExternalChange = vi.fn();
+    const watcher = watchDataFile(deps, onExternalChange);
+    try {
+      const later = now + 60_000;
+      const external = { ...createEmptyData(later, APP_VERSION), meta: { ...createEmptyData(later, APP_VERSION).meta, lastSavedAt: later } };
+      // Write directly (not via save()) to simulate another process/tool.
+      await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
+
+      await sleep(SETTLE_MS);
+
+      expect(onExternalChange).toHaveBeenCalledTimes(1);
+      expect(onExternalChange.mock.calls[0][0]).toEqual(external);
+    } finally {
+      watcher.stop();
+    }
+  }, 10000);
+
+  it('ignores its own write (same meta.lastSavedAt as in-memory)', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 5, 2);
+    const inMemory = createEmptyData(now, APP_VERSION);
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+
+    const onExternalChange = vi.fn();
+    const watcher = watchDataFile(deps, onExternalChange);
+    try {
+      // Our own save() of the SAME data the store already holds (same lastSavedAt).
+      await save(deps, inMemory);
+      await sleep(SETTLE_MS);
+      expect(onExternalChange).not.toHaveBeenCalled();
+    } finally {
+      watcher.stop();
+    }
+  }, 10000);
+
+  it('on divergence (in-memory newer than the file), preserves the external file as a conflict copy and rewrites data.json from memory', async () => {
+    const dir = await mkTmpDir();
+    const base = localMs(2026, 5, 3);
+    const older = createEmptyData(base, APP_VERSION);
+    await save(makeDeps(dir, () => base), older);
+
+    const newer = { ...createEmptyData(base + 5000, APP_VERSION), meta: { ...older.meta, lastSavedAt: base + 5000 } };
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => base + 5000), getCurrentData: () => newer };
+
+    const onExternalChange = vi.fn();
+    const watcher = watchDataFile(deps, onExternalChange);
+    try {
+      // An external tool overwrites data.json with something OLDER than in-memory.
+      const external = { ...createEmptyData(base - 1000, APP_VERSION), meta: { ...older.meta, lastSavedAt: base - 1000 } };
+      await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
+
+      await sleep(SETTLE_MS);
+
+      expect(onExternalChange).not.toHaveBeenCalled();
+
+      const entries = await realFs.readdir(dir);
+      const conflictFiles = entries.filter((f) => f.startsWith('data.conflict-'));
+      expect(conflictFiles.length).toBe(1);
+      const conflictContent = JSON.parse(await realFs.readFile(path.join(dir, conflictFiles[0]), 'utf8'));
+      expect(conflictContent).toEqual(external);
+
+      const onDisk = JSON.parse(await realFs.readFile(path.join(dir, 'data.json'), 'utf8'));
+      expect(onDisk).toEqual(newer);
+    } finally {
+      watcher.stop();
+    }
+  }, 10000);
+
+  it('stops reacting after stop()', async () => {
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 5, 4);
+    const inMemory = createEmptyData(now, APP_VERSION);
+    await save(makeDeps(dir, () => now), inMemory);
+
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+    const onExternalChange = vi.fn();
+    const watcher = watchDataFile(deps, onExternalChange);
+    watcher.stop();
+
+    const later = now + 60_000;
+    const external = { ...createEmptyData(later, APP_VERSION), meta: { ...createEmptyData(later, APP_VERSION).meta, lastSavedAt: later } };
+    await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
+
+    await sleep(SETTLE_MS);
+
+    expect(onExternalChange).not.toHaveBeenCalled();
+  }, 10000);
 });
