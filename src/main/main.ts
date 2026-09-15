@@ -5,9 +5,12 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor, Notification, BrowserWindow } from 'electron';
+import * as fsp from 'node:fs/promises';
+import { app, session, nativeTheme, ipcMain, shell, dialog, globalShortcut, powerMonitor, Notification, BrowserWindow } from 'electron';
 import type { WebContents } from 'electron';
-import { load, save } from './persist';
+import { load, save, listBackups, watchDataFile, createWriteTracker, hasValidDataFile, prepareDirSwitch, resolveBackupPath } from './persist';
+import type { PersistDeps, DataWatcher } from './persist';
+import { readDataLocationPointer, writeDataLocationPointer } from './dataLocation';
 import { resolveDataDir } from './paths';
 import { Store } from './store';
 import { registerIpc } from './ipc';
@@ -22,6 +25,8 @@ import { Clock, resolveToggleTimerAction } from './clock';
 import { Notifier } from './notify';
 import { loadWin32 } from './win32';
 import { FullscreenWatcher } from './win32/watcher';
+import { toJson, toMarkdown, fromJson, fromMarkdown, importPlan, validateImportActions } from '../core/export';
+import { ymd } from '../core/dates';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
 
@@ -88,7 +93,44 @@ if (!gotLock) {
       });
     });
 
-    const result = await load({ dir: dataDir, now: Date.now }, app.getVersion(), legacyPath);
+    // Task 5.3: the data dir can move at runtime (data:chooseDir). `currentDataDir`
+    // is the one mutable source of truth every persist call below reads fresh via
+    // `persistDeps()` — never capture `dataDir` directly again below this point.
+    // `userDataDir` (Electron's own, never redirected) is where the data-location
+    // pointer file itself always lives, regardless of where the DATA currently does.
+    const userDataDir = app.getPath('userData');
+    const writeTracker = createWriteTracker();
+    let currentDataDir = dataDir;
+    function persistDeps(): PersistDeps & { writeTracker: typeof writeTracker } {
+      return { dir: currentDataDir, now: Date.now, writeTracker };
+    }
+
+    // Fix round 2, items 2+3: a previous session's data:chooseDir writes a pointer
+    // file (data-location.json) into the DEFAULT userData folder — never only into
+    // the new folder, which the NEXT launch (always starting from the default
+    // folder) would otherwise never see. Honored here unless TIMEBOUND_DATA_DIR
+    // forces a specific dir (e.g. under test). The redirected folder is adopted
+    // ONLY if its data.json exists and is currently valid (`hasValidDataFile`, a
+    // pure check with no side effects) — a missing, unmounted, or not-yet-synced
+    // folder must never get files created in it just because the app looked at it;
+    // `dataLocationUnavailable` records that folder's path for the (future) settings
+    // UI to surface, and the app stays on the default folder for this session.
+    let dataLocationUnavailable: string | undefined;
+    if (!process.env.TIMEBOUND_DATA_DIR) {
+      const pointer = await readDataLocationPointer(userDataDir);
+      if (pointer) {
+        const redirected = path.resolve(pointer);
+        if (redirected !== currentDataDir) {
+          if (await hasValidDataFile({ dir: redirected, now: Date.now })) {
+            currentDataDir = redirected;
+          } else {
+            dataLocationUnavailable = redirected;
+          }
+        }
+      }
+    }
+
+    const result = await load(persistDeps(), app.getVersion(), legacyPath);
 
     // Task 7.1: resolve the optional win32 integration (AppBar space reservation +
     // fullscreen detection) BEFORE the Store exists, so `capabilities` — reported
@@ -101,13 +143,101 @@ if (!gotLock) {
     const capabilities = { appBar: !!win32, fullscreenDetect: !!win32 };
 
     const store = new Store(result.data, {
-      save: (d) => save({ dir: dataDir, now: Date.now }, d),
+      save: (d) => save(persistDeps(), d),
       now: Date.now,
       appVersion: app.getVersion(),
       platform: process.platform,
       systemDark: () => nativeTheme.shouldUseDarkColors,
-      capabilities
+      capabilities,
+      dataLocationUnavailable
     });
+
+    // --- data folder watcher (Task 5.3): reconciles external changes to data.json
+    // (another instance, a synced folder, manual editing) against the live store. ---
+
+    let watcher: DataWatcher | undefined;
+    function startWatcher(): void {
+      watcher?.stop();
+      watcher = watchDataFile(
+        { ...persistDeps(), getCurrentData: () => store.get().data, hasPendingSave: () => store.hasPendingSave() },
+        (newData) => store.replace(newData)
+      );
+    }
+    startWatcher();
+
+    // --- export / import / data folder / backups (Task 5.3) -----------------------
+    // Factored out of the `windows.data*` thunks below so the e2e seam
+    // (`globalThis.__tb.data`) can call the exact same code paths without going
+    // through a real `dialog` — see main's "test seam" section further down.
+
+    async function exportToFile(format: 'json' | 'md', filePath: string): Promise<{ path?: string }> {
+      const data = store.get().data;
+      const text = format === 'json' ? toJson(data) : toMarkdown(data);
+      await fsp.writeFile(filePath, text, 'utf8');
+      return { path: filePath };
+    }
+
+    async function importFromFile(filePath: string): Promise<{ imported?: number; error?: string }> {
+      try {
+        const text = await fsp.readFile(filePath, 'utf8');
+        const isMarkdown = path.extname(filePath).toLowerCase() === '.md';
+        const shape = isMarkdown
+          ? fromMarkdown(text, Date.now(), randomUUID)
+          : (({ tasks, lists }) => ({ tasks, lists }))(fromJson(text));
+        const actions = importPlan(store.get().data, shape, Date.now(), randomUUID);
+        // Fix round 2, item 5: validate the WHOLE plan before dispatching ANY of it —
+        // a partially-applied import (some actions dispatched, one later rejected)
+        // is worse than none, and an action that fails here would otherwise only be
+        // caught much later, at persistence-time validation, looking like corruption.
+        const validationError = validateImportActions(actions);
+        if (validationError) return { error: validationError };
+        for (const action of actions) store.dispatch(action);
+        return { imported: actions.filter((a) => a.type === 'task/add').length };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : 'Import failed' };
+      }
+    }
+
+    async function switchDataDir(newDirRaw: string): Promise<{ dir?: string; error?: string }> {
+      const newDir = path.resolve(newDirRaw);
+      if (newDir === currentDataDir) return { dir: newDir };
+
+      // Fix round 2, item 4: decide adopt-existing / refuse-invalid / fresh-save —
+      // never blindly overwrite a folder that already holds someone else's data.
+      const outcome = await prepareDirSwitch({ dir: newDir, now: Date.now, writeTracker }, store.get().data);
+      if (outcome.kind === 'refused') return { error: outcome.error };
+
+      watcher?.stop();
+      currentDataDir = newDir;
+      // Fix round 2, item 2: the pointer always lives in the DEFAULT folder, so the
+      // NEXT launch (which always starts there) can find it.
+      await writeDataLocationPointer(userDataDir, newDir);
+
+      if (outcome.kind === 'adopted') store.replace(outcome.data);
+
+      startWatcher();
+      store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { dataDir: newDir } });
+      return { dir: newDir };
+    }
+
+    async function restoreBackupFile(backupPath: string): Promise<{ ok: boolean; error?: string }> {
+      // Fix round 2, item 6: resolves symlinks/junctions on both sides before
+      // checking containment — a plain path.relative on the unresolved paths can't
+      // catch a link inside backups/ that points outside it.
+      const resolved = await resolveBackupPath(persistDeps(), backupPath);
+      if (!resolved) {
+        return { ok: false, error: 'Backup path is outside the backups folder.' };
+      }
+      try {
+        const text = await fsp.readFile(resolved, 'utf8');
+        const data = fromJson(text); // same validation load() applies (parseData)
+        store.replace(data);
+        await save(persistDeps(), data);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Restore failed' };
+      }
+    }
 
     const strip = new StripWindow({ store, preloadPath, rendererUrl, isDev, win32 });
     strip.create();
@@ -378,10 +508,29 @@ if (!gotLock) {
         plannerMinimize: () => plannerWindow.minimize(),
         openExternal: (url) => shell.openExternal(url),
         quit: () => app.quit(),
-        // Slice 5: data export/import/choose-dir are not implemented yet.
-        dataExport: () => ({}),
-        dataImport: () => ({ error: 'not yet' }),
-        dataChooseDir: () => ({}),
+        dataExport: async (format) => {
+          const result = await dialog.showSaveDialog({
+            defaultPath: `TimeBound-${ymd(Date.now())}.${format}`,
+            filters: [format === 'json' ? { name: 'JSON', extensions: ['json'] } : { name: 'Markdown', extensions: ['md'] }]
+          });
+          if (result.canceled || !result.filePath) return {};
+          return exportToFile(format, result.filePath);
+        },
+        dataImport: async () => {
+          const result = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [{ name: 'TimeBound data', extensions: ['json', 'md'] }]
+          });
+          if (result.canceled || result.filePaths.length === 0) return {};
+          return importFromFile(result.filePaths[0]);
+        },
+        dataChooseDir: async () => {
+          const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+          if (result.canceled || result.filePaths.length === 0) return {};
+          return switchDataDir(result.filePaths[0]);
+        },
+        dataListBackups: () => listBackups(persistDeps()),
+        dataRestoreBackup: (backupPath) => restoreBackupFile(backupPath),
         hotkeysTest: (accelerator) => validateAccelerator(accelerator),
         hotkeysStatus: () => hotkeyStatus,
         timerToggle: () => toggleTimer()
@@ -406,6 +555,7 @@ if (!gotLock) {
       // it was never granted).
       strip.releaseAppBarReservation();
       fullscreenWatcher?.stop();
+      watcher?.stop();
       plannerWindow.setQuitting(true);
       hotkeys.unregisterAll();
       clock.stop();
@@ -451,6 +601,13 @@ if (!gotLock) {
         tray,
         clock,
         notifier,
+        // Task 5.3: lets e2e/data.spec.ts exercise export/import/dir-switching without
+        // a real OS `dialog` — the exact same code the real IPC handlers call.
+        data: {
+          exportTo: (format: 'json' | 'md', filePath: string) => exportToFile(format, filePath),
+          importFrom: (filePath: string) => importFromFile(filePath),
+          switchDir: (dir: string) => switchDataDir(dir)
+        },
         // Task 7.1 (win32.spec.ts): capabilities are already in every Snapshot, but
         // the watcher itself needs a direct seam — `setFullscreenStub` overrides
         // `isForegroundFullscreen`'s result without a real other app going

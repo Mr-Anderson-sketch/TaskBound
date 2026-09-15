@@ -28,6 +28,8 @@ const ALLOWED_INVOKE = new Set<keyof InvokeMap>([
   'data:export',
   'data:import',
   'data:chooseDir',
+  'data:listBackups',
+  'data:restoreBackup',
   'hotkeys:test',
   'hotkeys:status',
   'timer:toggle'

@@ -35,7 +35,9 @@ export interface WindowCommands {
   quit(): void | Promise<void>;
   dataExport(format: 'json' | 'md'): { path?: string } | Promise<{ path?: string }>;
   dataImport(): { imported?: number; error?: string } | Promise<{ imported?: number; error?: string }>;
-  dataChooseDir(): { dir?: string } | Promise<{ dir?: string }>;
+  dataChooseDir(): { dir?: string; error?: string } | Promise<{ dir?: string; error?: string }>;
+  dataListBackups(): string[] | Promise<string[]>;
+  dataRestoreBackup(backupPath: string): { ok: boolean; error?: string } | Promise<{ ok: boolean; error?: string }>;
   hotkeysTest(accelerator: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
   hotkeysStatus():
     | Record<'capture' | 'toggleStrip' | 'completeAdvance' | 'toggleTimer' | 'undo', boolean>
@@ -85,6 +87,7 @@ const UrlSchema = z
   .refine((u) => u.startsWith('http:') || u.startsWith('https:'), 'url must be http: or https:');
 const ExportFormatSchema = z.enum(['json', 'md']);
 const AcceleratorSchema = z.string().max(64);
+const BackupPathSchema = z.string().min(1).max(4096);
 
 /** Normalises a `file:` URL's drive letter to uppercase before the trust-prefix
  * comparison (fix round 1, finding 13): Windows drive letters are case-insensitive,
@@ -239,6 +242,16 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('data:chooseDir', async (event: IpcMainInvokeEvent) => {
     guard(event);
     return windows.dataChooseDir();
+  });
+
+  ipcMain.handle('data:listBackups', async (event: IpcMainInvokeEvent) => {
+    guard(event);
+    return windows.dataListBackups();
+  });
+
+  ipcMain.handle('data:restoreBackup', async (event: IpcMainInvokeEvent, backupPath: unknown) => {
+    guard(event);
+    return windows.dataRestoreBackup(parse(BackupPathSchema, backupPath));
   });
 
   ipcMain.handle('hotkeys:test', async (event: IpcMainInvokeEvent, accelerator: unknown) => {
