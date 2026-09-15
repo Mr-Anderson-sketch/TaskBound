@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Capture (2026-09-15)
+- Quick capture now parses as you type: dates/times, `#tags`, `/list`, durations (`25m`, `1h30`), and repeats show up as live token chips beneath the input. Escape once keeps whatever you typed as a literal title (wraps it in quotes); Escape again closes. Pasting several lines adds one task per line.
+
 ### Focus strip (2026-09-15)
 - The app now launches straight into a 32 px focus strip docked to the bottom of your screen — the old sticky-note main window is gone.
 - The strip shows your current task, a running/paused/overtime timer chip, and a hairline progress bar for today; hover it to open a panel with today's next few tasks (complete, skip, or snooze without leaving the strip).

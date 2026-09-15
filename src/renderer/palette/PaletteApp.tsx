@@ -1,5 +1,6 @@
 // renderer/palette/PaletteApp — the keyboard-sheets window shell. Capture is built out
-// (title-only, per the brief); every other mode is a deliberate `// Slice 2` stub.
+// (live natural-language parsing with token chips, Task 2.2); every other mode is a
+// deliberate `// Slice 2` stub.
 import { useEffect, useState } from 'react';
 import type { PaletteMode } from '../../shared/ipc';
 import { useApplyTheme } from '../theme/ThemeProvider';
@@ -26,5 +27,9 @@ export function PaletteApp() {
 
   if (!snapshot) return null;
 
-  return <div className="palette">{mode === 'capture' ? <Capture /> : <div className="stub">Coming soon</div> /* Slice 2 */}</div>;
+  return (
+    <div className="palette">
+      {mode === 'capture' ? <Capture lists={snapshot.data.lists} /> : <div className="stub">Coming soon</div> /* Slice 2 */}
+    </div>
+  );
 }

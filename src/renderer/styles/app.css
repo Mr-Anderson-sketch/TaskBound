@@ -438,8 +438,17 @@ body[data-reduced-motion='true'] * {
    Palette
 --------------------------------------------------------------------------------- */
 
+/* Belt-and-suspenders against the palette's fixed 560x132 content window (sized in
+   src/main/windows/palette.ts, out of this task's scope) ever showing a native OS
+   scrollbar: the palette's own layout below is tuned to fit exactly, but this keeps any
+   rounding/overflow silent rather than visible. */
+body[data-route='palette'] {
+  overflow: hidden;
+}
+
 .palette {
   width: 560px;
+  height: 132px;
   background: var(--surface);
   color: var(--ink);
   overflow: hidden;
@@ -452,6 +461,7 @@ body[data-reduced-motion='true'] * {
   align-items: center;
   gap: 10px;
   height: 48px;
+  flex: none;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -470,6 +480,41 @@ body[data-reduced-motion='true'] * {
   color: var(--muted);
 }
 
+.palette .tokens {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 8px 16px;
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.palette .tokens::-webkit-scrollbar {
+  display: none;
+}
+
+.tok {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-1);
+  font-size: 12px;
+  background: var(--accent-tint);
+  color: var(--ink);
+  flex: none;
+  white-space: nowrap;
+}
+
+.tok .k {
+  color: var(--muted);
+}
+
 .palette .stub {
   padding: 16px;
   color: var(--muted);
@@ -483,10 +528,28 @@ body[data-reduced-motion='true'] * {
 
 .palette .foot {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 6px 16px 10px;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 6px 16px;
   font-size: 11px;
   color: var(--muted);
+  overflow: hidden;
+}
+
+.palette .foot span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette .foot span:last-child {
+  flex: none;
+  white-space: nowrap;
 }
 
 .palette .foot kbd {

@@ -187,7 +187,16 @@ export function reduce(data: Data, action: Action): Data {
       case 'timer/addTime': // implemented in Task 3.1
         break;
 
-      case 'list/add': // implemented in Task 4.3
+      case 'list/add': {
+        const name = action.name.trim();
+        const idExists = draft.lists.some((l) => l.id === action.id);
+        const nameExists = draft.lists.some((l) => l.name.toLowerCase() === name.toLowerCase());
+        if (idExists || nameExists) break;
+        const order = draft.lists.length > 0 ? Math.max(...draft.lists.map((l) => l.order)) + 1000 : 1000;
+        draft.lists.push({ id: action.id, name, order, createdAt: action.now });
+        break;
+      }
+
       case 'list/rename': // implemented in Task 4.3
       case 'list/delete': // implemented in Task 4.3
         break;

@@ -70,7 +70,6 @@ describe('reducer: tasks', () => {
     expect(reduce(d, { type: 'timer/pause', id: 'a', now: t0 })).toBe(before);
     expect(reduce(d, { type: 'timer/stop', id: 'a', now: t0 })).toBe(before);
     expect(reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 5 })).toBe(before);
-    expect(reduce(d, { type: 'list/add', id: 'l1', now: t0, name: 'Work' })).toBe(before);
     expect(reduce(d, { type: 'list/rename', id: INBOX_ID, now: t0, name: 'Inbox2' })).toBe(before);
     expect(reduce(d, { type: 'list/delete', id: INBOX_ID, now: t0, moveTasksTo: INBOX_ID })).toBe(before);
     expect(reduce(d, { type: 'day/rollover', now: t0, date: '2026-09-14' })).toBe(before);
@@ -155,6 +154,41 @@ describe('reducer: settings/patch', () => {
     d = reduce(d, { type: 'settings/patch', now: t0, patch: { strip: { positions: { d1: { x: 1, y: 2 } } } } });
     d = reduce(d, { type: 'settings/patch', now: t0, patch: { strip: { positions: { d2: { x: 3, y: 4 } } } } });
     expect(d.settings.strip.positions).toEqual({ d2: { x: 3, y: 4 } });
+  });
+});
+describe('reducer: list/add', () => {
+  it('appends a list with order = max(order)+1000 and createdAt = now', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'l1', now: t0 + 1, name: 'Work' });
+    expect(d.lists).toEqual([
+      { id: INBOX_ID, name: 'Inbox', order: 1000, createdAt: t0 },
+      { id: 'l1', name: 'Work', order: 2000, createdAt: t0 + 1 }
+    ]);
+  });
+  it('trims the name', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'l1', now: t0, name: '  Work  ' });
+    expect(d.lists.find(l => l.id === 'l1')!.name).toBe('Work');
+  });
+  it('order is 1000 when there are no existing lists', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = { ...d, lists: [] };
+    d = reduce(d, { type: 'list/add', id: 'l1', now: t0, name: 'Work' });
+    expect(d.lists).toEqual([{ id: 'l1', name: 'Work', order: 1000, createdAt: t0 }]);
+  });
+  it('no-ops when a list with the same id already exists', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'l1', now: t0, name: 'Work' });
+    const before = d;
+    d = reduce(d, { type: 'list/add', id: 'l1', now: t0 + 1, name: 'Other name' });
+    expect(d).toBe(before);
+  });
+  it('no-ops when a list with the same name already exists (case-insensitive)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const before = d;
+    d = reduce(d, { type: 'list/add', id: 'l2', now: t0, name: 'inbox' });
+    expect(d).toBe(before);
+    expect(d.lists).toHaveLength(1);
   });
 });
 describe('reducer: data/replace', () => {
