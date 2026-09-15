@@ -25,9 +25,9 @@ import {
   stripVisible
 } from './displays';
 import type { DisplayLike, Rect } from './displays';
-import { appBarRectDip, appBarSignature, hwndValue, rectPxToRect, rectToRectPx } from '../win32/geometry';
-import type { RectPx } from '../win32/geometry';
 import type { Win32 } from '../win32';
+import { AppBarReservation } from './appBarReservation';
+import type { ScreenEvents } from './appBarReservation';
 
 // Task 7.1 fix round 1 (I-1): the DIP<->physical-pixel conversion for the AppBar
 // request/grant, via Electron's own OS-correct (Windows) conversion — NOT a manual
@@ -75,6 +75,13 @@ export interface StripWindowDeps {
    * to get `grantedRectDip`, defaulting to the real `screen.screenToDipRect(null,
    * rect)`. */
   screenToDipRect?: (rect: Rect) => Rect;
+  /** Fix round 2: injectable stand-in for Electron's `screen` as an event source
+   * (`on`/`removeListener` for `display-added`/`display-removed`/
+   * `display-metrics-changed`) — defaults to the real `screen`. Tests inject a plain
+   * `EventEmitter` so `AppBarReservation`'s quit-latch behavior (detach-before-
+   * release, so `ABM_REMOVE`'s own `display-metrics-changed` can't re-enter a fresh
+   * reserve) is exercisable without a real Electron display. */
+  screenEvents?: ScreenEvents;
 }
 
 type StripState = { expanded: boolean; hidden: boolean };
@@ -121,24 +128,13 @@ export class StripWindow {
   private lastShapeRect: Rect | undefined;
   private shapeErrorLogged = false;
 
-  // Task 7.1: AppBar reservation state. `appBarSignature` is `display id : edge :
-  // content height` for whatever configuration is CURRENTLY reserved (or
-  // `undefined` if nothing is) — `syncAppBar` only re-sends ABM_NEW/QUERYPOS/SETPOS
-  // when this changes, so a redock triggered by an unrelated store notification (or
-  // a 60 Hz drag tick) doesn't hammer `SHAppBarMessage`. `grantedRectDip`/
-  // `grantedDisplayId` are the last GRANTED rect (converted to DIPs) and the display
-  // it was granted for — `dockBounds` only uses it while docking onto that SAME
-  // display (see `redock`'s doc comment on why a stale cross-monitor grant must
-  // never be used).
-  private appBarSignature: string | undefined;
-  private grantedRectDip: Rect | undefined;
-  private grantedDisplayId: number | undefined;
-  /** Task 7.1 fix round 1 (C-1): the raw hwnd VALUE (not a `Buffer`) captured at the
-   * moment `reserve()` last succeeded — `releaseAppBar` uses this (via
-   * `appBar.releaseByValue`) instead of re-reading `this.win.getNativeWindowHandle()`,
-   * which can no longer be called once the window is destroyed. `undefined` whenever
-   * `appBarSignature` is (no active reservation). */
-  private reservedHwndValue: bigint | undefined;
+  // Task 7.1 fix round 2: AppBar reservation state (signature/grant/hwnd bookkeeping
+  // and the reserve/release dance) now lives in `AppBarReservation` — see that
+  // module's header comment for why it's a separate, Electron-free unit. `StripWindow`
+  // still owns the `disposed` latch itself (below) since its ON/OFF lifecycle differs
+  // between the two teardown paths (`cleanup()` resets it; `releaseAppBarReservation()`
+  // never does).
+  private readonly appBarReservation: AppBarReservation;
   /** Task 7.1 fix round 1 (C-1): set by `releaseAppBarReservation()` (the
    * `before-quit` path) and by `cleanup()` (the `destroy()`/`closed` path) — once
    * set, `syncAppBar` refuses to re-reserve. Without this latch, `ABM_REMOVE` itself
@@ -172,6 +168,12 @@ export class StripWindow {
     this.settings = snapshot.data.settings.strip;
     this.size = { width: this.settings.width, height: STRIP_HEIGHT_DEFAULT };
     this.dockedRect = { x: 0, y: 0, width: this.size.width, height: this.size.height };
+    this.appBarReservation = new AppBarReservation({
+      appBar: deps.win32?.appBar,
+      screenEvents: deps.screenEvents ?? screen,
+      dipToScreenRect: deps.dipToScreenRect ?? defaultDipToScreenRect,
+      screenToDipRect: deps.screenToDipRect ?? defaultScreenToDipRect
+    });
   }
 
   /** Task 1.9 needs this to send `strip:state` (and other) events to the strip's
@@ -193,7 +195,7 @@ export class StripWindow {
    * `reserveSpace` off, or the reservation failed). Read by e2e/win32.spec.ts to
    * assert the strip docks flush against it. */
   get grantedRect(): Rect | undefined {
-    return this.grantedRectDip;
+    return this.appBarReservation.grantedRect;
   }
 
   // --- lifecycle -----------------------------------------------------------------
@@ -262,9 +264,7 @@ export class StripWindow {
       if (this.win === win) this.cleanup();
     });
 
-    screen.on('display-added', this.onDisplaysChanged);
-    screen.on('display-removed', this.onDisplaysChanged);
-    screen.on('display-metrics-changed', this.onDisplaysChanged);
+    this.appBarReservation.attach(this.onDisplaysChanged);
 
     this.unsubscribeStore = this.deps.store.subscribe((snapshot) => {
       this.applySettings(snapshot.data.settings.strip);
@@ -303,20 +303,18 @@ export class StripWindow {
    * change — so this must not assume `destroy()` is the only way out). Idempotent:
    * safe to run twice (once from `destroy()`, once more if `closed` then fires). */
   private cleanup(): void {
-    // Task 7.1 fix round 1 (C-1): set the disposed latch and remove the screen
-    // listeners BEFORE releasing — same order as `releaseAppBarReservation()` below,
-    // and for the same reason: `ABM_REMOVE` itself can trigger a
+    // Task 7.1 fix round 1 (C-1): set the disposed latch and detach the reservation's
+    // screen listeners BEFORE releasing — same order as `releaseAppBarReservation()`
+    // below, and for the same reason: `ABM_REMOVE` itself can trigger a
     // `display-metrics-changed` event, and that must never reach `onDisplaysChanged`
     // (-> redock -> syncAppBar -> a fresh reserve) again once we're tearing down.
     this.disposed = true;
-    screen.removeListener('display-added', this.onDisplaysChanged);
-    screen.removeListener('display-removed', this.onDisplaysChanged);
-    screen.removeListener('display-metrics-changed', this.onDisplaysChanged);
-    // `releaseAppBar` no longer needs `this.win` (it releases by the STORED hwnd
-    // value — see `reservedHwndValue`'s doc comment), so it works correctly here even
-    // when this `cleanup()` run is the window's own `closed` handler, where
+    this.appBarReservation.detach();
+    // `release()` no longer needs `this.win` (it releases by the STORED hwnd value —
+    // see `AppBarReservation`'s doc comment), so it works correctly here even when
+    // this `cleanup()` run is the window's own `closed` handler, where
     // `this.win.isDestroyed()` is already true.
-    this.releaseAppBar();
+    this.appBarReservation.release();
     this.stopDragTimers();
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -345,10 +343,10 @@ export class StripWindow {
     this.manuallyHidden = false;
     this.fullscreenHidden = false;
     this.menuBarHidden = false;
-    // Reset LAST: everything above (including `releaseAppBar()`'s own reset of
-    // `appBarSignature`/`grantedRectDip`/`grantedDisplayId`/`reservedHwndValue`) must
-    // see `disposed === true` throughout this synchronous cleanup pass — only a
-    // hypothetical future `create()` should ever see it `false` again.
+    // Reset LAST: everything above (including `appBarReservation.release()`'s own
+    // reset of its signature/grant/hwnd state) must see `disposed === true`
+    // throughout this synchronous cleanup pass — only a hypothetical future
+    // `create()` should ever see it `false` again.
     this.disposed = false;
     this.win = undefined;
   }
@@ -630,7 +628,7 @@ export class StripWindow {
    * placing the sliver, or a drag tick — I-3, fix round 1) against another display's
    * granted rect. */
   private grantedDipFor(d: DisplayLike): Rect | undefined {
-    return this.grantedDisplayId === d.id ? this.grantedRectDip : undefined;
+    return this.appBarReservation.grantedRectFor(d.id);
   }
 
   private redock(): void {
@@ -649,14 +647,14 @@ export class StripWindow {
   }
 
   /** Task 7.1 ruling 4: claims (or releases) the AppBar reservation for the CURRENT
-   * `settings.reserveSpace`/`settings.enabled`/edge/display/content-height, and
-   * records the granted rect (converted to DIPs) for `redock` to dock against.
-   * Cheap to call on every `redock()` — it only actually talks to
-   * `SHAppBarMessage` when the "reserve for exactly this configuration" signature
-   * changes, so an unrelated redock (a different display's `display-metrics-changed`
-   * event, say) is a no-op.
+   * `settings.reserveSpace`/`settings.enabled`/edge/display/content-height, via
+   * `AppBarReservation.sync` — and records the granted rect (converted to DIPs, read
+   * back through `grantedDipFor`) for `redock` to dock against. Cheap to call on
+   * every `redock()` — `sync()` only actually talks to `SHAppBarMessage` when the
+   * "reserve for exactly this configuration" signature changes, so an unrelated
+   * redock (a different display's `display-metrics-changed` event, say) is a no-op.
    *
-   * Fix round 1 (I-1): the request/grant DIP<->physical conversion now goes through
+   * Fix round 1 (I-1): the request/grant DIP<->physical conversion goes through
    * `screen.dipToScreenRect`/`screenToDipRect` (injectable via `deps`), not a manual
    * `* scaleFactor` — see geometry.ts's header comment for why that matters on a
    * secondary display. (C-1): refuses to reserve at all once `disposed` — see that
@@ -665,73 +663,8 @@ export class StripWindow {
     if (!this.win || this.win.isDestroyed() || this.disposed) return;
     const w32 = this.deps.win32;
     const wantReserve = !!w32 && this.settings.enabled && this.settings.reserveSpace;
-    if (!wantReserve) {
-      this.releaseAppBar();
-      return;
-    }
-    const sig = appBarSignature(d, this.settings.edge, this.size.height);
-    if (this.appBarSignature === sig) return;
-
-    const dipToScreenRect = this.deps.dipToScreenRect ?? defaultDipToScreenRect;
-    const screenToDipRect = this.deps.screenToDipRect ?? defaultScreenToDipRect;
-    const rectDip = appBarRectDip(d, this.settings.edge, this.size.height);
-    const rectPx = rectToRectPx(dipToScreenRect(rectDip));
-
-    const hwndBuffer = this.win.getNativeWindowHandle();
-    let result: { granted: RectPx } | undefined;
-    try {
-      result = w32!.appBar.reserve(hwndBuffer, this.settings.edge, rectPx);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('StripWindow: AppBar reserve failed; docking against the plain work area instead', err);
-      result = undefined;
-    }
-    if (result) {
-      // Only remember the signature on SUCCESS: a failed first-time registration
-      // (ABM_NEW) must be retried on the next redock rather than permanently giving
-      // up until something else (edge/display/height) happens to change the
-      // signature. A hwnd that is already registered cannot fail this way — appbar.ts
-      // only ever skips re-registering, never re-fails, once ABM_NEW has succeeded
-      // once — so this only matters for that very first reservation attempt.
-      this.appBarSignature = sig;
-      this.grantedRectDip = screenToDipRect(rectPxToRect(result.granted));
-      this.grantedDisplayId = d.id;
-      // C-1: captured here (reserve-time), not re-read later — `releaseAppBar` must
-      // still work once the window is destroyed, when `getNativeWindowHandle()` can
-      // no longer be called.
-      this.reservedHwndValue = hwndValue(hwndBuffer);
-    } else {
-      this.grantedRectDip = undefined;
-      this.grantedDisplayId = undefined;
-    }
-  }
-
-  /** Task 7.1: releases any active AppBar reservation (idempotent — safe to call
-   * whether or not one is currently held). Called from `syncAppBar` whenever
-   * reservation is no longer wanted, from `cleanup()` (window destroy/closed), and
-   * from the public `releaseAppBarReservation()` main.ts calls on `before-quit`.
-   *
-   * Fix round 1 (C-1): releases by the STORED hwnd value (`reservedHwndValue`,
-   * `appbar.ts`'s `releaseByValue`) rather than re-reading
-   * `this.win.getNativeWindowHandle()` — the previous version skipped `ABM_REMOVE`
-   * entirely whenever `this.win.isDestroyed()` was already true (exactly the case in
-   * the window's own `closed` cleanup path), silently leaking the reservation. */
-  private releaseAppBar(): void {
-    if (this.appBarSignature === undefined) return;
-    const w32 = this.deps.win32;
-    const hwndVal = this.reservedHwndValue;
-    if (w32 && hwndVal !== undefined) {
-      try {
-        w32.appBar.releaseByValue(hwndVal);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('StripWindow: AppBar release failed', err);
-      }
-    }
-    this.appBarSignature = undefined;
-    this.grantedRectDip = undefined;
-    this.grantedDisplayId = undefined;
-    this.reservedHwndValue = undefined;
+    const hwndBuffer = wantReserve ? this.win.getNativeWindowHandle() : undefined;
+    this.appBarReservation.sync(d, this.settings.edge, this.size.height, wantReserve, hwndBuffer);
   }
 
   /** Task 7.1 ruling 4 ("release on ... app quit"), fix round 1 (C-1): releases any
@@ -741,10 +674,10 @@ export class StripWindow {
    * synchronous, so the OS's own work-area bookkeeping is restored immediately, even
    * if the process then takes a moment to actually exit.
    *
-   * Sets the `disposed` latch and removes the `screen` listeners BEFORE releasing —
-   * `ABM_REMOVE` can itself trigger a `display-metrics-changed` event, and without
-   * this ordering that event would reach `onDisplaysChanged` (-> `redock` ->
-   * `syncAppBar`) and send a FRESH `ABM_NEW`/`SETPOS` moments after this just
+   * Sets the `disposed` latch and detaches the reservation's screen listeners BEFORE
+   * releasing — `ABM_REMOVE` can itself trigger a `display-metrics-changed` event,
+   * and without this ordering that event would reach `onDisplaysChanged` (-> `redock`
+   * -> `syncAppBar`) and send a FRESH `ABM_NEW`/`SETPOS` moments after this just
    * released it: `settings.reserveSpace` is still true at this point (nothing turned
    * it off — this runs unconditionally on quit), so `syncAppBar` would otherwise
    * happily re-reserve, and the reservation would never actually go away. A
@@ -755,10 +688,8 @@ export class StripWindow {
   releaseAppBarReservation(): void {
     if (this.disposed) return;
     this.disposed = true;
-    screen.removeListener('display-added', this.onDisplaysChanged);
-    screen.removeListener('display-removed', this.onDisplaysChanged);
-    screen.removeListener('display-metrics-changed', this.onDisplaysChanged);
-    this.releaseAppBar();
+    this.appBarReservation.detach();
+    this.appBarReservation.release();
   }
 
   private applyVisualBounds(): void {

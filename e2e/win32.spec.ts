@@ -231,16 +231,24 @@ test('quitting with reserveSpace on restores the work area (C-1)', async () => {
   try {
     await launched.window('strip', 5000);
 
-    const before = await launched.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea);
-    originalHeight = before.height;
+    // Fix round 2 (DPI-safe quit e2e): read the "before" height via PowerShell
+    // (physical pixels) — the SAME source `pollPrimaryWorkAreaHeight`/
+    // `primaryWorkAreaHeight` use below, once the Electron process is gone. The
+    // previous version read this via `app.evaluate(({ screen }) =>
+    // screen.getPrimaryDisplay().workArea)`, which is Electron's DIP-space work
+    // area — on any display where `scaleFactor !== 1`, a DIP height never equals
+    // PowerShell's physical-pixel height, so the post-quit restore check below
+    // would spuriously fail (or the pre-quit shrink check spuriously pass/fail)
+    // even when the work area genuinely, correctly came back to its original size.
+    // Comparing PowerShell-to-PowerShell throughout sidesteps the unit mismatch
+    // entirely rather than requiring a scaleFactor-conditional skip.
+    originalHeight = await primaryWorkAreaHeight();
 
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: Tb }).__tb;
       tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: true } } });
     });
-    await expect
-      .poll(async () => launched.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.height), { timeout: 3000 })
-      .toBeLessThan(before.height);
+    await expect.poll(async () => primaryWorkAreaHeight(), { timeout: 3000 }).toBeLessThan(originalHeight);
 
     // The real quit path (Electron's `before-quit`) — deliberately WITHOUT patching
     // `reserveSpace` back to false first. `app.close()` triggers the same app.quit()
@@ -280,9 +288,11 @@ test('quitting with reserveSpace on restores the work area (C-1)', async () => {
             const tb = (globalThis as unknown as { __tb: Tb }).__tb;
             tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: false } } });
           });
-          await expect
-            .poll(async () => recovery.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.height), { timeout: 5000 })
-            .toBe(originalHeight);
+          // Fix round 2: `originalHeight` is now PowerShell-sourced (physical
+          // pixels) — poll the same source here, not Electron's DIP-space
+          // `screen.getPrimaryDisplay().workArea`, to avoid re-introducing the
+          // exact DIP-vs-physical mismatch this fix round removed above.
+          await expect.poll(async () => primaryWorkAreaHeight(), { timeout: 5000 }).toBe(originalHeight);
         } finally {
           await recovery.close();
         }
