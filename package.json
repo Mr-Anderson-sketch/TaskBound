@@ -38,16 +38,29 @@
     "files": [
       "dist/**/*",
       "package.json",
-      "!**/*.map"
+      "!**/*.map",
+      "!**/node_modules/koffi/{src,vendor,doc}/**"
     ],
     "asarUnpack": [
       "**/node_modules/koffi/**"
     ],
     "extraResources": [
-      { "from": "build/icon-16x16.png", "to": "icons/icon-16x16.png" },
-      { "from": "build/icon-32x32.png", "to": "icons/icon-32x32.png" },
-      { "from": "build/trayTemplate.png", "to": "icons/trayTemplate.png" },
-      { "from": "build/trayTemplate@2x.png", "to": "icons/trayTemplate@2x.png" }
+      {
+        "from": "build/icon-16x16.png",
+        "to": "icons/icon-16x16.png"
+      },
+      {
+        "from": "build/icon-32x32.png",
+        "to": "icons/icon-32x32.png"
+      },
+      {
+        "from": "build/trayTemplate.png",
+        "to": "icons/trayTemplate.png"
+      },
+      {
+        "from": "build/trayTemplate@2x.png",
+        "to": "icons/trayTemplate@2x.png"
+      }
     ],
     "extraMetadata": {
       "main": "dist/main/main/main.js"
@@ -59,7 +72,10 @@
         "signingHashAlgorithms": [
           "sha256"
         ]
-      }
+      },
+      "files": [
+        "!**/node_modules/koffi/build/koffi/!(win32_x64|win32_arm64)/**"
+      ]
     },
     "nsis": {
       "oneClick": true,
@@ -78,10 +94,24 @@
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
-    }
+      "gatekeeperAssess": false,
+      "files": [
+        "!**/node_modules/koffi/build/koffi/**"
+      ]
+    },
+    "electronLanguages": [
+      "en-US"
+    ]
   },
   "dependencies": {
+    "date-fns": "^4.1.0",
+    "immer": "^10.1.1",
+    "zod": "^3.24.0"
+  },
+  "optionalDependencies": {
+    "koffi": "^2.10.0"
+  },
+  "devDependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
@@ -89,19 +119,8 @@
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@fontsource/instrument-serif": "^5.3.0",
-    "@tanstack/react-virtual": "^3.13.0",
-    "date-fns": "^4.1.0",
-    "immer": "^10.1.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zod": "^3.24.0"
-  },
-  "optionalDependencies": {
-    "koffi": "^2.10.0",
-    "sharp": "^0.34.5"
-  },
-  "devDependencies": {
     "@playwright/test": "^1.59.0",
+    "@tanstack/react-virtual": "^3.13.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -111,7 +130,10 @@
     "electron": "^44.3.0",
     "electron-builder": "^26.0.0",
     "fast-check": "^3.23.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "rimraf": "^6.0.1",
+    "sharp": "^0.34.5",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "vitest": "^3.0.0",
