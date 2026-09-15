@@ -12,8 +12,8 @@ import {
 } from '../../src/renderer/settings/settingsModel';
 
 describe('SETTINGS_SECTIONS', () => {
-  it('lists strip, hotkeys, timer, theme, startup, score in that order', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['strip', 'hotkeys', 'timer', 'theme', 'startup', 'score']);
+  it('lists strip, hotkeys, timer, theme, startup, score, data in that order', () => {
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['strip', 'hotkeys', 'timer', 'theme', 'startup', 'score', 'data']);
   });
 });
 
