@@ -196,11 +196,12 @@ describe('reducer: tasks', () => {
       d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', recurrence: { kind: 'daily' }, due: { date: '2026-09-14' } });
       const stack = new UndoStack();
       const before = d;
-      stack.push(before, 'Completed "A"');
-      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+      const complete = { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' } as const;
+      stack.push(before, complete, 'Completed "A"');
+      d = reduce(d, complete);
       expect(d.tasks.some(t => t.id === 'a-2')).toBe(true);
 
-      const undone = stack.undo(d);
+      const undone = stack.undo();
       expect(undone?.data).toBe(before);
       expect(undone?.data.tasks.some(t => t.id === 'a-2')).toBe(false);
     });
