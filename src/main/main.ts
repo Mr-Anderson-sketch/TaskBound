@@ -67,18 +67,21 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     installCsp(session.defaultSession, isDev);
 
-    // Task 3.2 fix round 1, minor "break replay": every window replays the CURRENT
-    // pomodoro break state (if any) once its content has actually finished loading —
-    // covers a renderer reload and covers a window (palette/planner are created
-    // lazily, on first show) that comes into existence after a break already
-    // started. Registered before ANY BrowserWindow exists (strip.create() below is
-    // the first) so it never misses that window's own webContents. `clock` is
-    // assigned further down, but this listener's body only ever runs later,
-    // asynchronously, once a page actually finishes loading — always after `clock`
-    // is set.
+    // Task 3.2 fix round 1, minor "break replay" (fix round 2, item 2: `.once` ->
+    // `.on` — a reload, including the automatic one `render-process-gone` below
+    // triggers, is ANOTHER `did-finish-load` on the SAME webContents, not a new one,
+    // so a one-shot listener only ever replayed the break to a window's very first
+    // load): every window replays the CURRENT pomodoro break state (if any) on EVERY
+    // `did-finish-load` — covers a renderer reload and covers a window
+    // (palette/planner are created lazily, on first show) that comes into existence
+    // after a break already started. Registered before ANY BrowserWindow exists
+    // (strip.create() below is the first) so it never misses that window's own
+    // webContents. `clock` is assigned further down, but this listener's body only
+    // ever runs later, asynchronously, once a page actually finishes loading —
+    // always after `clock` is set.
     let clock!: Clock;
     app.on('web-contents-created', (_event, contents) => {
-      contents.once('did-finish-load', () => {
+      contents.on('did-finish-load', () => {
         if (!contents.isDestroyed()) contents.send('timer:break', clock.getCurrentBreak());
       });
     });

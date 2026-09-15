@@ -160,8 +160,12 @@ const SettingsSchema = z
     timer: z
       .object({
         pomodoro: z.boolean(),
-        workMinutes: z.number().positive(),
-        breakMinutes: z.number().positive(),
+        // Task 3.2 fix round 2, item 3: bounded (1..240 minutes = 60..14400 s, the
+        // same range `timer/startSession`'s own schema enforces) — an unbounded
+        // workMinutes fed straight into a pomodoro session's `seconds` with no
+        // reducer-side clamp of its own (unlike timer/addTime).
+        workMinutes: z.number().int().min(1).max(240),
+        breakMinutes: z.number().int().min(1).max(240),
         idlePauseMinutes: z.number().positive(),
         awayThresholdMinutes: z.number().positive(),
         defaultPlannedMinutes: z.number().positive()

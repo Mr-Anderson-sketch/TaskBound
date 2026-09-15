@@ -82,3 +82,42 @@ test('pomodoro: timer expiry pauses the task and starts a break shown on the str
     await launched.close();
   }
 });
+
+// Task 3.2 fix round 2, item 2: a reload (of any kind — a manual devtools reload, or
+// the automatic one `render-process-gone` triggers in main.ts) must replay the CURRENT
+// break, not just the window's very first load. `did-finish-load` fires again on
+// reload for the SAME webContents, so `main.ts` listens with `.on`, not `.once`.
+test('a reloaded strip window replays the active pomodoro break', async () => {
+  const launched = await launchApp();
+  try {
+    const strip = await launched.window('strip', 5000);
+
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
+      tb.store.dispatch({
+        type: 'settings/patch',
+        now: Date.now(),
+        patch: { timer: { pomodoro: true, breakMinutes: 1 } }
+      });
+      tb.store.dispatch({ type: 'task/add', id: 't3', now: Date.now(), title: 'Reload task', today: true, plannedSeconds: 2 });
+      tb.store.dispatch({ type: 'timer/start', id: 't3', now: Date.now() });
+    });
+
+    await expect(strip.locator('.strip')).toHaveAttribute('data-state', 'break', { timeout: 5000 });
+
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: { strip: { webContents?: { reload: () => void } } } }).__tb;
+      tb.strip.webContents?.reload();
+    });
+
+    // Same Page/webContents, just navigated — the break must show again once the
+    // reloaded renderer re-mounts and main replays `timer:break` on THIS load too.
+    await expect(strip.locator('.strip')).toHaveAttribute('data-state', 'break', { timeout: 5000 });
+    await expect(strip.locator('.strip .title')).toContainText('Break');
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});

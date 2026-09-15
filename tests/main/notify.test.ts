@@ -112,10 +112,13 @@ describe('Notifier', () => {
     expect(instances[0].opts).toEqual({ title: "Break's over", body: 'Pick up where you left off', silent: false });
   });
 
-  // Task 3.2 fix round 1, item 2 (Important): Notification objects must be kept
-  // referenced or Electron/the OS can garbage-collect them mid-display, silently
-  // dropping the click handler.
-  it('keeps the Notification instance referenced from `show` until the OS reports it closed', () => {
+  // Task 3.2 fix round 1, item 2 (Important) / fix round 2, item 1: Notification
+  // objects must be kept referenced or Electron/the OS can garbage-collect them
+  // mid-display, silently dropping the click handler. Fix round 2: the reference is
+  // held from immediately BEFORE `show()` is called (not the `'show'` EVENT — nothing
+  // held it between construction and that event firing, or ever if it never fires),
+  // so `liveCount` is already 1 as soon as `timerDone`/`breakDone` returns.
+  it('keeps the Notification instance referenced as soon as it is shown, until the OS reports it closed', () => {
     const { FakeNotification, instances } = makeFakeNotificationCtor();
     const notifier = new Notifier({
       NotificationCtor: FakeNotification as never,
@@ -125,10 +128,7 @@ describe('Notifier', () => {
     });
 
     notifier.timerDone(makeTask());
-    expect(notifier.liveCount).toBe(0); // constructed, but the OS hasn't reported it shown yet
-
-    instances[0].fire('show');
-    expect(notifier.liveCount).toBe(1);
+    expect(notifier.liveCount).toBe(1); // held BEFORE show() — not waiting on a 'show' event that may never fire
 
     instances[0].fire('close');
     expect(notifier.liveCount).toBe(0);
@@ -144,7 +144,6 @@ describe('Notifier', () => {
     });
 
     notifier.timerDone(makeTask());
-    instances[0].fire('show');
     expect(notifier.liveCount).toBe(1);
 
     instances[0].fire('click');
@@ -161,7 +160,6 @@ describe('Notifier', () => {
     });
 
     notifier.timerDone(makeTask());
-    instances[0].fire('show');
     expect(notifier.liveCount).toBe(1);
 
     instances[0].fire('failed');

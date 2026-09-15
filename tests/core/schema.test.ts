@@ -32,6 +32,24 @@ describe('schema', () => {
       }).success
     ).toBe(false);
   });
+  // Task 3.2 fix round 2, item 3: workMinutes/breakMinutes bounded to 1..240 minutes
+  // (60..14400 s, the same range timer/startSession's own schema enforces) — a
+  // pomodoro session length is never free-typed text, so rejecting out-of-range
+  // values here (rather than silently clamping) is safe.
+  it('bounds settings.timer.workMinutes/breakMinutes to 1..240 (integer), and defaultSettings still parses', () => {
+    const d = createEmptyData(1_000, '2.0.0');
+    expect(parseData(JSON.parse(JSON.stringify(d))).settings.timer).toEqual(defaultSettings().timer);
+
+    expect(
+      ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { workMinutes: 240, breakMinutes: 1 } } }).success
+    ).toBe(true);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { workMinutes: 0 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { workMinutes: 241 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { workMinutes: 25.5 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { breakMinutes: 0 } } }).success).toBe(false);
+    expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { breakMinutes: 241 } } }).success).toBe(false);
+  });
+
   it('defaultSettings pins the brief-specified hotkeys and strip defaults', () => {
     const s = defaultSettings();
     expect(s.hotkeys).toEqual({

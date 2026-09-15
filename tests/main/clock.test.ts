@@ -607,6 +607,45 @@ describe('Clock (pomodoro back-to-back sessions — Task 3.2 fix round 1, item 3
   });
 });
 
+describe('Clock (resolveToggleTimerAction clamp — Task 3.2 fix round 2, item 3)', () => {
+  // settings/patch dispatched directly on the Store (as these tests do throughout)
+  // bypasses the zod schema entirely (that only runs at the IPC boundary in
+  // main/ipc.ts) — these simulate a workMinutes value outside the schema's own
+  // 1..240 bound reaching the store anyway (e.g. data written before this fix).
+  it('clamps an oversized workMinutes*60 down to the 14400 s maximum', () => {
+    const now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const store = makeStore(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, workMinutes: 500 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+
+    const action = resolveToggleTimerAction(store.get().today.current, store.get().data.settings, now);
+
+    expect(action).toEqual({ type: 'timer/startSession', id: 'a', now, seconds: 14400 });
+  });
+
+  it('clamps a zero/tiny workMinutes up to the 60 s minimum', () => {
+    const now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const store = makeStore(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, workMinutes: 0 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+
+    const action = resolveToggleTimerAction(store.get().today.current, store.get().data.settings, now);
+
+    expect(action).toEqual({ type: 'timer/startSession', id: 'a', now, seconds: 60 });
+  });
+
+  it('does not clamp an in-range workMinutes', () => {
+    const now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const store = makeStore(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, workMinutes: 25 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+
+    const action = resolveToggleTimerAction(store.get().today.current, store.get().data.settings, now);
+
+    expect(action).toEqual({ type: 'timer/startSession', id: 'a', now, seconds: 1500 });
+  });
+});
+
 describe('Clock (test gaps — Task 3.2 fix round 1, item 3)', () => {
   it('re-arms when runningSince changes (pause then resume) and fires again for the new run', () => {
     let now = new Date(2026, 8, 15, 10, 0, 0).getTime();

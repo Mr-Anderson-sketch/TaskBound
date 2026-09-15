@@ -24,6 +24,14 @@ import type { Store } from './store';
 // well under 24h, so this only matters as a defensive ceiling (per the addendum).
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
+// Task 3.2 fix round 2, item 3: the same 60..14400 s bound `timer/startSession`'s own
+// zod schema enforces at the IPC boundary — `resolveToggleTimerAction` dispatches
+// directly via `store.dispatch` (main.ts), bypassing that validation entirely, so a
+// settings value outside the (now also schema-bounded, 1..240 min) range — e.g. from
+// data written before this fix — must still not reach the reducer unclamped.
+const MIN_SESSION_SECONDS = 60;
+const MAX_SESSION_SECONDS = 14400;
+
 /** Pure decision logic for the `toggleTimer` hotkey/tray-item/`timer:toggle` IPC
  * handler in main.ts — extracted (fix round 1, item 3 minor) so
  * `tests/main/clock.test.ts` can dispatch EXACTLY what main.ts would, without
@@ -40,7 +48,8 @@ export function resolveToggleTimerAction(current: Task | undefined, settings: Se
     return { type: 'timer/pause', id: current.id, now };
   }
   if (settings.timer.pomodoro) {
-    return { type: 'timer/startSession', id: current.id, now, seconds: settings.timer.workMinutes * 60 };
+    const seconds = Math.min(MAX_SESSION_SECONDS, Math.max(MIN_SESSION_SECONDS, settings.timer.workMinutes * 60));
+    return { type: 'timer/startSession', id: current.id, now, seconds };
   }
   return { type: 'timer/start', id: current.id, now };
 }
