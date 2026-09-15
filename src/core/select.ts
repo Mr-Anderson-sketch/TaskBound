@@ -1,7 +1,7 @@
 // core/select — read-only queries over Data. No mutation, no Date.now(): callers pass `now`.
 import type { Data, Task, Id, Ymd } from './types';
 import { INBOX_ID } from './defaults';
-import { dayKeyForRollover, rolloverCutoffMs } from './dates';
+import { dayKeyForRollover, rolloverCutoffMs, ymd, addDays } from './dates';
 
 export interface TodayView {
   current?: Task;
@@ -133,6 +133,84 @@ export function planCandidates(data: Data, now: number): PlanCandidate[] {
   );
 
   return result;
+}
+
+// --- planner (Task 4.1) -----------------------------------------------------------
+
+export interface TodayTasksView {
+  /** `todayView(data, now).current`, but `undefined` when that fell back to the Inbox
+   * (`unplanned`) — the planner's "Current" section only shows a genuine Today task. */
+  current?: Task;
+  /** The remaining open, top-level, non-snoozed Today tasks in order — unlike
+   * `todayView`'s `next`, NOT capped at 5. */
+  upNext: Task[];
+  /** Today tasks completed on the current rollover day (`dayKeyForRollover(now)`),
+   * newest `completedAt` first. May include a task no longer marked `today`. */
+  done: Task[];
+}
+
+/** The planner's Today view (addendum ruling 1): current/up-next reuse the same
+ * open/top-level/non-snoozed candidate ordering as `todayView`, just uncapped; `done`
+ * is a separate, date-scoped query (completed TODAY, not merely `today: true`). */
+export function todayTasks(data: Data, now: number): TodayTasksView {
+  const view = todayView(data, now);
+  const current = view.unplanned ? undefined : view.current;
+  const upNext = view.unplanned ? [] : candidates(data, now, (t) => t.today).slice(1);
+
+  const cutoffDay = dayKeyForRollover(now);
+  const done = data.tasks
+    .filter((t) => t.today && t.status === 'done' && t.completedAt !== undefined && dayKeyForRollover(t.completedAt) === cutoffDay)
+    .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+
+  return { current, upNext, done };
+}
+
+export interface UpcomingGroup {
+  date: Ymd;
+  tasks: Task[];
+}
+
+function byDueTimeThenOrder(a: Task, b: Task): number {
+  return (a.due?.time ?? '').localeCompare(b.due?.time ?? '') || byOrderThenCreated(a, b);
+}
+
+/**
+ * Open, top-level tasks with a `due.date` from tomorrow through `days` days out
+ * (inclusive, `days` from local "today" — a plain calendar date via `ymd(now)`, not the
+ * 4 AM rollover day: `due.date` is itself a calendar date), grouped by date and sorted
+ * ascending; each group's tasks ordered by `due.time` then `order`/`createdAt` (no
+ * `due.time` sorts first). Deliberately does not filter snoozed tasks — like
+ * `tasksInList`, the planner shows everything, not just strip candidates. */
+export function upcomingGroups(data: Data, now: number, days = 14): UpcomingGroup[] {
+  const today = ymd(now);
+  const start = addDays(today, 1);
+  const end = addDays(today, days);
+
+  const byDate = new Map<Ymd, Task[]>();
+  for (const t of data.tasks) {
+    if (t.status !== 'open' || t.parentId !== undefined) continue;
+    const date = t.due?.date;
+    if (date === undefined || date < start || date > end) continue;
+    const group = byDate.get(date);
+    if (group) group.push(t);
+    else byDate.set(date, [t]);
+  }
+
+  return [...byDate.keys()]
+    .sort()
+    .map((date) => ({ date, tasks: byDate.get(date)!.sort(byDueTimeThenOrder) }));
+}
+
+/** Open, top-level tasks carrying `tag`, ordered by `order` then `createdAt`. */
+export function tasksWithTag(data: Data, tag: string): Task[] {
+  return data.tasks
+    .filter((t) => t.status === 'open' && t.parentId === undefined && t.tags.includes(tag))
+    .sort(byOrderThenCreated);
+}
+
+/** Every done task, newest `completedAt` first (undefined `completedAt` sorts last). */
+export function logbook(data: Data): Task[] {
+  return data.tasks.filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
 }
 
 export interface DayStats {

@@ -10,6 +10,10 @@ export interface CaptureContext {
   now: number;
   lists: Array<{ id: string; name: string }>;
   newId: () => string;
+  /** When set, a line with no explicit `/list` token goes to this list instead of
+   * Inbox (Task 4.1 addendum ruling 7: the planner's inline capture defaults new tasks
+   * to the current view's list). An explicit `/list` token always wins. */
+  defaultListId?: string;
 }
 
 export interface CaptureChip {
@@ -70,14 +74,20 @@ function capitalize(name: string): string {
  * case-insensitively, creating the list first (`list/add`) when it doesn't exist yet, then
  * a `task/add` carrying only the fields the parse actually found. `now` is filled from
  * `ctx.now` so every returned action is complete and independently testable/dispatchable.
- * Empty (or whitespace-only) input, after parsing, yields no actions at all. */
-export function actionsFor(input: string, ctx: CaptureContext, opts: { makeCurrent: boolean }): Action[] {
+ * Empty (or whitespace-only) input, after parsing, yields no actions at all.
+ *
+ * `opts.today` (default `true`) is the palette's long-standing behaviour — every capture
+ * goes to Today. The planner's inline capture (Task 4.1 addendum ruling 7) passes `false`
+ * outside the Today view, so new tasks land in the target list/Inbox without also being
+ * added to Today. `ctx.defaultListId` (used when the input has no explicit `/list` token)
+ * lets the planner default to the current view's list; an explicit `/list` always wins. */
+export function actionsFor(input: string, ctx: CaptureContext, opts: { makeCurrent: boolean; today?: boolean }): Action[] {
   const parsed = parseCapture(input, ctx.now, ctx.lists.map((l) => l.name));
   const title = parsed.title.trim();
   if (title === '') return [];
 
   const actions: Action[] = [];
-  let listId: string | undefined;
+  let listId: string | undefined = ctx.defaultListId;
   if (parsed.listName !== undefined) {
     const existing = ctx.lists.find((l) => l.name.toLowerCase() === parsed.listName!.toLowerCase());
     if (existing) {
@@ -93,7 +103,7 @@ export function actionsFor(input: string, ctx: CaptureContext, opts: { makeCurre
     id: ctx.newId(),
     now: ctx.now,
     title,
-    today: true,
+    today: opts.today ?? true,
     makeCurrent: opts.makeCurrent,
     ...(parsed.due !== undefined ? { due: parsed.due } : {}),
     ...(parsed.tags.length > 0 ? { tags: parsed.tags } : {}),
@@ -114,11 +124,15 @@ export function actionsFor(input: string, ctx: CaptureContext, opts: { makeCurre
  * its own `list/add` (the second of which the reducer no-ops by name, leaving its paired
  * `task/add` pointing at an id that was never created). `ctx` itself is never mutated;
  * lines that resolve to no actions (blank/whitespace, after parsing) are simply skipped. */
-export function actionsForLines(lines: string[], ctx: CaptureContext): Action[] {
+export function actionsForLines(lines: string[], ctx: CaptureContext, opts: { today?: boolean } = {}): Action[] {
   const actions: Action[] = [];
   let lists = ctx.lists;
   for (const line of lines) {
-    const lineActions = actionsFor(line, { now: ctx.now, lists, newId: ctx.newId }, { makeCurrent: false });
+    const lineActions = actionsFor(
+      line,
+      { now: ctx.now, lists, newId: ctx.newId, defaultListId: ctx.defaultListId },
+      { makeCurrent: false, today: opts.today }
+    );
     for (const action of lineActions) {
       if (action.type === 'list/add') {
         lists = [...lists, { id: action.id, name: action.name }];

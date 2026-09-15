@@ -22,6 +22,7 @@ const ALLOWED_INVOKE = new Set<keyof InvokeMap>([
   'palette:reportSize',
   'planner:show',
   'planner:hide',
+  'planner:minimize',
   'app:openExternal',
   'app:quit',
   'data:export',

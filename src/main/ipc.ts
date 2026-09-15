@@ -30,6 +30,7 @@ export interface WindowCommands {
   paletteReportSize(size: { height: number }): void | Promise<void>;
   plannerShow(): void | Promise<void>;
   plannerHide(): void | Promise<void>;
+  plannerMinimize(): void | Promise<void>;
   openExternal(url: string): void | Promise<void>;
   quit(): void | Promise<void>;
   dataExport(format: 'json' | 'md'): { path?: string } | Promise<{ path?: string }>;
@@ -205,6 +206,11 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('planner:hide', async (event: IpcMainInvokeEvent) => {
     guard(event);
     return windows.plannerHide();
+  });
+
+  ipcMain.handle('planner:minimize', async (event: IpcMainInvokeEvent) => {
+    guard(event);
+    return windows.plannerMinimize();
   });
 
   ipcMain.handle('app:openExternal', async (event: IpcMainInvokeEvent, url: unknown) => {

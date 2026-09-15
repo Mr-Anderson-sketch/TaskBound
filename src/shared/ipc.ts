@@ -45,6 +45,7 @@ export type InvokeMap = {
   'palette:reportSize': (size: { height: number }) => void;
   'planner:show': () => void;
   'planner:hide': () => void;
+  'planner:minimize': () => void;
   'app:openExternal': (url: string) => void;
   'app:quit': () => void;
   'data:export': (format: 'json' | 'md') => { path?: string };

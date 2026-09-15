@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Planner (2026-09-15)
+- The planner window is now the real thing: a rail (Today, Upcoming, Inbox, your lists, tags used by open tasks, and the Logbook, each with counts) next to a task list. Today shows Current/Up next/Done; Upcoming groups what's due over the next two weeks by date; the Logbook (done tasks, newest first) virtualises so it stays fast at any size. The title bar's capture field expands inline to the same live-parsed capture as the hotkey, defaulting new tasks to whatever list you're looking at.
+
 ### Timers (2026-09-15)
 - Timers: start and pause from the panel, tray, or Ctrl+Alt+Shift+Enter; a notification when time is up; optional pomodoro breaks; timers pause when you step away or the computer sleeps.
 

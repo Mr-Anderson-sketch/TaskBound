@@ -248,6 +248,7 @@ if (!gotLock) {
         paletteReportSize: (size) => palette.setContentHeight(size.height),
         plannerShow: () => plannerWindow.show(),
         plannerHide: () => plannerWindow.hide(),
+        plannerMinimize: () => plannerWindow.minimize(),
         openExternal: (url) => shell.openExternal(url),
         quit: () => app.quit(),
         // Slice 5: data export/import/choose-dir are not implemented yet.

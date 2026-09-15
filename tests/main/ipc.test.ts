@@ -39,6 +39,7 @@ function makeWindows(): WindowCommands {
     paletteReportSize: vi.fn(),
     plannerShow: vi.fn(),
     plannerHide: vi.fn(),
+    plannerMinimize: vi.fn(),
     openExternal: vi.fn(),
     quit: vi.fn(),
     dataExport: vi.fn(async () => ({})),
@@ -87,6 +88,7 @@ const VALID_PAYLOADS: Record<string, unknown[]> = {
   'palette:reportSize': [{ height: 132 }],
   'planner:show': [],
   'planner:hide': [],
+  'planner:minimize': [],
   'app:openExternal': ['https://example.com/'],
   'app:quit': [],
   'data:export': ['json'],
@@ -116,6 +118,7 @@ describe('registerIpc', () => {
         'palette:reportSize',
         'planner:show',
         'planner:hide',
+        'planner:minimize',
         'app:openExternal',
         'app:quit',
         'data:export',
@@ -133,6 +136,14 @@ describe('registerIpc', () => {
     await handlers.get('timer:toggle')!(eventFrom(ALLOWED_ORIGIN));
 
     expect(windows.timerToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards planner:minimize to windows', async () => {
+    const { handlers, windows } = setup();
+
+    await handlers.get('planner:minimize')!(eventFrom(ALLOWED_ORIGIN));
+
+    expect(windows.plannerMinimize).toHaveBeenCalledTimes(1);
   });
 
   it('rejects store:dispatch with a title over 200 chars', async () => {

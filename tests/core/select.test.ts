@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
-import { todayView, currentTask, tasksInList, isSnoozed, nextOrder, orderBetween, planCandidates, dayStats } from '../../src/core/select';
-import { dayKeyForRollover, addDays } from '../../src/core/dates';
+import {
+  todayView,
+  currentTask,
+  tasksInList,
+  isSnoozed,
+  nextOrder,
+  orderBetween,
+  planCandidates,
+  dayStats,
+  todayTasks,
+  upcomingGroups,
+  tasksWithTag,
+  logbook
+} from '../../src/core/select';
+import { dayKeyForRollover, addDays, ymd } from '../../src/core/dates';
 import type { Task } from '../../src/core/types';
 
 const t0 = 1_700_000_000_000;
@@ -209,5 +222,134 @@ describe('dayStats (Task 2.3)', () => {
     expect(stats).toMatchObject({ date, completed: 1, rolledOver: 0, note: 'Solid day', closedAt: t0 + 10 });
     expect(stats.planned).toBe(2); // todayView().total: both Today tasks, done or not
     expect(stats.done).toBe(1);
+  });
+});
+
+describe('todayTasks (Task 4.1)', () => {
+  it('current/upNext mirror todayView candidates, uncapped', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    for (const id of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) d = add(d, id, id);
+    const { current, upNext } = todayTasks(d, t0);
+    expect(current?.id).toBe('a');
+    expect(upNext.map((t) => t.id)).toEqual(['b', 'c', 'd', 'e', 'f', 'g']); // not capped at 5
+  });
+
+  it('current is undefined when Today is unplanned (falls back to Inbox for the strip, but not the planner)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A', { today: false }); // Inbox task, no Today tasks at all
+    const view = todayTasks(d, t0);
+    expect(view.current).toBeUndefined();
+    expect(view.upNext).toEqual([]);
+  });
+
+  it('done: Today tasks completed on the current rollover day, newest completedAt first', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0 + 1000, by: 'user' });
+    const { done } = todayTasks(d, t0);
+    expect(done.map((t) => t.id)).toEqual(['b', 'a']);
+  });
+
+  it('done excludes a Today task completed on an earlier rollover day', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const yesterday = t0 - 24 * 60 * 60 * 1000;
+    d = reduce(d, { type: 'task/complete', id: 'a', now: yesterday, by: 'user' });
+    const { done } = todayTasks(d, t0);
+    expect(done).toEqual([]);
+  });
+});
+
+describe('upcomingGroups (Task 4.1)', () => {
+  const today = ymd(t0);
+
+  it('groups open, top-level tasks due tomorrow through today+14 by date, ascending', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const tomorrow = addDays(today, 1);
+    const in3 = addDays(today, 3);
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', due: { date: in3 } });
+    d = reduce(d, { type: 'task/add', id: 'b', now: t0, title: 'B', due: { date: tomorrow } });
+    d = reduce(d, { type: 'task/add', id: 'c', now: t0, title: 'C', due: { date: tomorrow }, tags: [] });
+
+    const groups = upcomingGroups(d, t0);
+    expect(groups.map((g) => g.date)).toEqual([tomorrow, in3]);
+    expect(groups[0].tasks.map((t) => t.id)).toEqual(['b', 'c']);
+  });
+
+  it('excludes a task due today, beyond the window, snoozed-irrelevant (no snooze filter), sub-tasks, and done tasks', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const tomorrow = addDays(today, 1);
+    const tooFar = addDays(today, 15);
+    d = reduce(d, { type: 'task/add', id: 'today', now: t0, title: 'Today', due: { date: today } });
+    d = reduce(d, { type: 'task/add', id: 'far', now: t0, title: 'Far', due: { date: tooFar } });
+    d = reduce(d, { type: 'task/add', id: 'sub-parent', now: t0, title: 'Parent', due: { date: tomorrow } });
+    d = reduce(d, { type: 'task/add', id: 'sub', now: t0, title: 'Sub', due: { date: tomorrow }, parentId: 'sub-parent' });
+    d = reduce(d, { type: 'task/add', id: 'done', now: t0, title: 'Done', due: { date: tomorrow } });
+    d = reduce(d, { type: 'task/complete', id: 'done', now: t0, by: 'user' });
+
+    const groups = upcomingGroups(d, t0);
+    const ids = groups.flatMap((g) => g.tasks.map((t) => t.id));
+    expect(ids).toEqual(['sub-parent']);
+  });
+
+  it('within a group, orders by due.time then order/createdAt (no time sorts first)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const tomorrow = addDays(today, 1);
+    d = reduce(d, { type: 'task/add', id: 'late', now: t0, title: 'Late', due: { date: tomorrow, time: '15:00' } });
+    d = reduce(d, { type: 'task/add', id: 'early', now: t0, title: 'Early', due: { date: tomorrow, time: '09:00' } });
+    d = reduce(d, { type: 'task/add', id: 'allday', now: t0, title: 'All day', due: { date: tomorrow } });
+
+    const groups = upcomingGroups(d, t0);
+    expect(groups[0].tasks.map((t) => t.id)).toEqual(['allday', 'early', 'late']);
+  });
+
+  it('respects a custom `days` window', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const in20 = addDays(today, 20);
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', due: { date: in20 } });
+    expect(upcomingGroups(d, t0, 14)).toEqual([]);
+    expect(upcomingGroups(d, t0, 20).map((g) => g.date)).toEqual([in20]);
+  });
+});
+
+describe('tasksWithTag (Task 4.1)', () => {
+  it('returns open, top-level tasks carrying the tag, ordered', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', tags: ['work'] });
+    d = reduce(d, { type: 'task/add', id: 'b', now: t0 + 1, title: 'B', tags: ['home'] });
+    d = reduce(d, { type: 'task/add', id: 'c', now: t0 + 2, title: 'C', tags: ['work', 'deep'] });
+    expect(tasksWithTag(d, 'work').map((t) => t.id)).toEqual(['a', 'c']);
+  });
+
+  it('excludes sub-tasks and done tasks', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'p', now: t0, title: 'P', tags: ['x'] });
+    d = reduce(d, { type: 'task/add', id: 'sub', now: t0, title: 'Sub', tags: ['x'], parentId: 'p' });
+    d = reduce(d, { type: 'task/add', id: 'done', now: t0, title: 'Done', tags: ['x'] });
+    d = reduce(d, { type: 'task/complete', id: 'done', now: t0, by: 'user' });
+    expect(tasksWithTag(d, 'x').map((t) => t.id)).toEqual(['p']);
+  });
+
+  it('returns an empty array for an unused tag', () => {
+    expect(tasksWithTag(createEmptyData(t0, '2.0.0'), 'nope')).toEqual([]);
+  });
+});
+
+describe('logbook (Task 4.1)', () => {
+  it('returns done tasks, newest completedAt first', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0 + 1000, by: 'user' });
+    expect(logbook(d).map((t) => t.id)).toEqual(['b', 'a']);
+  });
+
+  it('excludes open tasks', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    expect(logbook(d)).toEqual([]);
   });
 });

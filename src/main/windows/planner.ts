@@ -76,6 +76,11 @@ export class PlannerWindow {
     this.win.hide();
   }
 
+  minimize(): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.minimize();
+  }
+
   destroy(): void {
     const win = this.win;
     this.win = undefined;

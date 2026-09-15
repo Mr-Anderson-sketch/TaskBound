@@ -1,23 +1,67 @@
-// renderer/planner/PlannerApp — a placeholder for Slice 4's full planner: just the
-// window shell (title bar, brand, window controls) and a flat "Today" list. Kept
-// under ~150 lines per the brief. Task 2.4 adds keyboard undo/redo and the
-// confirmation toast (see ./Toast.tsx and the task's addendum, rulings 2-3).
-import { useEffect, useState } from 'react';
+// renderer/planner/PlannerApp — the planner window shell (Task 4.1 addendum). Owns
+// window-session state only (`view`, `selectedId`, `layout`) — the Store is the single
+// source of truth (CLAUDE.md). Keyboard undo/redo and the confirmation toast are Task
+// 2.4 (see ./Toast.tsx); kept working here unchanged.
+import { useEffect, useRef, useState } from 'react';
 import { useApplyTheme } from '../theme/ThemeProvider';
 import { useSnapshot } from '../lib/useStore';
 import { keyGlyphs } from '../../shared/platform';
+import type { Platform } from '../../shared/platform';
+import type { Task } from '../../core/types';
 import { Toast } from './Toast';
+import { TitleBar } from './TitleBar';
+import { Rail } from './Rail';
+import { TaskList, resolveView } from './TaskList';
+import type { ViewId } from './TaskList';
+import { EmptyState } from './EmptyState';
 
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+const THREE_COL_MIN_WIDTH = 900;
+
+function EmptyStateFor({ view, title, platform, captureAccelerator }: { view: ViewId; title: string; platform: Platform; captureAccelerator: string }) {
+  if (view === 'today') {
+    return (
+      <EmptyState
+        title="Nothing planned for today."
+        hint={
+          <>
+            Press <kbd>{keyGlyphs(captureAccelerator, platform).join(platform === 'darwin' ? '' : '+')}</kbd> anywhere to add a task, or
+            pick from Inbox.
+          </>
+        }
+      />
+    );
+  }
+  if (view === 'upcoming') return <EmptyState title="Nothing due in the next two weeks." />;
+  if (view === 'inbox') return <EmptyState title="Inbox zero." />;
+  if (view === 'logbook') return <EmptyState title="Nothing completed yet." />;
+  if (view.startsWith('list:')) return <EmptyState title={`No open tasks in ${title}.`} />;
+  return <EmptyState title={`No open tasks tagged ${title}.`} />;
+}
 
 export function PlannerApp() {
   const snapshot = useSnapshot();
   useApplyTheme(snapshot);
   const [ownRev, setOwnRev] = useState<number | undefined>(undefined);
+  const [view, setView] = useState<ViewId>('today');
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const [layout, setLayout] = useState<'two' | 'three'>('three');
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  const platform = snapshot?.platform ?? 'win32';
+  const platform: Platform = snapshot?.platform ?? 'win32';
 
-  // --- keyboard undo/redo (addendum ruling 3): Ctrl+Z / ⌘Z -> undo; Ctrl+Shift+Z,
+  // Addendum ruling 8: a `data-layout` attribute for Task 4.3's detail pane to key off
+  // of — nothing renders in that region yet.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setLayout(entry.contentRect.width >= THREE_COL_MIN_WIDTH ? 'three' : 'two');
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // --- keyboard undo/redo (addendum ruling 3, Task 2.4): Ctrl+Z / ⌘Z -> undo; Ctrl+Shift+Z,
   // Ctrl+Y / ⌘⇧Z -> redo. Skipped while focus is inside a text input or textarea. ---
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -41,68 +85,56 @@ export function PlannerApp() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [platform]);
 
-  if (!snapshot) return null;
+  const selectView = (v: ViewId): void => {
+    setView(v);
+    setSelectedId(undefined);
+  };
 
-  const { today } = snapshot;
-  const rows: Array<{ task: (typeof snapshot.data.tasks)[number]; cur: boolean; done?: boolean }> = [
-    ...(today.current ? [{ task: today.current, cur: true }] : []),
-    ...today.next.map((t) => ({ task: t, cur: false })),
-    ...snapshot.data.tasks.filter((t) => t.today && t.status === 'done').map((t) => ({ task: t, cur: false, done: true }))
-  ];
+  const onSelectTask = (task: Task): void => setSelectedId(task.id);
 
   // Bypasses the `dispatch()` helper to capture the resulting rev: the toast only
   // shows an "<label> · Undo" confirmation for a `lastUndo` this window's OWN action
-  // produced, not one from the strip or palette (addendum ruling 2).
-  const toggle = (id: string, done: boolean): void => {
-    const action = done
-      ? { type: 'task/uncomplete' as const, id, now: Date.now() }
-      // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the
-      // reducer only spawns a next occurrence when the completed task has `recurrence`.
-      : { type: 'task/complete' as const, id, by: 'user' as const, now: Date.now(), spawnId: crypto.randomUUID() };
+  // produced (Task 2.4 addendum ruling 2).
+  const onToggle = (task: Task): void => {
+    const action =
+      task.status === 'done'
+        ? { type: 'task/uncomplete' as const, id: task.id, now: Date.now() }
+        : // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the
+          // reducer only spawns a next occurrence when the completed task has `recurrence`.
+          { type: 'task/complete' as const, id: task.id, by: 'user' as const, now: Date.now(), spawnId: crypto.randomUUID() };
     void window.tb.invoke('store:dispatch', action).then(({ rev }) => setOwnRev(rev));
   };
 
+  if (!snapshot) return null;
+
+  const now = Date.now();
+  const resolved = resolveView(view, snapshot.data, now);
+  const defaultListId = view.startsWith('list:') ? view.slice('list:'.length) : undefined;
+
   return (
-    <div className="planner">
-      <div className={platform === 'darwin' ? 'tb mac' : 'tb'}>
-        <span className="brand">TimeBound</span>
-        {platform !== 'darwin' && (
-          <div className="wc">
-            <button type="button" aria-label="Minimize" onClick={() => void window.tb.invoke('planner:hide')}>
-              &#8212;
-            </button>
-            <button type="button" aria-label="Close" onClick={() => void window.tb.invoke('planner:hide')}>
-              &#10005;
-            </button>
+    <div className="planner" data-layout={layout} ref={rootRef}>
+      <TitleBar
+        platform={platform}
+        captureAccelerator={snapshot.data.settings.hotkeys.capture}
+        lists={snapshot.data.lists}
+        defaultListId={defaultListId}
+        today={view === 'today'}
+        onMinimize={() => void window.tb.invoke('planner:minimize')}
+        onClose={() => void window.tb.invoke('planner:hide')}
+      />
+      <div className="body">
+        <Rail data={snapshot.data} view={view} now={now} onSelect={selectView} />
+        <div className="main">
+          <div className="h">
+            <span className="d">{resolved.title}</span>
+            <span className="m">{resolved.meta}</span>
           </div>
-        )}
-      </div>
-      <div className="main">
-        <div className="h">
-          <span className="d">Today</span>
-          <span className="m">{DATE_FORMAT.format(new Date())}</span>
+          {resolved.isEmpty ? (
+            <EmptyStateFor view={view} title={resolved.title} platform={platform} captureAccelerator={snapshot.data.settings.hotkeys.capture} />
+          ) : (
+            <TaskList sections={resolved.sections} now={now} selectedId={selectedId} onSelect={onSelectTask} onToggle={onToggle} />
+          )}
         </div>
-        {rows.length === 0 ? (
-          <div className="empty">
-            <div className="e1">Nothing planned for today.</div>
-            <p>
-              Press <kbd>{keyGlyphs(snapshot.data.settings.hotkeys.capture, platform).join(platform === 'darwin' ? '' : '+')}</kbd>{' '}
-              anywhere to add a task, or pick from Inbox.
-            </p>
-          </div>
-        ) : (
-          rows.map(({ task, cur, done }) => (
-            <button
-              key={task.id}
-              type="button"
-              className={['task', cur ? 'cur' : '', done ? 'done' : ''].filter(Boolean).join(' ')}
-              onClick={() => toggle(task.id, Boolean(done))}
-            >
-              <span className="cb" />
-              <span className="t">{task.title}</span>
-            </button>
-          ))
-        )}
       </div>
       <Toast
         lastUndo={snapshot.lastUndo}

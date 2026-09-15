@@ -17,9 +17,20 @@ const ADDED_MESSAGE_MS = 1500;
 
 interface CaptureProps {
   lists: List[];
+  /** New tasks with no explicit `/list` token go here instead of Inbox (Task 4.1
+   * addendum ruling 7: the planner's inline capture defaults to the current view's list). */
+  defaultListId?: string;
+  /** Whether new tasks are added to Today. Default `true` (the palette's long-standing
+   * behaviour); the planner passes `false` outside the Today view. */
+  today?: boolean;
+  /** Called instead of the default `palette:hide` whenever this session would otherwise
+   * close the palette (Enter, the second Escape, or the post-paste auto-hide). The
+   * planner uses this to swap its inline capture back to the placeholder field instead
+   * of hiding a window. Default: `palette:hide` (unchanged behaviour). */
+  onDone?: () => void;
 }
 
-export function Capture({ lists }: CaptureProps) {
+export function Capture({ lists, defaultListId, today, onDone }: CaptureProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState('');
   const [message, setMessage] = useState<string | null>(null);
@@ -63,10 +74,16 @@ export function Capture({ lists }: CaptureProps) {
     []
   );
 
+  // Default (unchanged) behaviour: `palette:hide`. The planner passes its own `onDone`
+  // (Task 4.1 addendum ruling 7) to swap its inline capture back to the placeholder
+  // field instead.
+  const done = onDone ?? ((): void => void window.tb.invoke('palette:hide'));
+
   const makeCtx = (): CaptureContext => ({
     now: Date.now(),
     lists: lists.map((l) => ({ id: l.id, name: l.name })),
-    newId: () => crypto.randomUUID()
+    newId: () => crypto.randomUUID(),
+    defaultListId
   });
 
   // Fix round 1, defect 2: hiding the palette in the same tick as the paste meant the
@@ -79,14 +96,14 @@ export function Capture({ lists }: CaptureProps) {
     messageTimer.current = setTimeout(() => {
       messageTimer.current = null;
       setMessage(null);
-      void window.tb.invoke('palette:hide');
+      done();
     }, ADDED_MESSAGE_MS);
   };
 
   const clearAndHide = (): void => {
     cancelPendingHide();
     setValue('');
-    void window.tb.invoke('palette:hide');
+    done();
   };
 
   const onChange = (e: ChangeEvent<HTMLInputElement>): void => {
@@ -109,7 +126,7 @@ export function Capture({ lists }: CaptureProps) {
     if (e.key !== 'Enter') return;
     if (e.nativeEvent.isComposing) return; // IME composition: Enter confirms the composition, not the form
 
-    const actions = actionsFor(value, makeCtx(), { makeCurrent: e.shiftKey });
+    const actions = actionsFor(value, makeCtx(), { makeCurrent: e.shiftKey, today });
     if (actions.length === 0) return; // empty input + Enter does nothing
 
     for (const action of actions) dispatch(action);
@@ -125,7 +142,7 @@ export function Capture({ lists }: CaptureProps) {
     // actionsForLines (not a per-line actionsFor loop) threads newly-minted lists across
     // lines, so two lines that share the same new /list mint exactly one list/add instead
     // of each other's task/add ending up with a dangling listId (fix round 1, defect 1).
-    const actions = actionsForLines(lines, makeCtx());
+    const actions = actionsForLines(lines, makeCtx(), { today });
     for (const action of actions) dispatch(action);
     const added = actions.filter((a) => a.type === 'task/add').length;
 

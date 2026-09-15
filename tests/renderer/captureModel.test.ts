@@ -140,6 +140,44 @@ describe('captureModel: actionsFor', () => {
       }
     }
   });
+
+  // Task 4.1 addendum ruling 7: the planner's inline capture defaults new tasks to the
+  // current view's list.
+  it('defaults today: true when opts.today is omitted (palette behaviour unchanged)', () => {
+    const actions = actionsFor('call bank', makeCtx(), { makeCurrent: false });
+    expect(actions[0]).toMatchObject({ type: 'task/add', today: true });
+  });
+
+  it('opts.today: false overrides the default (planner capture outside the Today view)', () => {
+    const actions = actionsFor('call bank', makeCtx(), { makeCurrent: false, today: false });
+    expect(actions[0]).toMatchObject({ type: 'task/add', today: false });
+  });
+
+  it('ctx.defaultListId is used when the input has no explicit /list token', () => {
+    const ctx = makeCtx([
+      { id: 'inbox', name: 'Inbox' },
+      { id: 'w', name: 'Work' }
+    ]);
+    const actions = actionsFor('call bank', { ...ctx, defaultListId: 'w' }, { makeCurrent: false });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ type: 'task/add', listId: 'w' });
+  });
+
+  it('an explicit /list token wins over ctx.defaultListId', () => {
+    const ctx = makeCtx([
+      { id: 'inbox', name: 'Inbox' },
+      { id: 'w', name: 'Work' },
+      { id: 'h', name: 'Home' }
+    ]);
+    const actions = actionsFor('call bank /Home', { ...ctx, defaultListId: 'w' }, { makeCurrent: false });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ type: 'task/add', listId: 'h' });
+  });
+
+  it('with no defaultListId and no /list token, listId is omitted (reducer defaults to Inbox)', () => {
+    const actions = actionsFor('call bank', makeCtx(), { makeCurrent: false });
+    expect((actions[0] as { listId?: string }).listId).toBeUndefined();
+  });
 });
 
 describe('captureModel: actionsForLines', () => {
@@ -191,5 +229,18 @@ describe('captureModel: actionsForLines', () => {
       const result = ActionSchema.safeParse(action);
       expect(result.success, result.success ? '' : JSON.stringify(result.error?.issues)).toBe(true);
     }
+  });
+
+  // Task 4.1 addendum ruling 7: threaded through from the planner's inline capture.
+  it('threads ctx.defaultListId and opts.today to every line', () => {
+    const ctx = makeCtx([
+      { id: 'inbox', name: 'Inbox' },
+      { id: 'w', name: 'Work' }
+    ]);
+    const actions = actionsForLines(['buy stamps', 'call bank'], { ...ctx, defaultListId: 'w' }, { today: false });
+    const taskAdds = actions.filter((a) => a.type === 'task/add') as Array<{ listId?: string; today: boolean }>;
+    expect(taskAdds).toHaveLength(2);
+    expect(taskAdds.every((t) => t.listId === 'w')).toBe(true);
+    expect(taskAdds.every((t) => t.today === false)).toBe(true);
   });
 });
