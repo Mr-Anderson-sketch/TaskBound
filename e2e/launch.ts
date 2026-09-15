@@ -19,6 +19,16 @@ export interface LaunchOptions {
    * shows unless a spec opts in with `onboarding: true` — e2e/onboarding.spec.ts is
    * the only one that does, to exercise the real first-run path. */
   onboarding?: boolean;
+  /** Test-isolation bug fix: Electron's `app.getPath('appData')` on Windows does a
+   * native OS lookup and ignores the `APPDATA` environment override this launcher
+   * also sets below — so without pinning `userData` too, every e2e launch actually
+   * used the real, shared `%APPDATA%\TimeBound-dev` folder (Chromium profile,
+   * single-instance lock, and the data-location.json pointer), colliding with the
+   * owner's own preview app and with other parallel test runs. This launcher
+   * defaults `TIMEBOUND_USERDATA_DIR` to `<dataDir>/userData` (main.ts's
+   * `app.setPath('userData', …)` test seam, see its comment) for every launch. Pass
+   * `env: { TIMEBOUND_USERDATA_DIR: '...' }` to pin a spec's own value instead (e.g.
+   * to share one userData folder across two sequential launches). */
 }
 
 export interface Launched {
@@ -59,6 +69,13 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<Launched> {
   env.TIMEBOUND_DATA_DIR = dataDir;
   // The pre-rebuild app resolves %APPDATA%\TimeBound; keep it isolated too.
   env.APPDATA = dataDir;
+  // See LaunchOptions.env doc above: pins Electron's actual userData folder (the
+  // Chromium profile, single-instance lock, and data-location.json pointer) inside
+  // this launch's own temp dir, since the `APPDATA` override above is ignored by
+  // Electron on Windows. Placed before `Object.assign(env, opts.env ?? {})` below so
+  // a spec that needs a specific/shared userData folder (e.g. two sequential
+  // launches that must see the same data-location.json) can still override it.
+  env.TIMEBOUND_USERDATA_DIR = path.join(dataDir, 'userData');
   // Exposes globalThis.__tb (store/strip/palette/planner/hotkeys/tray) for e2e specs.
   // Never set outside of tests — see main.ts's "test seam" comment.
   env.TIMEBOUND_E2E = '1';
