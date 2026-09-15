@@ -227,3 +227,94 @@ test('pasting two lines that share a new list creates the list once, with no dan
     await launched.close();
   }
 });
+
+// Fix round 2, finding 2: the auto-hide timer armed by a multi-line paste must be
+// cancelled, not just left to fire, when a new capture session starts before it does —
+// otherwise the stale timer hides the freshly-reopened palette out from under whatever
+// the user is doing in it.
+test('reopening the palette during the post-paste hold cancels the stale auto-hide', async () => {
+  const launched = await launchApp();
+  try {
+    await launched.window('strip');
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { palette: { show: (m: string) => void } } }).__tb.palette.show('capture');
+    });
+    const palette = await launched.window('palette', 5000);
+
+    const input = palette.locator('.palette input');
+    await input.click();
+
+    await palette.evaluate(() => {
+      const el = document.querySelector('.palette input') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'buy milk\ncall bank');
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      el.dispatchEvent(event);
+    });
+    await expect(palette.locator('.palette .foot')).toContainText('Added 2 tasks', { timeout: 1000 });
+
+    // Simulates the user dismissing the palette (Enter/Escape, here via the main-process
+    // seam directly) and reopening it before the paste's own ~1.5s auto-hide would fire —
+    // the still-alive renderer must treat the resulting `palette:mode` as cancelling that
+    // stale timer, not let it hide the new session out from under the user. hide() and
+    // show() are two separate `app.evaluate` calls (not crammed into one synchronous
+    // callback): back-to-back-in-one-tick hide()+show() on the SAME native window trips an
+    // unrelated Windows focus-stealing quirk (a deferred `blur` from the hide arrives just
+    // after the show and re-triggers PaletteWindow's own blur-hides-the-window wiring,
+    // confirmed independent of this task's renderer fix — src/main/windows/palette.ts is
+    // out of this task's scope), which two separate calls' natural IPC round-trip avoids.
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { palette: { hide: () => void } } }).__tb.palette.hide();
+    });
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { palette: { show: (m: string) => void } } }).__tb.palette.show('capture');
+    });
+
+    await palette.waitForTimeout(2000);
+    const infos = await windowInfo(launched.app);
+    expect(infos.find((w) => w.url.includes('#/palette'))?.visible).toBe(true);
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});
+
+// Fix round 2, finding 2: typing during the post-paste confirmation hold must cancel the
+// auto-hide too — otherwise the timer yanks the window (and the user's in-progress text)
+// away mid-edit.
+test('typing during the post-paste hold cancels the auto-hide and keeps the new text', async () => {
+  const launched = await launchApp();
+  try {
+    await launched.window('strip');
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { palette: { show: (m: string) => void } } }).__tb.palette.show('capture');
+    });
+    const palette = await launched.window('palette', 5000);
+
+    const input = palette.locator('.palette input');
+    await input.click();
+
+    await palette.evaluate(() => {
+      const el = document.querySelector('.palette input') as HTMLInputElement;
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'buy milk\ncall bank');
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      el.dispatchEvent(event);
+    });
+    await expect(palette.locator('.palette .foot')).toContainText('Added 2 tasks', { timeout: 500 });
+
+    await input.type('x'); // well within 0.5s of the paste
+
+    await palette.waitForTimeout(2000);
+
+    const infos = await windowInfo(launched.app);
+    expect(infos.find((w) => w.url.includes('#/palette'))?.visible).toBe(true);
+    await expect(input).toHaveValue('x');
+    await expect(palette.locator('.palette .foot')).toContainText('Enter add', { timeout: 500 });
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});

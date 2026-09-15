@@ -23,11 +23,27 @@ export function Capture({ lists }: CaptureProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState('');
   const [message, setMessage] = useState<string | null>(null);
-  const messageTimer = useRef<ReturnType<typeof setTimeout>>();
+  const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Fix round 2, finding 2: the pending auto-hide `setTimeout` armed by
+  // showAddedMessageThenHide below must be cancelled — not just left to fire — whenever
+  // its "show the confirmation, then hide" promise is broken: a new capture session
+  // starting (palette:mode), the user closing some other way first (clearAndHide), or the
+  // user typing during the hold (onChange) to keep working. Without this, a stale timer
+  // from a completed paste could fire `palette:hide` on an unrelated later session (round
+  // 1's report incorrectly claimed `palette:mode` already did this) or yank the window
+  // out from under someone actively typing.
+  const cancelPendingHide = (): void => {
+    if (messageTimer.current) {
+      clearTimeout(messageTimer.current);
+      messageTimer.current = null;
+    }
+    setMessage(null);
+  };
 
   // Fix round 1, finding 5: the palette window persists across hide/show cycles (it
   // isn't unmounted/reloaded), so a `palette:mode` message — always sent on every
@@ -35,8 +51,8 @@ export function Capture({ lists }: CaptureProps) {
   // capture session has begun; clear any leftover text from the previous one.
   useEffect(() => {
     return window.tb.on('palette:mode', () => {
+      cancelPendingHide();
       setValue('');
-      setMessage(null);
     });
   }, []);
 
@@ -55,23 +71,29 @@ export function Capture({ lists }: CaptureProps) {
 
   // Fix round 1, defect 2: hiding the palette in the same tick as the paste meant the
   // "Added N tasks" confirmation was never actually visible. Ruling: keep the palette
-  // open showing the message for ADDED_MESSAGE_MS, then hide — cleared (no hide fires)
-  // on unmount or when a new `palette:mode` arrives (see the effects above).
+  // open showing the message for ADDED_MESSAGE_MS, then hide — cancelled (no hide fires)
+  // by cancelPendingHide above.
   const showAddedMessageThenHide = (n: number): void => {
     setMessage(`Added ${n} task${n === 1 ? '' : 's'}`);
     if (messageTimer.current) clearTimeout(messageTimer.current);
     messageTimer.current = setTimeout(() => {
+      messageTimer.current = null;
       setMessage(null);
       void window.tb.invoke('palette:hide');
     }, ADDED_MESSAGE_MS);
   };
 
   const clearAndHide = (): void => {
+    cancelPendingHide();
     setValue('');
     void window.tb.invoke('palette:hide');
   };
 
   const onChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    // Fix round 2, finding 2: typing during the post-paste confirmation hold cancels the
+    // auto-hide so the user keeps working — the palette then stays open (footer reverts
+    // to the normal hint text) until they submit or press Escape.
+    cancelPendingHide();
     setValue(e.target.value);
   };
 
