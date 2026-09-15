@@ -132,7 +132,9 @@ describe('resolveView: inbox', () => {
     const resolved = resolveView('inbox', d, now);
     expect(resolved.title).toBe('Inbox');
     expect(resolved.meta).toBe('1 open');
-    expect(resolved.sections).toEqual([{ key: 'inbox', ariaLabel: 'Inbox', tasks: expect.arrayContaining([expect.objectContaining({ id: 'a' })]) }]);
+    expect(resolved.sections).toEqual([
+      { key: 'inbox', ariaLabel: 'Inbox', showChildren: true, draggable: true, tasks: expect.arrayContaining([expect.objectContaining({ id: 'a' })]) }
+    ]);
     expect(resolved.isEmpty).toBe(false);
   });
 

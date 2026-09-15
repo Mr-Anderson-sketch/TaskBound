@@ -65,9 +65,35 @@ export interface TaskRowProps {
    * empty result via `task/edit`'s own rules. Not called when the value is unchanged. */
   onEditSave?: (task: Task, title: string) => void;
   onEditCancel?: () => void;
+  /** Task 4.3 addendum ruling 3: opens the detail pane for this task — wired to a
+   * double-click on the row and its own "Open details" chevron button. */
+  onOpenDetail?: (task: Task) => void;
+  /** Task 4.3 addendum ruling 6: clicking a tag chip navigates to that tag's view. */
+  onTagClick?: (tag: string) => void;
+  /** 1 for an indented sub-task row, 0 (default) for a top-level row (Task 4.3 addendum
+   * ruling 2). */
+  depth?: 0 | 1;
+  /** "<done>/<total>" shown after the title once this task has children (ruling 2). */
+  progress?: string;
 }
 
-export function TaskRow({ task, now, current, selected, posinset, setsize, onSelect, onToggle, editing, onEditSave, onEditCancel }: TaskRowProps) {
+export function TaskRow({
+  task,
+  now,
+  current,
+  selected,
+  posinset,
+  setsize,
+  onSelect,
+  onToggle,
+  editing,
+  onEditSave,
+  onEditCancel,
+  onOpenDetail,
+  onTagClick,
+  depth,
+  progress
+}: TaskRowProps) {
   const done = task.status === 'done';
   // Only ticks (setInterval) while THIS task's timer is actually running (see
   // useDisplayTime) — safe to call per-row even in a 500-row virtualised Logbook.
@@ -117,8 +143,9 @@ export function TaskRow({ task, now, current, selected, posinset, setsize, onSel
       aria-selected={Boolean(selected)}
       aria-posinset={posinset}
       aria-setsize={setsize}
-      className={['task', current && 'cur', done && 'done', selected && 'sel'].filter(Boolean).join(' ')}
+      className={['task', current && 'cur', done && 'done', selected && 'sel', depth === 1 && 'sub'].filter(Boolean).join(' ')}
       onClick={() => onSelect(task)}
+      onDoubleClick={() => onOpenDetail?.(task)}
     >
       <button
         type="button"
@@ -144,10 +171,21 @@ export function TaskRow({ task, now, current, selected, posinset, setsize, onSel
       ) : (
         <span className="t">{task.title}</span>
       )}
+      {progress && !editing && <span className="progress">{progress}</span>}
       {!done && !editing && (
         <>
           {task.tags.slice(0, 2).map((tag) => (
-            <span className="tag" key={tag}>
+            <span
+              className="tag"
+              key={tag}
+              onClick={
+                onTagClick &&
+                ((e) => {
+                  e.stopPropagation();
+                  onTagClick(tag);
+                })
+              }
+            >
               #{tag}
             </span>
           ))}
@@ -159,6 +197,19 @@ export function TaskRow({ task, now, current, selected, posinset, setsize, onSel
             </span>
           )}
         </>
+      )}
+      {onOpenDetail && !editing && (
+        <button
+          type="button"
+          className="chev"
+          aria-label="Open details"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDetail(task);
+          }}
+        >
+          ›
+        </button>
       )}
     </div>
   );

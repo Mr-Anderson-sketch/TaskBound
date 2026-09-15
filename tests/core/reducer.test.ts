@@ -270,6 +270,101 @@ describe('reducer: list/add', () => {
     expect(d.lists).toHaveLength(1);
   });
 });
+
+describe('reducer: list/rename (Task 4.3)', () => {
+  it('renames a list, trimming the name', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'list/rename', id: 'work', now: t0 + 1, name: '  Deep work  ' });
+    expect(d.lists.find((l) => l.id === 'work')!.name).toBe('Deep work');
+  });
+  it('ignores an empty (or all-whitespace) name', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    const before = d;
+    d = reduce(d, { type: 'list/rename', id: 'work', now: t0 + 1, name: '   ' });
+    expect(d).toBe(before);
+  });
+  it('ignores renaming Inbox', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const before = d;
+    d = reduce(d, { type: 'list/rename', id: INBOX_ID, now: t0, name: 'Not inbox' });
+    expect(d).toBe(before);
+    expect(d.lists.find((l) => l.id === INBOX_ID)!.name).toBe('Inbox');
+  });
+  it('no-ops when a DIFFERENT list already has the name (case-insensitive)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'list/add', id: 'home', now: t0, name: 'Home' });
+    const before = d;
+    d = reduce(d, { type: 'list/rename', id: 'work', now: t0 + 1, name: 'home' });
+    expect(d).toBe(before);
+  });
+  it('renaming a list to its own current name (case-different) is allowed (not a clash with itself)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'list/rename', id: 'work', now: t0 + 1, name: 'WORK' });
+    expect(d.lists.find((l) => l.id === 'work')!.name).toBe('WORK');
+  });
+  it('a missing list id is a no-op (same reference)', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'list/rename', id: 'ghost', now: t0, name: 'X' })).toBe(d);
+  });
+});
+
+describe('reducer: list/delete (Task 4.3)', () => {
+  it('deletes the list and moves its open and done tasks (including children) to moveTasksTo, appended after its existing tasks in current relative order', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'task/add', id: 'inbox-a', now: t0, title: 'Inbox A' }); // order 1000 in Inbox
+    d = reduce(d, { type: 'task/add', id: 'w1', now: t0, title: 'W1', listId: 'work' }); // order 1000
+    d = reduce(d, { type: 'task/add', id: 'w2', now: t0 + 1, title: 'W2', listId: 'work' }); // order 2000
+    d = reduce(d, { type: 'task/add', id: 'w3-sub', now: t0 + 2, title: 'W3 sub', listId: 'work', parentId: 'w2' });
+    d = reduce(d, { type: 'task/complete', id: 'w1', now: t0 + 3, by: 'user' });
+
+    d = reduce(d, { type: 'list/delete', id: 'work', now: t0 + 4, moveTasksTo: INBOX_ID });
+
+    expect(d.lists.some((l) => l.id === 'work')).toBe(false);
+    const moved = ['w1', 'w2', 'w3-sub'].map((id) => d.tasks.find((t) => t.id === id)!);
+    expect(moved.every((t) => t.listId === INBOX_ID)).toBe(true);
+    // Appended after inbox-a's existing order (1000), in their own relative order (w1, w2, w3-sub).
+    const orders = moved.map((t) => t.order);
+    expect(orders[0]).toBeGreaterThan(1000);
+    expect(orders[1]).toBeGreaterThan(orders[0]);
+    expect(orders[2]).toBeGreaterThan(orders[1]);
+    // The sub-task's parentId is preserved (still under w2).
+    expect(d.tasks.find((t) => t.id === 'w3-sub')!.parentId).toBe('w2');
+  });
+  it('Inbox cannot be deleted (no-op, same reference)', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'list/delete', id: INBOX_ID, now: t0, moveTasksTo: INBOX_ID })).toBe(d);
+  });
+  it('a missing list id is a no-op (same reference)', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'list/delete', id: 'ghost', now: t0, moveTasksTo: INBOX_ID })).toBe(d);
+  });
+  it('falls back to Inbox when moveTasksTo does not reference an existing list', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'task/add', id: 'w1', now: t0, title: 'W1', listId: 'work' });
+    d = reduce(d, { type: 'list/delete', id: 'work', now: t0 + 1, moveTasksTo: 'ghost-list' });
+    expect(d.tasks.find((t) => t.id === 'w1')!.listId).toBe(INBOX_ID);
+  });
+  it('falls back to Inbox when moveTasksTo is the list being deleted itself', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = reduce(d, { type: 'task/add', id: 'w1', now: t0, title: 'W1', listId: 'work' });
+    d = reduce(d, { type: 'list/delete', id: 'work', now: t0 + 1, moveTasksTo: 'work' });
+    expect(d.tasks.find((t) => t.id === 'w1')!.listId).toBe(INBOX_ID);
+  });
+  it('deleting a list with no tasks just removes it', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'empty', now: t0, name: 'Empty' });
+    d = reduce(d, { type: 'list/delete', id: 'empty', now: t0 + 1, moveTasksTo: INBOX_ID });
+    expect(d.lists.some((l) => l.id === 'empty')).toBe(false);
+  });
+});
+
 describe('reducer: data/replace', () => {
   it('replaces the whole data object', () => {
     const d1 = createEmptyData(t0, '2.0.0');
