@@ -4,6 +4,8 @@
 // `role="listbox"` (see TaskList.tsx); a row click selects (selection lives in
 // PlannerApp), the radio toggles complete/uncomplete independently (stopPropagation so
 // it doesn't also select).
+import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { useDisplayTime } from '../lib/useDisplayTime';
 import { fmtClock } from '../../core/timer';
 import { describeRule } from '../../core/recur';
@@ -37,6 +39,13 @@ export function dueInfo(due: Due, now: number): DueInfo {
   return { text: shortDateLabel(due.date), overdue };
 }
 
+/** The DOM id a row's root element carries — used by `aria-activedescendant` and by
+ * `usePlannerKeys`' non-virtualised scroll-into-view fallback (Task 4.2 addendum
+ * rulings 2, 6). */
+export function rowDomId(taskId: string): string {
+  return `task-row-${taskId}`;
+}
+
 export interface TaskRowProps {
   task: Task;
   now: number;
@@ -49,9 +58,16 @@ export interface TaskRowProps {
   setsize: number;
   onSelect: (task: Task) => void;
   onToggle: (task: Task) => void;
+  /** Task 4.2 addendum ruling 2: `e` swaps the title for an inline input. `true` when
+   * THIS row is the one currently being edited. */
+  editing?: boolean;
+  /** Called on Enter or blur with the (untrimmed) new title — the caller trims/no-ops an
+   * empty result via `task/edit`'s own rules. Not called when the value is unchanged. */
+  onEditSave?: (task: Task, title: string) => void;
+  onEditCancel?: () => void;
 }
 
-export function TaskRow({ task, now, current, selected, posinset, setsize, onSelect, onToggle }: TaskRowProps) {
+export function TaskRow({ task, now, current, selected, posinset, setsize, onSelect, onToggle, editing, onEditSave, onEditCancel }: TaskRowProps) {
   const done = task.status === 'done';
   // Only ticks (setInterval) while THIS task's timer is actually running (see
   // useDisplayTime) — safe to call per-row even in a 500-row virtualised Logbook.
@@ -59,8 +75,44 @@ export function TaskRow({ task, now, current, selected, posinset, setsize, onSel
   const timerLabel = display.mode !== 'none' ? fmtClock(display.seconds) : undefined;
   const due = task.due !== undefined ? dueInfo(task.due, now) : undefined;
 
+  const [editValue, setEditValue] = useState(task.title);
+  const editInputRef = useRef<HTMLInputElement>(null);
+  const savedRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) return;
+    setEditValue(task.title);
+    savedRef.current = false;
+    // Focus + select-all so typing immediately replaces the title (a common inline-rename
+    // expectation), on the next tick so the input has mounted.
+    const id = requestAnimationFrame(() => {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [editing, task.title]);
+
+  const commitEdit = (): void => {
+    if (savedRef.current) return;
+    savedRef.current = true;
+    onEditSave?.(task, editValue);
+  };
+
+  const onEditKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      savedRef.current = true; // blur fires after this; don't also save
+      onEditCancel?.();
+    }
+  };
+
   return (
     <div
+      id={rowDomId(task.id)}
+      data-row-id={task.id}
       role="option"
       aria-selected={Boolean(selected)}
       aria-posinset={posinset}
@@ -77,8 +129,22 @@ export function TaskRow({ task, now, current, selected, posinset, setsize, onSel
           onToggle(task);
         }}
       />
-      <span className="t">{task.title}</span>
-      {!done && (
+      {editing ? (
+        <input
+          ref={editInputRef}
+          type="text"
+          className="edit-title"
+          value={editValue}
+          aria-label="Task title"
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={onEditKeyDown}
+          onBlur={commitEdit}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="t">{task.title}</span>
+      )}
+      {!done && !editing && (
         <>
           {task.tags.slice(0, 2).map((tag) => (
             <span className="tag" key={tag}>

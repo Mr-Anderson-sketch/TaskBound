@@ -1,14 +1,15 @@
 // renderer/planner/TaskList — resolves a planner `ViewId` into rendered sections
 // (Task 4.1 addendum rulings 1 and 4) and renders them, virtualising any section over
 // 60 rows (always, for the Logbook) with `@tanstack/react-virtual`.
-import { useRef } from 'react';
+import { forwardRef, useImperativeHandle, useRef } from 'react';
+import type { KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Data, Task } from '../../core/types';
 import { INBOX_ID } from '../../core/defaults';
 import { todayTasks, upcomingGroups, tasksInList, tasksWithTag, logbook, dayStats } from '../../core/select';
 import { ymd, addDays, dayKeyForRollover } from '../../core/dates';
 import { longDayLabel } from '../lib/dateLabels';
-import { TaskRow, shortDateLabel } from './TaskRow';
+import { TaskRow, shortDateLabel, rowDomId } from './TaskRow';
 
 export type ViewId = 'today' | 'upcoming' | 'inbox' | 'logbook' | `list:${string}` | `tag:${string}`;
 
@@ -95,16 +96,36 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
   return { title, meta: `${tasks.length} open`, sections: [{ key: `tag:${tag}`, ariaLabel: title, tasks }], isEmpty: tasks.length === 0 };
 }
 
+/** The flat, ordered list of every visible task id across `sections` (section headers
+ * skipped) — the order `j`/`k` navigation and `nextSelection` walk (Task 4.2 addendum
+ * ruling 2). Exported so `usePlannerKeys` can compute it from the same `ResolvedView`
+ * it already has, without re-deriving TaskList's internals. */
+export function flatRowIds(sections: TaskListSection[]): string[] {
+  return sections.flatMap((s) => s.tasks.map((t) => t.id));
+}
+
+export interface SectionHandle {
+  /** Scrolls the row for `id` into view if it belongs to this section (using the
+   * virtualizer's own `scrollToIndex` when virtualised); returns whether it did. */
+  scrollToId: (id: string) => boolean;
+}
+
 interface SectionProps {
   section: TaskListSection;
   now: number;
   selectedId?: string;
   onSelect: (task: Task) => void;
   onToggle: (task: Task) => void;
+  editingId?: string;
+  onEditSave?: (task: Task, title: string) => void;
+  onEditCancel?: () => void;
   fill: boolean;
 }
 
-function Section({ section, now, selectedId, onSelect, onToggle, fill }: SectionProps) {
+const Section = forwardRef<SectionHandle, SectionProps>(function Section(
+  { section, now, selectedId, onSelect, onToggle, editingId, onEditSave, onEditCancel, fill },
+  ref
+) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtual = section.forceVirtual === true || section.tasks.length > VIRTUALIZE_THRESHOLD;
 
@@ -115,6 +136,23 @@ function Section({ section, now, selectedId, onSelect, onToggle, fill }: Section
     overscan: OVERSCAN,
     enabled: virtual
   });
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToId(id: string) {
+        const index = section.tasks.findIndex((t) => t.id === id);
+        if (index === -1) return false;
+        if (virtual) {
+          virtualizer.scrollToIndex(index, { align: 'auto' });
+        } else {
+          document.getElementById(rowDomId(id))?.scrollIntoView({ block: 'nearest' });
+        }
+        return true;
+      }
+    }),
+    [section.tasks, virtual, virtualizer]
+  );
 
   // aria-setsize/aria-posinset (fix round 1, item 3): every option row reports its
   // 1-based position and the section's total count, for virtualised and plain
@@ -132,6 +170,9 @@ function Section({ section, now, selectedId, onSelect, onToggle, fill }: Section
       setsize={setsize}
       onSelect={onSelect}
       onToggle={onToggle}
+      editing={editingId === task.id}
+      onEditSave={onEditSave}
+      onEditCancel={onEditCancel}
     />
   );
 
@@ -167,6 +208,18 @@ function Section({ section, now, selectedId, onSelect, onToggle, fill }: Section
       )}
     </>
   );
+});
+
+export interface TaskListHandle {
+  /** Scrolls the given task's row into view — a plain `scrollIntoView` for a
+   * non-virtualised section, the owning section's virtualizer `scrollToIndex`
+   * otherwise (Task 4.2 addendum ruling 2). No-ops silently if `id` isn't visible. */
+  scrollToId: (id: string) => void;
+  /** The container's own DOM node — always current, even though the handle object
+   * itself is only rebuilt when `sections` changes (a getter, not a snapshotted
+   * value). `usePlannerKeys` uses it to return focus to the list (ruling 6: "every menu
+   * and the command palette return focus to the list on close"). */
+  readonly el: HTMLDivElement | null;
 }
 
 export interface TaskListProps {
@@ -175,19 +228,69 @@ export interface TaskListProps {
   selectedId?: string;
   onSelect: (task: Task) => void;
   onToggle: (task: Task) => void;
+  editingId?: string;
+  onEditSave?: (task: Task, title: string) => void;
+  onEditCancel?: () => void;
+  /** Task 4.2 addendum ruling 6: the container is focusable and owns the keyboard
+   * model — `usePlannerKeys` supplies the keydown handler and which row id is
+   * "active" for `aria-activedescendant`. */
+  onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
+  activeDescendantId?: string;
 }
 
 /** Renders every section; when there is exactly one (Inbox/list/tag/Logbook), it fills
  * the remaining height with its own scroll region (`fill`) — this is the common case a
  * virtualised Logbook needs to actually get the vertical space to scroll in. With
  * several sections (Today, Upcoming) the whole list scrolls together instead. */
-export function TaskList({ sections, now, selectedId, onSelect, onToggle }: TaskListProps) {
+export const TaskList = forwardRef<TaskListHandle, TaskListProps>(function TaskList(
+  { sections, now, selectedId, onSelect, onToggle, editingId, onEditSave, onEditCancel, onKeyDown, activeDescendantId },
+  ref
+) {
   const fill = sections.length === 1;
+  const sectionRefs = useRef(new Map<string, SectionHandle | null>());
+  const rootElRef = useRef<HTMLDivElement | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToId(id: string) {
+        for (const handle of sectionRefs.current.values()) {
+          if (handle?.scrollToId(id)) return;
+        }
+      },
+      get el() {
+        return rootElRef.current;
+      }
+    }),
+    []
+  );
+
   return (
-    <div className="tl-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: fill ? 'hidden' : 'auto' }}>
+    <div
+      ref={rootElRef}
+      className="tl-scroll"
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      aria-activedescendant={activeDescendantId ? rowDomId(activeDescendantId) : undefined}
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: fill ? 'hidden' : 'auto' }}
+    >
       {sections.map((s) => (
-        <Section key={s.key} section={s} now={now} selectedId={selectedId} onSelect={onSelect} onToggle={onToggle} fill={fill} />
+        <Section
+          key={s.key}
+          ref={(el) => {
+            sectionRefs.current.set(s.key, el);
+          }}
+          section={s}
+          now={now}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          onToggle={onToggle}
+          editingId={editingId}
+          onEditSave={onEditSave}
+          onEditCancel={onEditCancel}
+          fill={fill}
+        />
       ))}
     </div>
   );
-}
+});

@@ -1,19 +1,30 @@
-// renderer/planner/PlannerApp — the planner window shell (Task 4.1 addendum). Owns
-// window-session state only (`view`, `selectedId`, `layout`) — the Store is the single
-// source of truth (CLAUDE.md). Keyboard undo/redo and the confirmation toast are Task
-// 2.4 (see ./Toast.tsx); kept working here unchanged.
+// renderer/planner/PlannerApp — the planner window shell (Task 4.1 addendum, Task 4.2
+// addendum). Owns window-session state only (`view`, `selectedId`, `layout`) — the
+// Store is the single source of truth (CLAUDE.md). Keyboard undo/redo and the
+// confirmation toast are Task 2.4 (see ./Toast.tsx); the rest of the keyboard model
+// (j/k, single-key actions, menus, the command palette) is wired by usePlannerKeys.ts
+// (Task 4.2) to keep this file under ~220 lines.
 import { useEffect, useRef, useState } from 'react';
 import { useApplyTheme } from '../theme/ThemeProvider';
 import { useSnapshot } from '../lib/useStore';
+import type { ActionInput } from '../lib/useStore';
 import { keyGlyphs } from '../../shared/platform';
 import type { Platform } from '../../shared/platform';
-import type { Task } from '../../core/types';
+import type { Task, Due, Action, List } from '../../core/types';
+import { INBOX_ID, createEmptyData } from '../../core/defaults';
 import { Toast } from './Toast';
 import { TitleBar } from './TitleBar';
 import { Rail } from './Rail';
 import { TaskList, resolveView } from './TaskList';
-import type { ViewId } from './TaskList';
+import type { ViewId, TaskListHandle } from './TaskList';
 import { EmptyState } from './EmptyState';
+import { Menu } from './Menu';
+import { DueField } from './DueField';
+import { Commands } from './Commands';
+import { rowDomId } from './TaskRow';
+import { usePlannerKeys, runPaletteAction } from './usePlannerKeys';
+import type { MenuState } from './usePlannerKeys';
+import { snoozeOptions } from './keys';
 
 const THREE_COL_MIN_WIDTH = 900;
 
@@ -38,6 +49,86 @@ function EmptyStateFor({ view, title, platform, captureAccelerator }: { view: Vi
   return <EmptyState title={`No open tasks tagged ${title}.`} />;
 }
 
+/** Every tag used by an open, top-level task, alphabetical — same rule as Rail.tsx's
+ * own (private) list, duplicated here rather than exported across a file this task's
+ * scope doesn't touch. */
+function openTagsSorted(tasks: Task[]): string[] {
+  const set = new Set<string>();
+  for (const t of tasks) {
+    if (t.status !== 'open' || t.parentId !== undefined) continue;
+    for (const tag of t.tags) set.add(tag);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+interface TaskActionMenuProps {
+  menu: MenuState;
+  task: Task;
+  anchor: HTMLElement;
+  lists: List[];
+  now: number;
+  dispatchOwn: (action: ActionInput) => void;
+  closeMenu: () => void;
+}
+
+/** The snooze/due/move-to-list menu content (Task 4.2 addendum ruling 3) — composed
+ * here (not in Menu.tsx, which stays a generic anchored overlay) since only PlannerApp
+ * knows which task/kind is active. `key={`${menu.kind}-${menu.taskId}`}` at the call
+ * site remounts this fresh whenever the target changes, so "Pick…" mode (local state)
+ * never leaks from one snooze session into the next. */
+function TaskActionMenu({ menu, task, anchor, lists, now, dispatchOwn, closeMenu }: TaskActionMenuProps) {
+  const [picking, setPicking] = useState(false);
+
+  const label = menu.kind === 'snooze' ? 'Snooze' : menu.kind === 'due' ? 'Due date' : 'Move to list';
+
+  const items =
+    menu.kind === 'move'
+      ? [...lists].sort((a, b) => (a.id === INBOX_ID ? -1 : b.id === INBOX_ID ? 1 : a.order - b.order)).map((l) => ({ id: l.id, label: l.name }))
+      : menu.kind === 'snooze' && !picking
+        ? snoozeOptions(now).map((o) => ({ id: o.id, label: o.label }))
+        : undefined;
+
+  const onSelect =
+    menu.kind === 'move'
+      ? (listId: string) => {
+          dispatchOwn({ type: 'task/move', id: task.id, listId });
+          closeMenu();
+        }
+      : menu.kind === 'snooze'
+        ? (id: string) => {
+            if (id === 'pick') {
+              setPicking(true);
+              return;
+            }
+            const until = snoozeOptions(now).find((o) => o.id === id)?.until;
+            if (until !== undefined) dispatchOwn({ type: 'task/snooze', id: task.id, until });
+            closeMenu();
+          }
+        : undefined;
+
+  const showDueField = menu.kind === 'due' || (menu.kind === 'snooze' && picking);
+
+  return (
+    <Menu anchor={anchor} onClose={closeMenu} label={label} items={items} onSelect={onSelect}>
+      {showDueField && (
+        <DueField
+          now={now}
+          onClose={closeMenu}
+          onApply={(due: Due | undefined) => {
+            if (menu.kind === 'due') {
+              dispatchOwn({ type: 'task/edit', id: task.id, patch: { due } });
+            } else if (due) {
+              const at = new Date(due.date + 'T' + (due.time ?? '09:00'));
+              dispatchOwn({ type: 'task/snooze', id: task.id, until: at.getTime() });
+            }
+            closeMenu();
+          }}
+        />
+      )}
+    </Menu>
+  );
+}
+
 export function PlannerApp() {
   const snapshot = useSnapshot();
   useApplyTheme(snapshot);
@@ -46,11 +137,10 @@ export function PlannerApp() {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [layout, setLayout] = useState<'two' | 'three'>('three');
   const rootRef = useRef<HTMLDivElement>(null);
+  const taskListRef = useRef<TaskListHandle>(null);
 
   const platform: Platform = snapshot?.platform ?? 'win32';
 
-  // Addendum ruling 8: a `data-layout` attribute for Task 4.3's detail pane to key off
-  // of — nothing renders in that region yet.
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
@@ -94,22 +184,48 @@ export function PlannerApp() {
 
   // Bypasses the `dispatch()` helper to capture the resulting rev: the toast only
   // shows an "<label> · Undo" confirmation for a `lastUndo` this window's OWN action
-  // produced (Task 2.4 addendum ruling 2).
-  const onToggle = (task: Task): void => {
-    const action =
-      task.status === 'done'
-        ? { type: 'task/uncomplete' as const, id: task.id, now: Date.now() }
-        : // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the
-          // reducer only spawns a next occurrence when the completed task has `recurrence`.
-          { type: 'task/complete' as const, id: task.id, by: 'user' as const, now: Date.now(), spawnId: crypto.randomUUID() };
-    void window.tb.invoke('store:dispatch', action).then(({ rev }) => setOwnRev(rev));
+  // produced (Task 2.4 addendum ruling 2). Shared by every keyboard-triggered dispatch
+  // (usePlannerKeys, the menus below) and the mouse-driven `onToggle`.
+  const dispatchOwn = (action: ActionInput): void => {
+    void window.tb.invoke('store:dispatch', { ...action, now: Date.now() } as Action).then(({ rev }) => setOwnRev(rev));
   };
+  const onToggle = (task: Task): void =>
+    dispatchOwn(
+      task.status === 'done'
+        ? { type: 'task/uncomplete', id: task.id }
+        : { type: 'task/complete', id: task.id, by: 'user', spawnId: crypto.randomUUID() }
+    );
+
+  const now = Date.now();
+  const resolved = snapshot ? resolveView(view, snapshot.data, now) : { title: '', meta: '', sections: [], isEmpty: true };
+
+  const keys = usePlannerKeys({
+    taskListRef,
+    platform,
+    view,
+    setView: selectView,
+    // Hooks run unconditionally, before the `if (!snapshot) return null` below — this
+    // placeholder is only ever actually read once a snapshot exists (nothing before
+    // that early return attaches `keys.onKeyDown` to a real element).
+    data: snapshot?.data ?? createEmptyData(0, '0.0.0'),
+    resolved,
+    selectedId,
+    setSelectedId,
+    dispatchOwn
+  });
 
   if (!snapshot) return null;
 
-  const now = Date.now();
-  const resolved = resolveView(view, snapshot.data, now);
   const defaultListId = view.startsWith('list:') ? view.slice('list:'.length) : undefined;
+  const menuTask = keys.menu ? snapshot.data.tasks.find((t) => t.id === keys.menu!.taskId) : undefined;
+  const menuAnchor = keys.menu ? document.getElementById(rowDomId(keys.menu.taskId)) : null;
+
+  // No prop on TitleBar (out of this task's file scope) exposes its capture field
+  // programmatically — clicking its own trigger button reuses TitleBar's existing
+  // `onClick={() => setActive(true)}` without needing to touch that file.
+  const focusCapture = (): void => {
+    document.querySelector<HTMLButtonElement>('.tb .cap-trigger')?.click();
+  };
 
   return (
     <div className="planner" data-layout={layout} ref={rootRef}>
@@ -132,10 +248,61 @@ export function PlannerApp() {
           {resolved.isEmpty ? (
             <EmptyStateFor view={view} title={resolved.title} platform={platform} captureAccelerator={snapshot.data.settings.hotkeys.capture} />
           ) : (
-            <TaskList sections={resolved.sections} now={now} selectedId={selectedId} onSelect={onSelectTask} onToggle={onToggle} />
+            <TaskList
+              ref={taskListRef}
+              sections={resolved.sections}
+              now={now}
+              selectedId={selectedId}
+              activeDescendantId={selectedId}
+              onSelect={onSelectTask}
+              onToggle={onToggle}
+              editingId={keys.editingId}
+              onEditSave={keys.onEditSave}
+              onEditCancel={keys.onEditCancel}
+              onKeyDown={keys.onKeyDown}
+            />
           )}
         </div>
       </div>
+
+      {keys.menu && menuTask && menuAnchor && (
+        <TaskActionMenu
+          key={`${keys.menu.kind}-${keys.menu.taskId}`}
+          menu={keys.menu}
+          task={menuTask}
+          anchor={menuAnchor}
+          lists={snapshot.data.lists}
+          now={now}
+          dispatchOwn={dispatchOwn}
+          closeMenu={keys.closeMenu}
+        />
+      )}
+
+      {keys.paletteOpen && (
+        <Commands
+          ctx={{
+            lists: snapshot.data.lists.filter((l) => l.id !== INBOX_ID),
+            tags: openTagsSorted(snapshot.data.tasks),
+            selectedTask: snapshot.data.tasks.find((t) => t.id === selectedId),
+            platform
+          }}
+          onClose={keys.closePalette}
+          onRun={(action) =>
+            runPaletteAction({
+              action,
+              data: snapshot.data,
+              selectedId,
+              setView: selectView,
+              setSelectedId,
+              setMenu: keys.setMenu,
+              dispatchOwn,
+              focusCapture,
+              close: keys.closePalette
+            })
+          }
+        />
+      )}
+
       <Toast
         lastUndo={snapshot.lastUndo}
         lastUndone={snapshot.lastUndone}
