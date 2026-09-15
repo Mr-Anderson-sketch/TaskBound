@@ -1,251 +1,228 @@
+// main/main — app entry point. Boots CSP, persistence, the Store, every window
+// manager, hotkeys, and the tray, then wires the Store <-> IPC <-> renderer loop.
+// See .superpowers/sdd/PLAN/task-1.8-1.9-brief.md Part C for the exact wiring this
+// follows; CLAUDE.md ("the store lives in the main process; renderers are views").
 import path from 'node:path';
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
-import type { Event as ElectronEvent, Rectangle, IpcMainInvokeEvent } from 'electron';
-import { loadState, saveState, getCachedState } from './stateManager';
-import { AppState } from '../shared/types';
+import { pathToFileURL } from 'node:url';
+import { app, session, nativeTheme, ipcMain, shell, globalShortcut } from 'electron';
+import type { WebContents } from 'electron';
+import { load, save } from './persist';
+import { resolveDataDir } from './paths';
+import { Store } from './store';
+import { registerIpc } from './ipc';
+import { installCsp } from './windows/csp';
+import { StripWindow } from './windows/strip';
+import { PaletteWindow } from './windows/palette';
+import { PlannerWindow } from './windows/planner';
+import { Hotkeys, validateAccelerator } from './hotkeys';
+import { AppTray } from './tray';
+import type { Snapshot } from '../shared/ipc';
+import type { Settings } from '../core/types';
 
-let mainWindow: BrowserWindow | null = null;
-let currentAlwaysOnTop = true;
-let tickInterval: NodeJS.Timeout | null = null;
+type Route = 'strip' | 'palette' | 'planner';
 
-const isDev = () => process.env.NODE_ENV === 'development' || !app.isPackaged;
+const isDev = !app.isPackaged && !!process.env.VITE_DEV_SERVER_URL;
 
-const getWorkAreaSize = () => screen.getPrimaryDisplay().workAreaSize;
+// --- paths (must run before whenReady) ------------------------------------------
 
-const calculateMinimumSize = (alwaysOnTop: boolean) => {
-  const { width, height } = getWorkAreaSize();
-  const quarterWidth = Math.max(240, Math.floor(width / 4));
-  const quarterHeight = Math.max(240, Math.floor(height / 4));
-  const relaxedWidth = Math.max(240, Math.floor(width / 6));
-  const relaxedHeight = Math.max(240, Math.floor(height / 6));
-  return alwaysOnTop
-    ? { width: quarterWidth, height: quarterHeight }
-    : { width: relaxedWidth, height: relaxedHeight };
-};
+if (!app.isPackaged && !process.env.TIMEBOUND_DATA_DIR) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'TimeBound-dev'));
+}
+app.setAppUserModelId('com.timebound.app');
 
-const applyAlwaysOnTopState = (enabled: boolean) => {
-  currentAlwaysOnTop = enabled;
-  if (!mainWindow) {
-    return;
+const dataDir = resolveDataDir({ userData: app.getPath('userData'), env: process.env.TIMEBOUND_DATA_DIR });
+const legacyPath = process.env.TIMEBOUND_DATA_DIR
+  ? path.join(dataDir, 'state.json')
+  : path.join(app.getPath('appData'), 'TimeBound', 'state.json');
+
+function rendererUrl(route: Route): string {
+  if (isDev) {
+    return `${process.env.VITE_DEV_SERVER_URL}#/${route}`;
   }
+  return `${pathToFileURL(path.join(__dirname, '../../renderer/index.html')).href}#/${route}`;
+}
 
-  const { width: minWidth, height: minHeight } = calculateMinimumSize(enabled);
-  mainWindow.setAlwaysOnTop(enabled, 'screen-saver');
-  mainWindow.setMinimumSize(minWidth, minHeight);
+const allowedOrigins = isDev
+  ? [process.env.VITE_DEV_SERVER_URL!.replace(/\/?$/, '/')]
+  : [pathToFileURL(path.join(__dirname, '../../renderer')).href + '/'];
 
-  if (enabled) {
-    const [currentWidth, currentHeight] = mainWindow.getSize();
-    const clampedWidth = Math.max(currentWidth, minWidth);
-    const clampedHeight = Math.max(currentHeight, minHeight);
-    if (clampedWidth !== currentWidth || clampedHeight !== currentHeight) {
-      mainWindow.setSize(clampedWidth, clampedHeight);
-    }
-  }
-};
+const preloadPath = path.join(__dirname, '../../preload/main/preload.js');
 
-const broadcastWindowState = () => {
-  if (!mainWindow) {
-    return;
-  }
+// --- single instance --------------------------------------------------------------
 
-  const state = {
-    isMaximized: mainWindow.isMaximized()
-  };
+let planner: PlannerWindow | undefined;
 
-  mainWindow.webContents.send('window:state', state);
-};
-
-const startTickEmitter = () => {
-  if (tickInterval) {
-    return;
-  }
-  tickInterval = setInterval(() => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return;
-    }
-    mainWindow.webContents.send('timer:tick', Date.now());
-  }, 1000);
-};
-
-const stopTickEmitter = () => {
-  if (tickInterval) {
-    clearInterval(tickInterval);
-    tickInterval = null;
-  }
-};
-
-const createMainWindow = async () => {
-  const { width: screenWidth, height: screenHeight } = getWorkAreaSize();
-  const { width: minWidth, height: minHeight } = calculateMinimumSize(currentAlwaysOnTop);
-  const maxWidth = screenWidth;
-  const maxHeight = screenHeight;
-  const defaultWidth = Math.min(Math.max(minWidth, Math.floor(screenWidth / 3)), maxWidth);
-  const defaultHeight = Math.min(Math.max(minHeight, Math.floor(screenHeight / 2)), maxHeight);
-
-  mainWindow = new BrowserWindow({
-    width: defaultWidth,
-    height: defaultHeight,
-    minWidth,
-    minHeight,
-    maxWidth,
-    maxHeight,
-    resizable: true,
-    maximizable: true,
-    fullscreenable: true,
-    alwaysOnTop: currentAlwaysOnTop,
-    frame: false,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
-    transparent: true,
-    backgroundColor: '#00000000',
-    title: 'TimeBound',
-    webPreferences: {
-      preload: path.join(__dirname, '../../preload/main/preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: false
-    }
-  });
-
-  applyAlwaysOnTopState(currentAlwaysOnTop);
-
-  mainWindow.on('will-resize', (event: ElectronEvent, newBounds: Rectangle) => {
-    if (!mainWindow) {
-      return;
-    }
-    const { width: screenMaxWidth, height: screenMaxHeight } = getWorkAreaSize();
-    const width = Math.min(newBounds.width, screenMaxWidth);
-    const height = Math.min(newBounds.height, screenMaxHeight);
-    if (width !== newBounds.width || height !== newBounds.height) {
-      event.preventDefault();
-      mainWindow.setSize(width, height);
-    }
-  });
-
-  mainWindow.on('maximize', broadcastWindowState);
-  mainWindow.on('unmaximize', broadcastWindowState);
-  mainWindow.on('enter-full-screen', broadcastWindowState);
-  mainWindow.on('leave-full-screen', broadcastWindowState);
-  mainWindow.on('closed', () => {
-    stopTickEmitter();
-    mainWindow = null;
-  });
-
-  const devServer = process.env.VITE_DEV_SERVER_URL;
-  if (devServer) {
-    await mainWindow.loadURL(devServer);
-    if (isDev()) {
-      mainWindow.webContents.openDevTools({ mode: 'detach' });
-    }
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'));
-  }
-
-  mainWindow.webContents.once('did-finish-load', () => {
-    broadcastWindowState();
-    startTickEmitter();
-  });
-};
-
-const registerIpc = () => {
-  ipcMain.handle('state:load', async (_event: IpcMainInvokeEvent) => {
-    const cached = getCachedState();
-    if (cached) {
-      return cached;
-    }
-    return loadState();
-  });
-
-  ipcMain.handle('state:save', async (_event: IpcMainInvokeEvent, state: AppState) => {
-    return saveState(state);
-  });
-
-  ipcMain.handle('app:quit', () => {
-    app.quit();
-  });
-
-  ipcMain.handle('window:setAlwaysOnTop', async (_event: IpcMainInvokeEvent, enabled: boolean) => {
-    applyAlwaysOnTopState(Boolean(enabled));
-  });
-
-  ipcMain.handle('window:minimize', () => {
-    mainWindow?.minimize();
-  });
-
-  ipcMain.handle('window:toggleMaximize', () => {
-    if (!mainWindow) {
-      return;
-    }
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow.maximize();
-    }
-    broadcastWindowState();
-  });
-
-  ipcMain.handle('window:close', () => {
-    if (mainWindow) {
-      mainWindow.close();
-    }
-  });
-
-  ipcMain.handle('window:getState', () => {
-    return {
-      isMaximized: mainWindow?.isMaximized() ?? false
-    };
-  });
-
-  ipcMain.handle('window:setSize', async (_event: IpcMainInvokeEvent, width: number, height: number) => {
-    if (mainWindow) {
-      mainWindow.setSize(width, height);
-    }
-  });
-
-  ipcMain.handle('window:moveToTopRight', async () => {
-    if (!mainWindow) {
-      return;
-    }
-    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-    const [windowWidth] = mainWindow.getSize();
-    const x = screenWidth - windowWidth - 20;
-    const y = 20;
-    mainWindow.setPosition(x, y);
-  });
-};
-
-const setupApp = () => {
-  if (!app.requestSingleInstanceLock()) {
-    app.quit();
-    return;
-  }
-
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
+    planner?.show();
   });
 
   app.whenReady().then(async () => {
-    registerIpc();
-    const initialState = await loadState();
-    currentAlwaysOnTop = initialState.preferences?.alwaysOnTop ?? true;
-    await createMainWindow();
-    app.on('activate', async () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        await createMainWindow();
+    installCsp(session.defaultSession, isDev);
+
+    const result = await load({ dir: dataDir, now: Date.now }, app.getVersion(), legacyPath);
+
+    const store = new Store(result.data, {
+      save: (d) => save({ dir: dataDir, now: Date.now }, d),
+      now: Date.now,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      systemDark: () => nativeTheme.shouldUseDarkColors
+    });
+
+    const strip = new StripWindow({ store, preloadPath, rendererUrl, isDev });
+    strip.create();
+
+    const palette = new PaletteWindow({ preloadPath, rendererUrl });
+    const plannerWindow = new PlannerWindow({ preloadPath, rendererUrl });
+    planner = plannerWindow;
+
+    // --- broadcast: store changes and system theme changes reach every live window ---
+
+    function liveWebContents(): WebContents[] {
+      const list: WebContents[] = [];
+      const s = strip.webContents;
+      if (s && !s.isDestroyed()) list.push(s);
+      const p = palette.webContents;
+      if (p && !p.isDestroyed()) list.push(p);
+      const pl = plannerWindow.webContents;
+      if (pl && !pl.isDestroyed()) list.push(pl);
+      return list;
+    }
+
+    function broadcast(snapshot: Snapshot): void {
+      for (const wc of liveWebContents()) wc.send('store:changed', snapshot);
+    }
+
+    store.subscribe(broadcast);
+
+    // nativeTheme changes are not a dispatch (no Data change), so they don't flow
+    // through store.subscribe: broadcast a fresh snapshot (with the new systemDark)
+    // directly. Never dispatch here, never add a method to Store for this.
+    nativeTheme.on('updated', () => {
+      broadcast(store.get());
+    });
+
+    strip.onState((st) => {
+      strip.webContents?.send('strip:state', st);
+    });
+
+    // --- hotkeys -----------------------------------------------------------------
+
+    const hotkeys = new Hotkeys(globalShortcut);
+
+    function applyHotkeys(settings: Settings): void {
+      hotkeys.apply(settings, {
+        capture: () => palette.show('capture'),
+        toggleStrip: () => strip.toggle(),
+        completeAdvance: () => {
+          const current = store.get().today.current;
+          if (!current) return;
+          store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user' });
+        },
+        // Reducer support for timer/start and timer/pause lands in Task 3.1; dispatching
+        // them now is harmless (a no-op reducer case) and means the hotkey is wired once,
+        // not revisited then.
+        toggleTimer: () => {
+          const current = store.get().today.current;
+          if (!current) return;
+          const running = current.timer?.runningSince !== undefined;
+          store.dispatch({ type: running ? 'timer/pause' : 'timer/start', id: current.id, now: Date.now() });
+        },
+        undo: () => {
+          store.undo();
+        }
+      });
+    }
+
+    applyHotkeys(store.get().data.settings);
+    let lastHotkeysJson = JSON.stringify(store.get().data.settings.hotkeys);
+    store.subscribe((s) => {
+      const json = JSON.stringify(s.data.settings.hotkeys);
+      if (json !== lastHotkeysJson) {
+        lastHotkeysJson = json;
+        applyHotkeys(s.data.settings);
       }
     });
-  });
 
-  app.on('window-all-closed', () => {
-    stopTickEmitter();
-    if (process.platform !== 'darwin') {
-      app.quit();
+    // Strip settings (edge, width, autoHide, ...) are applied by StripWindow itself:
+    // its own store.subscribe (set up in strip.create()) already calls
+    // this.applySettings(snapshot.data.settings.strip) on every change.
+
+    // --- tray ----------------------------------------------------------------------
+
+    const tray = new AppTray({
+      store,
+      iconPath: path.join(app.getAppPath(), 'build', 'icon-16x16.png'),
+      onComplete: () => {
+        const current = store.get().today.current;
+        if (!current) return;
+        store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user' });
+      },
+      onCapture: () => palette.show('capture'),
+      onToggleStrip: () => strip.toggle(),
+      onOpenPlanner: () => plannerWindow.show(),
+      onQuit: () => app.quit()
+    });
+
+    // --- ipc -------------------------------------------------------------------------
+
+    registerIpc({
+      ipcMain,
+      store,
+      allowedOrigins,
+      windows: {
+        stripExpand: (open) => strip.expand(open),
+        stripReportSize: (size) => strip.handleReportedSize(size),
+        stripSetEdge: (edge) => strip.setEdge(edge),
+        stripDragStart: () => strip.beginDrag(),
+        stripDragEnd: () => strip.endDrag(),
+        stripHover: (inside) => strip.hover(inside),
+        paletteShow: (mode) => palette.show(mode),
+        paletteHide: () => palette.hide(),
+        plannerShow: () => plannerWindow.show(),
+        plannerHide: () => plannerWindow.hide(),
+        openExternal: (url) => shell.openExternal(url),
+        quit: () => app.quit(),
+        // Slice 5: data export/import/choose-dir are not implemented yet.
+        dataExport: () => ({}),
+        dataImport: () => ({ error: 'not yet' }),
+        dataChooseDir: () => ({}),
+        hotkeysTest: (accelerator) => validateAccelerator(accelerator)
+      }
+    });
+
+    // --- lifecycle -------------------------------------------------------------------
+
+    app.on('window-all-closed', () => {
+      // Tray app: closing every window must not quit the app.
+    });
+
+    let quitting = false;
+    app.on('before-quit', (event) => {
+      if (quitting) return;
+      event.preventDefault();
+      quitting = true;
+      plannerWindow.setQuitting(true);
+      hotkeys.unregisterAll();
+      void store.flush().then(() => app.quit());
+    });
+
+    const reloadedOnce = new WeakSet<WebContents>();
+    app.on('render-process-gone', (_event, webContents, details) => {
+      console.error('render-process-gone', details);
+      if (reloadedOnce.has(webContents)) return;
+      reloadedOnce.add(webContents);
+      webContents.reload();
+    });
+
+    // --- test seam ---------------------------------------------------------------
+
+    if (process.env.TIMEBOUND_E2E === '1') {
+      (globalThis as unknown as { __tb: unknown }).__tb = { store, strip, palette, planner: plannerWindow, hotkeys, tray };
     }
   });
-};
-
-setupApp();
+}

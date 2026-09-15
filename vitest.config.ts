@@ -5,8 +5,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
+    // Every unit test (including tests/renderer/format.test.ts) is pure logic with no
+    // DOM dependency, so plain 'node' covers all of it — no jsdom dependency needed.
     environment: 'node',
-    environmentMatchGlobs: [['tests/renderer/**', 'jsdom']],
     clearMocks: true,
     restoreMocks: true,
     reporters: 'default'

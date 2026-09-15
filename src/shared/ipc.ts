@@ -27,6 +27,7 @@ export type InvokeMap = {
   'strip:reportSize': (size: { width: number; height: number }) => void;
   'strip:setEdge': (edge: Edge) => void;
   'strip:dragStart': () => void;
+  'strip:dragEnd': () => void;
   'strip:hover': (inside: boolean) => void;
   'palette:show': (mode: PaletteMode) => void;
   'palette:hide': () => void;

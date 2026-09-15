@@ -52,6 +52,9 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<Launched> {
   env.TIMEBOUND_DATA_DIR = dataDir;
   // The pre-rebuild app resolves %APPDATA%\TimeBound; keep it isolated too.
   env.APPDATA = dataDir;
+  // Exposes globalThis.__tb (store/strip/palette/planner/hotkeys/tray) for e2e specs.
+  // Never set outside of tests — see main.ts's "test seam" comment.
+  env.TIMEBOUND_E2E = '1';
   Object.assign(env, opts.env ?? {});
 
   const executablePath = path.join(ROOT, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');

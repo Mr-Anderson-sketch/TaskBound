@@ -1,0 +1,666 @@
+/* renderer/styles/app.css — base reset, system tokens, and every component's CSS,
+   ported from docs/design/preview.html (the reference implementation of the strip,
+   pill, panel and palette — see DESIGN.md). Colours are always `var(--…)`; the only
+   literal colour anywhere below is `transparent`. */
+
+:root {
+  --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
+  --font-display: 'Instrument Serif', Georgia, serif;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 8px;
+  --r-full: 999px;
+  --t-micro: 120ms;
+  --t-short: 160ms;
+  --t-medium: 240ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in: cubic-bezier(0.6, 0, 0.8, 0.4);
+  --strip-h: 32px;
+  --pill-h: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+body {
+  color: var(--ink);
+  background: var(--bg);
+}
+
+/* The strip route paints nothing behind the strip itself (transparent window). */
+body[data-route='strip'] {
+  background: transparent;
+}
+body[data-route='strip'] html,
+html:has(body[data-route='strip']) {
+  background: transparent;
+}
+
+#root {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Reduced motion: driven by a JS-computed `data-reduced-motion` attribute on <body>
+   (see StripApp), which folds together `prefers-reduced-motion` and the in-app
+   `settings.reducedMotion` override ('on'/'off'/'system') — a plain `@media` query
+   alone cannot express the 'off' case (force motion even if the OS prefers less). */
+body[data-reduced-motion='true'] * {
+  transition-duration: 0.001ms !important;
+  animation-duration: 0.001ms !important;
+}
+
+.sliver {
+  width: 100%;
+  height: 100%;
+  background: color-mix(in oklch, var(--accent) 60%, transparent);
+}
+
+/* ---------------------------------------------------------------------------------
+   Strip
+--------------------------------------------------------------------------------- */
+
+.strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--strip-h);
+  width: max-content;
+  padding: 0 10px 0 0;
+  background: var(--strip-bg);
+  color: var(--strip-ink);
+  font: 500 13px/16px var(--font-ui);
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  overflow: hidden;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.strip[data-edge='top'] {
+  border-radius: 0 0 var(--r-2) var(--r-2);
+}
+
+.strip .handle {
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-1);
+  cursor: grab;
+  flex: none;
+}
+
+.strip .handle:hover {
+  background: color-mix(in oklch, var(--strip-ink) 8%, transparent);
+}
+
+.strip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.strip[data-state='paused'] .dot {
+  background: var(--strip-muted);
+}
+.strip[data-state='overtime'] .dot {
+  background: var(--warn);
+}
+.strip[data-state='done'] .dot {
+  background: var(--ok);
+}
+.strip[data-state='unplanned'] .dot,
+.strip[data-state='empty'] .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--strip-muted);
+}
+.strip[data-state='saving-failed'] .dot {
+  background: var(--danger);
+}
+
+.strip .title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+}
+
+.strip .title .dim {
+  color: var(--strip-muted);
+  font-weight: 400;
+}
+
+.strip .title .strike {
+  text-decoration: line-through;
+  color: var(--strip-muted);
+}
+
+.strip .title.slide-in {
+  animation: strip-title-slide var(--t-short) var(--ease-out);
+}
+
+@keyframes strip-title-slide {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.strip .chip {
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--r-1);
+  background: var(--accent-tint);
+  color: var(--strip-ink);
+  font: 500 12px/20px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  border: 0;
+  cursor: default;
+}
+
+.strip .chip.is-button {
+  cursor: pointer;
+}
+
+.strip .chip.paused {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--strip-muted);
+}
+
+.strip .chip.overtime {
+  background: color-mix(in oklch, var(--warn) 22%, transparent);
+}
+
+.strip .chip.plan {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent);
+  font-family: var(--font-ui);
+}
+
+.strip .progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.strip[data-edge='top'] .progress {
+  bottom: auto;
+  top: 0;
+}
+
+.strip[data-clickthrough='true'] {
+  outline: 1.5px dashed var(--strip-muted);
+  outline-offset: -3px;
+  opacity: 0.72;
+}
+
+/* ---------------------------------------------------------------------------------
+   Pill (collapsed strip)
+--------------------------------------------------------------------------------- */
+
+.pill {
+  height: var(--pill-h);
+  max-width: 240px;
+  width: max-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 6px;
+  background: var(--strip-bg);
+  color: var(--strip-ink);
+  font: 500 12px/16px var(--font-ui);
+  border-radius: var(--r-full);
+  box-shadow: 0 0 0 1px var(--line);
+  user-select: none;
+}
+
+.pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.pill .t {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.pill .m {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--strip-muted);
+  flex: none;
+}
+
+/* ---------------------------------------------------------------------------------
+   Hover panel
+--------------------------------------------------------------------------------- */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  background: var(--strip-bg);
+  color: var(--strip-ink);
+}
+
+.panel .head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--strip-muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel .undo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  background: var(--accent-tint);
+  border: 0;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.panel .undo b {
+  font-weight: 500;
+}
+
+.panel .prow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  font-size: 13px;
+}
+
+.panel .prow:hover {
+  background: color-mix(in oklch, var(--strip-ink) 5%, transparent);
+}
+
+.panel .prow.cur {
+  font-weight: 500;
+}
+
+.panel .prow .cb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--strip-muted);
+  flex: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.panel .prow.cur .cb {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 45%, transparent 48%);
+}
+
+.panel .prow .t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.panel .prow .due {
+  font-size: 11px;
+  color: var(--strip-muted);
+  font-family: var(--font-mono);
+}
+
+.panel .prow .acts {
+  display: none;
+  gap: 2px;
+}
+
+.panel .prow:hover .acts {
+  display: flex;
+}
+
+.panel .prow .acts button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-1);
+  font-size: 12px;
+  color: var(--strip-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.panel .prow .acts button:hover {
+  background: var(--accent-tint);
+  color: var(--strip-ink);
+}
+
+.panel .strip {
+  border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------------
+   Palette
+--------------------------------------------------------------------------------- */
+
+.palette {
+  width: 560px;
+  background: var(--surface);
+  color: var(--ink);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.palette .in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.palette .in input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: 400 16px/20px var(--font-ui);
+}
+
+.palette .in input::placeholder {
+  color: var(--muted);
+}
+
+.palette .stub {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.palette .title {
+  padding: 12px 16px 4px;
+  font: 400 22px/26px var(--font-display);
+}
+
+.palette .foot {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 16px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.palette .foot kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  background: var(--bg);
+}
+
+/* ---------------------------------------------------------------------------------
+   Buttons
+--------------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r-2);
+  font: 500 13px/16px var(--font-ui);
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn.ghost {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.icon-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-1);
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: color-mix(in oklch, var(--ink) 8%, transparent);
+}
+
+/* ---------------------------------------------------------------------------------
+   Planner (placeholder — Slice 4 builds this out)
+--------------------------------------------------------------------------------- */
+
+.planner {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.planner .tb {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex: none;
+  -webkit-app-region: drag;
+}
+
+.planner .tb.mac {
+  padding-left: 78px;
+}
+
+.planner .tb .brand {
+  font: 500 13px var(--font-ui);
+  letter-spacing: 0.02em;
+}
+
+.planner .tb .wc {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.planner .tb .wc button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--r-1);
+}
+
+.planner .tb .wc button:hover {
+  background: color-mix(in oklch, var(--ink) 8%, transparent);
+}
+
+.planner .main {
+  padding: 18px 24px;
+  overflow: auto;
+  flex: 1;
+}
+
+.planner .main .h {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.planner .main .h .d {
+  font: 400 28px/32px var(--font-display);
+}
+
+.planner .main .h .m {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.planner .task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: var(--r-2);
+  font-size: 14px;
+  width: 100%;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.planner .task:hover {
+  background: var(--surface);
+}
+
+.planner .task.cur .t {
+  font-weight: 500;
+}
+
+.planner .task .cb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  flex: none;
+}
+
+.planner .task.cur .cb {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 45%, transparent 48%);
+}
+
+.planner .task.done .cb {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.planner .task.done .t {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.planner .task .t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner .sec {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 14px 0 4px;
+}
+
+.planner .empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--muted);
+}
+
+.planner .empty .e1 {
+  font: 400 22px/28px var(--font-display);
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.planner .empty kbd {
+  font-family: var(--font-mono);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+  background: var(--surface);
+}

@@ -23,6 +23,7 @@ export interface WindowCommands {
   stripReportSize(size: { width: number; height: number }): void | Promise<void>;
   stripSetEdge(edge: Edge): void | Promise<void>;
   stripDragStart(): void | Promise<void>;
+  stripDragEnd(): void | Promise<void>;
   stripHover(inside: boolean): void | Promise<void>;
   paletteShow(mode: PaletteMode): void | Promise<void>;
   paletteHide(): void | Promise<void>;
@@ -144,6 +145,11 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('strip:dragStart', async (event: IpcMainInvokeEvent) => {
     guard(event);
     return windows.stripDragStart();
+  });
+
+  ipcMain.handle('strip:dragEnd', async (event: IpcMainInvokeEvent) => {
+    guard(event);
+    return windows.stripDragEnd();
   });
 
   ipcMain.handle('strip:hover', async (event: IpcMainInvokeEvent, inside: unknown) => {
