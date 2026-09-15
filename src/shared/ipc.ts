@@ -10,7 +10,11 @@ export interface Snapshot {
   today: TodayView;
   canUndo: boolean;
   canRedo: boolean;
-  lastUndoLabel?: string;
+  /** Set by `Store.dispatch` whenever it pushes a new undo entry (`{ label, rev }`
+   * where `rev` is the resulting `Snapshot.rev`); cleared by `undo()`/`redo()`. The
+   * panel's "Completed X · Undo" row keys off `rev` changing, not `label`, so it
+   * re-triggers even when two consecutive actions happen to produce the same label. */
+  lastUndo?: { label: string; rev: number };
   platform: 'win32' | 'darwin' | 'linux';
   systemDark: boolean;
   capabilities: { appBar: boolean; fullscreenDetect: boolean };

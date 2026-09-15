@@ -48,9 +48,9 @@ export const Panel = forwardRef<HTMLDivElement, PanelProps>(function Panel(
         </span>
         <span>{nextTitle ? `Next: ${nextTitle}` : ''}</span>
       </div>
-      {showUndo && snapshot.lastUndoLabel && (
+      {showUndo && snapshot.lastUndo && (
         <button type="button" className="undo" onClick={onUndo}>
-          <span>{snapshot.lastUndoLabel}</span>
+          <span>{snapshot.lastUndo.label}</span>
           <span style={{ color: 'var(--accent)', fontWeight: 500 }}>Undo · {undoGlyphs}</span>
         </button>
       )}

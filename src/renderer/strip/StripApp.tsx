@@ -117,7 +117,7 @@ export function StripApp() {
   const prevCurrentRef = useRef<Task | undefined>(undefined);
   const completingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const undoRowTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const lastUndoLabelRef = useRef<string | undefined>(undefined);
+  const lastUndoRevRef = useRef<number | undefined>(undefined);
 
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hoverStartPointRef = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -174,15 +174,15 @@ export function StripApp() {
 
   useEffect(() => () => clearTimeout(completingTimeoutRef.current), []);
 
-  // --- panel undo row: 5s after lastUndoLabel changes -----------------------------
+  // --- panel undo row: 5s after it first sees a new lastUndo.rev (C2, fix round 1) --
   useEffect(() => {
-    if (!snapshot?.lastUndoLabel) return;
-    if (snapshot.lastUndoLabel === lastUndoLabelRef.current) return;
-    lastUndoLabelRef.current = snapshot.lastUndoLabel;
+    if (!snapshot?.lastUndo) return;
+    if (snapshot.lastUndo.rev === lastUndoRevRef.current) return;
+    lastUndoRevRef.current = snapshot.lastUndo.rev;
     setShowUndoRow(true);
     clearTimeout(undoRowTimeoutRef.current);
     undoRowTimeoutRef.current = setTimeout(() => setShowUndoRow(false), UNDO_ROW_MS);
-  }, [snapshot?.lastUndoLabel]);
+  }, [snapshot?.lastUndo]);
 
   useEffect(() => () => clearTimeout(undoRowTimeoutRef.current), []);
 
@@ -328,7 +328,12 @@ export function StripApp() {
         edge={edge}
         stripElement={stripElement}
         showUndo={showUndoRow}
-        onUndo={() => void window.tb.invoke('store:undo')}
+        onUndo={() => {
+          // Hide immediately rather than waiting on the round-trip: store.undo()
+          // clears Snapshot.lastUndo, but the effect above only reacts to a NEW rev.
+          setShowUndoRow(false);
+          void window.tb.invoke('store:undo');
+        }}
         undoGlyphs={undoGlyphs}
         onMakeCurrent={onMakeCurrent}
         onComplete={onComplete}

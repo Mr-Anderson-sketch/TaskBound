@@ -28,7 +28,7 @@ export class Store {
   private data: Data;
   private rev = 0;
   private undoStack = new UndoStack();
-  private lastUndoLabel: string | undefined;
+  private lastUndo: { label: string; rev: number } | undefined;
   private readonly subscribers = new Set<(s: Snapshot) => void>();
   private readonly capabilities: { appBar: boolean; fullscreenDetect: boolean };
   private readonly platform: 'win32' | 'darwin' | 'linux';
@@ -56,7 +56,7 @@ export class Store {
       today: todayView(this.data, this.deps.now()),
       canUndo: this.undoStack.canUndo,
       canRedo: this.undoStack.canRedo,
-      lastUndoLabel: this.lastUndoLabel,
+      lastUndo: this.lastUndo,
       platform: this.platform,
       systemDark: this.deps.systemDark(),
       capabilities: this.capabilities
@@ -78,6 +78,12 @@ export class Store {
       }
       this.data = { ...next, meta: { ...next.meta, lastSavedAt: this.deps.now() } };
       this.rev++;
+      // C2 (fix round 1): set on every dispatch that pushes an undo entry — NOT on
+      // undo()/redo() (see below) — so the panel's undo row can appear right after a
+      // normal action, not only after the user has already undone something.
+      if (label !== undefined) {
+        this.lastUndo = { label, rev: this.rev };
+      }
       this.scheduleSave();
       this.notify();
     }
@@ -88,7 +94,7 @@ export class Store {
     const result = this.undoStack.undo(this.data);
     if (!result) return undefined;
     this.data = result.data;
-    this.lastUndoLabel = result.label;
+    this.lastUndo = undefined;
     this.rev++;
     this.scheduleSave();
     this.notify();
@@ -99,7 +105,7 @@ export class Store {
     const result = this.undoStack.redo(this.data);
     if (!result) return undefined;
     this.data = result.data;
-    this.lastUndoLabel = result.label;
+    this.lastUndo = undefined;
     this.rev++;
     this.scheduleSave();
     this.notify();
@@ -118,7 +124,7 @@ export class Store {
     }
     this.data = data;
     this.undoStack = new UndoStack();
-    this.lastUndoLabel = undefined;
+    this.lastUndo = undefined;
     this.rev++;
     this.notify();
   }

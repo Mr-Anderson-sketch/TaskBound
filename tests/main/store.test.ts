@@ -229,6 +229,60 @@ describe('Store', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('dispatch() of an undoable action sets lastUndo to { label, rev } (C2, fix round 1)', () => {
+    const { store } = makeStore();
+    expect(store.get().lastUndo).toBeUndefined();
+
+    const rev = store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+
+    expect(store.get().lastUndo).toEqual({ label: 'Added "One"', rev });
+  });
+
+  it('dispatch() of a non-undoable or no-op action leaves lastUndo unchanged', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    const before = store.get().lastUndo;
+
+    // settings/patch is not in UNDOABLE_TYPES.
+    store.dispatch({ type: 'settings/patch', now: 1000, patch: { textSize: 'L' } });
+    expect(store.get().lastUndo).toEqual(before);
+
+    // task/edit is undoable but its reducer is a no-op (unimplemented) — no data
+    // change means dispatch() never reaches the lastUndo assignment.
+    store.dispatch({ type: 'task/edit', id: 'missing', now: 1000, patch: {} });
+    expect(store.get().lastUndo).toEqual(before);
+  });
+
+  it('undo() clears lastUndo', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    expect(store.get().lastUndo).toBeDefined();
+
+    store.undo();
+
+    expect(store.get().lastUndo).toBeUndefined();
+  });
+
+  it('redo() clears lastUndo', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+
+    store.redo();
+
+    expect(store.get().lastUndo).toBeUndefined();
+  });
+
+  it('replace() clears lastUndo', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    expect(store.get().lastUndo).toBeDefined();
+
+    store.replace(createEmptyData(2000, APP_VERSION));
+
+    expect(store.get().lastUndo).toBeUndefined();
+  });
+
   it('get() reflects the systemDark and platform deps and default capabilities', () => {
     const save = vi.fn(async () => {});
     const data = createEmptyData(1000, APP_VERSION);
