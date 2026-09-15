@@ -46,8 +46,8 @@ const MODE_LABELS: Record<ThemeMode, string> = {
   system: 'System'
 };
 
-// Task 5.1 addendum ruling 1 / Task 5.2: "Settings: Strip / Hotkeys / Timer / Theme /
-// Startup / Score" commands. Kept as a local literal list rather than importing
+// Task 5.1 addendum ruling 1 / Task 5.2 / Task 5.3: "Settings: Strip / Hotkeys / Timer /
+// Theme / Startup / Score / Data" commands. Kept as a local literal list rather than importing
 // settingsModel.ts's SETTINGS_SECTIONS, to avoid a planner -> settings -> planner
 // import cycle (Settings.tsx already imports ViewId from this file's sibling
 // TaskList.tsx).
@@ -57,7 +57,8 @@ const SETTINGS_SECTION_LABELS: Array<{ id: string; label: string }> = [
   { id: 'timer', label: 'Timer & pomodoro' },
   { id: 'theme', label: 'Theme' },
   { id: 'startup', label: 'Startup & notifications' },
-  { id: 'score', label: 'Score' }
+  { id: 'score', label: 'Score' },
+  { id: 'data', label: 'Data' }
 ];
 
 export interface CommandsContext {

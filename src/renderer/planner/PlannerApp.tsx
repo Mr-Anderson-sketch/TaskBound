@@ -282,6 +282,7 @@ export function PlannerApp() {
               platform={platform}
               capabilities={snapshot.capabilities}
               systemDark={snapshot.systemDark}
+              dataLocationUnavailable={snapshot.dataLocationUnavailable}
               onSelectSection={selectView}
               dispatchOwn={dispatchOwn}
             />

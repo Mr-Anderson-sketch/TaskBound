@@ -16,6 +16,7 @@ import { TimerSection } from './sections/Timer';
 import { ThemeSection } from './sections/Theme';
 import { StartupSection } from './sections/Startup';
 import { ScoreSection } from './sections/Score';
+import { DataSection } from './sections/Data';
 
 const DEFAULT_HOTKEYS = defaultSettings().hotkeys;
 
@@ -26,11 +27,23 @@ export interface SettingsProps {
   platform: Platform;
   capabilities: Snapshot['capabilities'];
   systemDark: boolean;
+  /** Snapshot.dataLocationUnavailable — threaded through for the Data section's
+   * top-of-pane warning row. */
+  dataLocationUnavailable?: string;
   onSelectSection: (view: ViewId) => void;
   dispatchOwn: (action: ActionInput) => void;
 }
 
-export function Settings({ view, data, platform, capabilities, systemDark, onSelectSection, dispatchOwn }: SettingsProps) {
+export function Settings({
+  view,
+  data,
+  platform,
+  capabilities,
+  systemDark,
+  dataLocationUnavailable,
+  onSelectSection,
+  dispatchOwn
+}: SettingsProps) {
   const section = sectionFromView(view);
   const { settings } = data;
 
@@ -69,6 +82,7 @@ export function Settings({ view, data, platform, capabilities, systemDark, onSel
           <StartupSection startOnLogin={settings.startOnLogin} notifications={settings.notifications} dispatchOwn={dispatchOwn} />
         )}
         {section === 'score' && <ScoreSection score={settings.score} dispatchOwn={dispatchOwn} />}
+        {section === 'data' && <DataSection dataDir={settings.dataDir} dataLocationUnavailable={dataLocationUnavailable} />}
       </div>
     </div>
   );
