@@ -1,7 +1,7 @@
 // main/windows/palette — the keyboard-sheets window (capture, plan, close, commands,
 // onboarding). Mouse/keyboard focus IS supposed to land here (unlike the strip), so it
 // hides itself on blur. See .superpowers/sdd/PLAN/task-1.8-1.9-brief.md Part C.
-import { app, BrowserWindow, screen } from 'electron';
+import { BrowserWindow, screen } from 'electron';
 import type { PaletteMode } from '../../shared/ipc';
 
 const WIDTH = 560;
@@ -93,9 +93,10 @@ export class PaletteWindow {
     if (!this.win || this.win.isDestroyed()) return;
     if (!this.win.isVisible()) return;
     this.win.hide();
-    if (process.platform === 'darwin') {
-      app.hide();
-    }
+    // Fix round 1, finding 12: app.hide() (macOS) hides EVERY window of this app,
+    // including the always-on-top strip — not just the palette. Known gap: focus
+    // does not automatically return to the previously-active app on macOS after
+    // quick capture (see docs/RELEASE-CHECKLIST.md M15); revisit in Slice 6.
   }
 
   destroy(): void {

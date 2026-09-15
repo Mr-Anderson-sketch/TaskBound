@@ -3,6 +3,7 @@
 // under ~150 lines per the brief.
 import { useApplyTheme } from '../theme/ThemeProvider';
 import { dispatch, useSnapshot } from '../lib/useStore';
+import { keyGlyphs } from '../../shared/platform';
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -47,7 +48,8 @@ export function PlannerApp() {
           <div className="empty">
             <div className="e1">Nothing planned for today.</div>
             <p>
-              Press <kbd>{snapshot.data.settings.hotkeys.capture}</kbd> anywhere to add a task, or pick from Inbox.
+              Press <kbd>{keyGlyphs(snapshot.data.settings.hotkeys.capture, platform).join(platform === 'darwin' ? '' : '+')}</kbd>{' '}
+              anywhere to add a task, or pick from Inbox.
             </p>
           </div>
         ) : (

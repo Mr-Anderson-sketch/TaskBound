@@ -45,13 +45,34 @@ body {
   background: var(--bg);
 }
 
-/* The strip route paints nothing behind the strip itself (transparent window). */
+/* The strip route paints nothing behind the strip itself (transparent window), and
+   aligns its content to the docked edge (C1, fix round 1): on Windows the window
+   itself can be forced taller than the requested content (~39 DIP minimum for a
+   transparent frameless window, however small the request), so the content must be
+   explicitly pinned to the correct edge inside that possibly-taller box rather than
+   relying on it being exactly content-sized. `data-edge` is set from
+   settings.strip.edge by StripApp (it can change at runtime, unlike data-route). */
 body[data-route='strip'] {
   background: transparent;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+body[data-route='strip'][data-edge='bottom'] {
+  justify-content: flex-end;
+}
+body[data-route='strip'][data-edge='top'] {
+  justify-content: flex-start;
 }
 body[data-route='strip'] html,
 html:has(body[data-route='strip']) {
   background: transparent;
+}
+/* Overrides the rule below: as a flex item, #root must size to its content (the
+   strip/panel/pill/sliver) for justify-content to have any slack to distribute —
+   height: 100% would consume the whole body and defeat the edge alignment. */
+body[data-route='strip'] #root {
+  height: auto;
 }
 
 #root {
@@ -74,7 +95,10 @@ body[data-reduced-motion='true'] * {
 
 .sliver {
   width: 100%;
-  height: 100%;
+  /* Fixed, not 100%: the window can be taller than this (C1's OS-floor correction),
+     and body's flex justify-content pins this to the docked edge within it. */
+  height: 4px;
+  flex: none;
   background: color-mix(in oklch, var(--accent) 60%, transparent);
 }
 
@@ -87,6 +111,7 @@ body[data-reduced-motion='true'] * {
   display: flex;
   align-items: center;
   gap: var(--s-2);
+  flex: none;
   height: var(--strip-h);
   /* Fixed width from settings.strip.width (DESIGN.md: "user-resizable 160-1200"),
      not content-hugging: the title flexes/ellipsizes to fill what's left. The window
@@ -244,6 +269,7 @@ body[data-reduced-motion='true'] * {
   height: var(--pill-h);
   max-width: 240px;
   width: max-content;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -285,6 +311,7 @@ body[data-reduced-motion='true'] * {
 .panel {
   display: flex;
   flex-direction: column;
+  flex: none;
   /* Same width as the strip (DESIGN.md "Hover panel") — not content-hugging, for the
      same self-consistent-measurement reason as `.strip` above. */
   width: 100%;

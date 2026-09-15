@@ -1,10 +1,12 @@
 // renderer/theme/ThemeProvider — sets `data-theme`/`data-mode` on <html> from the
 // snapshot's settings (DESIGN.md: "Mode follows the OS by default"), and pulls in the
 // generated theme tokens plus the bundled font files (CLAUDE.md: "must never fetch
-// fonts from the network"). Exposes both a hook (`useApplyTheme`, for components with
-// several early-return branches, like StripApp) and a wrapping component.
+// fonts from the network"). A hook, not a wrapping component (fix round 1, finding
+// 17: every *App.tsx has several early-return branches before its first real JSX,
+// so a <ThemeProvider> wrapper component was never actually usable — and never
+// used) — call `useApplyTheme(snapshot)` directly wherever an *App component fetches
+// its own snapshot.
 import { useEffect } from 'react';
-import type { ReactNode } from 'react';
 import '@fontsource/ibm-plex-sans/400.css';
 import '@fontsource/ibm-plex-sans/500.css';
 import '@fontsource/ibm-plex-sans/600.css';
@@ -25,9 +27,4 @@ export function useApplyTheme(snapshot: Snapshot | undefined): void {
     document.documentElement.setAttribute('data-theme', name);
     document.documentElement.setAttribute('data-mode', resolved);
   }, [name, mode, systemDark]);
-}
-
-export function ThemeProvider({ snapshot, children }: { snapshot: Snapshot | undefined; children: ReactNode }) {
-  useApplyTheme(snapshot);
-  return <>{children}</>;
 }

@@ -71,9 +71,23 @@ const UrlSchema = z
 const ExportFormatSchema = z.enum(['json', 'md']);
 const AcceleratorSchema = z.string().max(64);
 
+/** Normalises a `file:` URL's drive letter to uppercase before the trust-prefix
+ * comparison (fix round 1, finding 13): Windows drive letters are case-insensitive,
+ * but a plain `startsWith` isn't — `file:///d:/app/` (as some code paths spell it)
+ * would otherwise fail to match an allowed origin spelled `file:///D:/app/` (as
+ * `pathToFileURL` spells it), rejecting a perfectly legitimate sender. Non-`file:`
+ * URLs (http/https in dev) pass through unchanged. */
+function normalizeForTrustCompare(url: string): string {
+  return url.replace(/^file:\/\/\/([a-zA-Z]):\//, (_match, letter: string) => `file:///${letter.toUpperCase()}:/`);
+}
+
 function assertTrustedSender(event: IpcMainInvokeEvent, allowedOrigins: string[]): void {
   const url = event.senderFrame?.url;
-  if (!url || !allowedOrigins.some((origin) => url.startsWith(origin))) {
+  if (!url) {
+    throw new IpcRejected('untrusted sender');
+  }
+  const normalizedUrl = normalizeForTrustCompare(url);
+  if (!allowedOrigins.some((origin) => normalizedUrl.startsWith(normalizeForTrustCompare(origin)))) {
     throw new IpcRejected('untrusted sender');
   }
 }

@@ -48,6 +48,7 @@ Run on macOS 14 or newer, Apple silicon and Intel if available.
 | M12 | Traffic lights in the planner | Native buttons visible, nothing overlaps the 78 px gap | |
 | M13 | Click-through on | Clicks pass through; hovering the dot re-enables interaction | |
 | M14 | Data location | `~/Library/Application Support/TimeBound/data.json` with `backups/` | |
+| M15 | After quick capture, focus returns to the previous app | Known gap in v1: user may need to click back; revisit in Slice 6 | |
 
 ## Every platform
 

@@ -126,3 +126,24 @@ export function restorePosition(
 ): { x: number; y: number } | undefined {
   return positions[displayKey(d)] ?? positions[displaySignature(d)];
 }
+
+/** The strip's collapsed size after a renderer `strip:reportSize` report (Task
+ * 1.8+1.9 fix round 1, finding 9 "strip stuck at pill width after un-collapsing").
+ * The reported WIDTH is only ever adopted while collapsed (the pill is genuinely
+ * content-driven, capped at 240 by CSS); when not collapsed, width always tracks
+ * `settingsWidth` — otherwise a stale pill-mode width, reported once while collapsed,
+ * would stick forever (the renderer's `.strip{width:100%}` just reports back
+ * whatever the window's current — still pill-sized — client width is, a
+ * self-perpetuating loop). Height is always the reported value, capped at
+ * `maxHeight`. Pure so it's unit-testable without a real `BrowserWindow`. */
+export function nextCollapsedSize(
+  reported: { width: number; height: number },
+  collapsed: boolean,
+  settingsWidth: number,
+  maxHeight: number
+): { width: number; height: number } {
+  return {
+    width: collapsed ? reported.width : settingsWidth,
+    height: Math.min(reported.height, maxHeight)
+  };
+}

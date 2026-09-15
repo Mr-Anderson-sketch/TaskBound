@@ -12,17 +12,30 @@ export function Capture() {
     inputRef.current?.focus();
   }, []);
 
+  // Fix round 1, finding 5: the palette window persists across hide/show cycles (it
+  // isn't unmounted/reloaded), so a `palette:mode` message — always sent on every
+  // `palette:show()`, even back into the same mode — is the signal that a new
+  // capture session has begun; clear any leftover text from the previous one.
+  useEffect(() => {
+    return window.tb.on('palette:mode', () => {
+      if (inputRef.current) inputRef.current.value = '';
+    });
+  }, []);
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Escape') {
+      if (inputRef.current) inputRef.current.value = '';
       void window.tb.invoke('palette:hide');
       return;
     }
     if (e.key !== 'Enter') return;
+    if (e.nativeEvent.isComposing) return; // IME composition: Enter confirms the composition, not the form
 
     const title = inputRef.current?.value.trim();
     if (!title) return; // empty input + Enter does nothing
 
     dispatch({ type: 'task/add', id: crypto.randomUUID(), title, today: true, makeCurrent: e.shiftKey });
+    if (inputRef.current) inputRef.current.value = '';
     void window.tb.invoke('palette:hide');
   };
 

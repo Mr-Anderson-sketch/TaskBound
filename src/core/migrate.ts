@@ -6,9 +6,10 @@ import { createEmptyData, defaultSettings, INBOX_ID } from './defaults';
 import { parseData } from './schema';
 import { ymd } from './dates';
 
-// The previous app's on-disk shape. Defined locally (not imported from
-// src/shared/types.ts, which will be deleted once migration ships) and kept loose
-// (unknown-ish fields) because this is untrusted, possibly-drifted persisted JSON.
+// The previous app's on-disk shape. Defined locally (src/shared/types.ts, the old
+// renderer's type module, was deleted once the old renderer shipped its replacement
+// in Task 1.8+1.9) and kept loose (unknown-ish fields) because this is untrusted,
+// possibly-drifted persisted JSON.
 export interface LegacyHistoryEntry {
   type?: 'manual_complete' | 'auto_complete' | 'add_time';
   amountSeconds?: number;

@@ -21,7 +21,6 @@ import type { StripChip } from './Strip';
 const HOVER_STATIONARY_MS = 150;
 const HOVER_MOVE_TOLERANCE_PX = 4;
 const DRAG_MOVE_PX = 6;
-const DRAG_MOVE_MS = 200;
 const COMPLETION_HOLD_MS = 1200;
 const UNDO_ROW_MS = 5000;
 
@@ -39,13 +38,13 @@ function sumTodayFocusSeconds(tasks: Task[]): number {
   return tasks.filter((t) => t.today && t.status === 'done').reduce((sum, t) => sum + (t.timer?.spentSeconds ?? 0), 0);
 }
 
+// Precedence (fix round 1, finding 1): done-for-today → current task states →
+// unplanned → empty. Done-for-today must be checked BEFORE `!today.current` — once
+// every Today task is done, `today.current` is undefined too (nothing open left to
+// be "current"), so checking `!today.current` first made this state unreachable.
 function computeView(snapshot: Snapshot, display: ReturnType<typeof useDisplayTime>, captureHint: string): StripView {
   const { today, data } = snapshot;
   const now = Date.now();
-
-  if (!today.current) {
-    return { state: 'empty', title: captureHint, titleAllDim: true };
-  }
 
   if (today.total > 0 && today.done === today.total) {
     const focusSeconds = sumTodayFocusSeconds(data.tasks);
@@ -56,6 +55,10 @@ function computeView(snapshot: Snapshot, display: ReturnType<typeof useDisplayTi
       chip: { text: fmtDuration(focusSeconds) },
       progress: 1
     };
+  }
+
+  if (!today.current) {
+    return { state: 'empty', title: captureHint, titleAllDim: true };
   }
 
   const progress = today.total > 0 ? today.done / today.total : undefined;
@@ -122,6 +125,8 @@ export function StripApp() {
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hoverStartPointRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const dragStartRef = useRef<{ x: number; y: number; t: number; started: boolean } | undefined>(undefined);
+  const reducedMotionRef = useRef(false);
+  const [slidePulse, setSlidePulse] = useState(0);
 
   const display = useDisplayTime(snapshot?.today.current?.timer);
   useApplyTheme(snapshot);
@@ -136,8 +141,15 @@ export function StripApp() {
     const setting = snapshot?.data.settings.reducedMotion ?? 'system';
     const systemReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     const reduced = setting === 'on' || (setting === 'system' && systemReduced);
+    reducedMotionRef.current = reduced;
     document.body.dataset.reducedMotion = String(reduced);
   }, [snapshot?.data.settings.reducedMotion]);
+
+  // --- edge alignment (C1, fix round 1): body's flex justify-content reads this ---
+  useEffect(() => {
+    if (!snapshot) return;
+    document.body.dataset.edge = snapshot.data.settings.strip.edge;
+  }, [snapshot?.data.settings.strip.edge]);
 
   // --- ResizeObserver: report content size to main --------------------------------
   useEffect(() => {
@@ -166,7 +178,13 @@ export function StripApp() {
       if (updated?.status === 'done') {
         setCompleting({ title: prev.title });
         clearTimeout(completingTimeoutRef.current);
-        completingTimeoutRef.current = setTimeout(() => setCompleting(undefined), COMPLETION_HOLD_MS);
+        completingTimeoutRef.current = setTimeout(() => {
+          setCompleting(undefined);
+          // Fix round 1, finding 2: the 160 ms title slide-in on the swap, skipped
+          // under reduced motion (Strip's CSS animation is a no-op there anyway via
+          // body[data-reduced-motion], but skip triggering it at all for clarity).
+          if (!reducedMotionRef.current) setSlidePulse((n) => n + 1);
+        }, COMPLETION_HOLD_MS);
       }
     }
     prevCurrentRef.current = snapshot.today.current;
@@ -218,7 +236,10 @@ export function StripApp() {
     void window.tb.invoke('strip:hover', false);
   };
 
-  // --- drag: 6px / 200ms, or any movement while the handle is held ---------------
+  // --- drag: ≥6px within 200ms, OR any movement ≥6px while the handle is still
+  // held (fix round 1, finding 3 — the second branch was missing: `dragStartRef`
+  // only exists between mousedown and mouseup, so "still held" is already implicit
+  // here; the fix is simply not capping the check to the first 200ms). ------------
   const onHandleMouseDown: MouseEventHandler = (e) => {
     dragStartRef.current = { x: e.clientX, y: e.clientY, t: Date.now(), started: false };
   };
@@ -228,8 +249,7 @@ export function StripApp() {
       const drag = dragStartRef.current;
       if (!drag || drag.started) return;
       const moved = Math.hypot(e.clientX - drag.x, e.clientY - drag.y);
-      const elapsed = Date.now() - drag.t;
-      if (moved >= DRAG_MOVE_PX && elapsed <= DRAG_MOVE_MS) {
+      if (moved >= DRAG_MOVE_PX) {
         drag.started = true;
         void window.tb.invoke('strip:dragStart');
       }
@@ -313,6 +333,7 @@ export function StripApp() {
         strike={view.strike}
         chip={view.chip}
         progress={view.progress}
+        slidePulse={slidePulse}
         onHandleMouseDown={onHandleMouseDown}
         onMouseMove={onMouseMove}
         onMouseEnter={onMouseEnter}
@@ -357,6 +378,7 @@ export function StripApp() {
       strike={view.strike}
       chip={view.chip}
       progress={view.progress}
+      slidePulse={slidePulse}
       clickThrough={snapshot.data.settings.strip.clickThrough}
       onHandleMouseDown={onHandleMouseDown}
       onMouseMove={onMouseMove}

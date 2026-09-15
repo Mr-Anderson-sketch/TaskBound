@@ -15,6 +15,7 @@ import {
   dockBounds,
   handleRect,
   isTaskbarAutoHide,
+  nextCollapsedSize,
   panelBounds,
   pointIn,
   restorePosition,
@@ -79,6 +80,14 @@ export class StripWindow {
   private autoHideDelayMs = AUTO_HIDE_DELAY_MS;
   private clickThroughIgnoring: boolean | undefined;
 
+  // C1 (fix round 1): the last rect WE requested via setBounds (our own source of
+  // truth for change-detection — see setBoundsIfChanged's comment) and the last
+  // `setShape` rect actually applied (or computed, on non-win32 where setShape is a
+  // no-op), exposed read-only for the e2e seam (`globalThis.__tb.strip.lastShape`).
+  private lastRequestedRect: Rect | undefined;
+  private lastShapeRect: Rect | undefined;
+  private shapeErrorLogged = false;
+
   constructor(private readonly deps: StripWindowDeps) {
     const snapshot = deps.store.get();
     this.settings = snapshot.data.settings.strip;
@@ -90,6 +99,14 @@ export class StripWindow {
    * renderer. `undefined` before `create()` and after `destroy()`/an external close. */
   get webContents(): WebContents | undefined {
     return this.win?.webContents;
+  }
+
+  /** The content rect last clipped to via `setShape` (win32) — or, on platforms
+   * where `setShape` is a no-op, the rect that WOULD be applied. Relative to the
+   * window's own top-left, not the display. `undefined` before the first bounds
+   * application. Read by the e2e seam to verify C1's flush-to-edge fix. */
+  get lastShape(): Rect | undefined {
+    return this.lastShapeRect;
   }
 
   // --- lifecycle -----------------------------------------------------------------
@@ -211,6 +228,9 @@ export class StripWindow {
     this.clickThroughIgnoring = undefined;
     this.panelHeight = DEFAULT_PANEL_HEIGHT;
     this.lastDisplay = undefined;
+    this.lastRequestedRect = undefined;
+    this.lastShapeRect = undefined;
+    this.shapeErrorLogged = false;
     this.win = undefined;
   }
 
@@ -254,7 +274,11 @@ export class StripWindow {
     this.settings = s;
 
     const widthChanged = s.width !== prev.width;
-    if (widthChanged) {
+    // Fix round 1, finding 9: while NOT collapsed, this.size.width always tracks
+    // settings.strip.width — including the moment collapsed flips false→true, when
+    // this.size.width is still whatever the pill last reported (stale) and nothing
+    // has re-reported yet.
+    if (!s.collapsed) {
       this.size = { ...this.size, width: s.width };
     }
 
@@ -328,7 +352,11 @@ export class StripWindow {
       this.applyVisualBounds();
       return;
     }
-    this.size = { width, height: Math.min(height, MAX_COLLAPSED_HEIGHT) };
+    // Fix round 1, finding 9: only adopt the reported WIDTH while collapsed (the
+    // pill is content-driven); otherwise width always tracks settings.strip.width,
+    // or a stale pill-mode width reported right after un-collapsing would stick
+    // forever (see nextCollapsedSize's doc comment in ./displays).
+    this.size = nextCollapsedSize({ width, height }, this.settings.collapsed, this.settings.width, MAX_COLLAPSED_HEIGHT);
     this.redock();
   }
 
@@ -433,19 +461,84 @@ export class StripWindow {
   }
 
   /** Every `setBounds` call (docked, expanded, sliver, or a live drag tick) routes
-   * through here so an unchanged rect never triggers a redundant native call. */
+   * through here. C1 (fix round 1): dedup against `lastRequestedRect` — OUR own
+   * record of what we last asked for — rather than `win.getBounds()`, because on
+   * Windows the actual bounds can permanently differ from the requested ones (see
+   * `reanchorAndClip`); comparing against actual bounds would defeat the dedup
+   * (every call would look "changed" forever) and re-trigger a native `setBounds`
+   * on every redock/drag tick even when nothing conceptually moved. */
   private setBoundsIfChanged(rect: Rect): void {
     if (!this.win || this.win.isDestroyed()) return;
-    const current = this.win.getBounds();
-    if (
-      current.x === rect.x &&
-      current.y === rect.y &&
-      current.width === rect.width &&
-      current.height === rect.height
-    ) {
-      return;
+    const unchanged =
+      this.lastRequestedRect !== undefined &&
+      this.lastRequestedRect.x === rect.x &&
+      this.lastRequestedRect.y === rect.y &&
+      this.lastRequestedRect.width === rect.width &&
+      this.lastRequestedRect.height === rect.height;
+    this.lastRequestedRect = rect;
+    if (!unchanged) {
+      this.win.setBounds(rect, false);
     }
-    this.win.setBounds(rect, false);
+    this.reanchorAndClip(rect);
+  }
+
+  /** C1 (fix round 1): on Windows, a transparent frameless `BrowserWindow` cannot be
+   * shorter than ~39 DIP regardless of the requested height (verified by the
+   * controller) — `setBounds({height: 32}, ...)` silently becomes `{height: 39}`.
+   * Left uncorrected, the extra height was added BELOW a bottom-docked strip's `y`,
+   * sitting the window (and, before this fix, its content) up to 7 px into the
+   * taskbar instead of flush against the work area.
+   *
+   * Run after every `setBounds` (via `setBoundsIfChanged`, its only caller): reads
+   * the ACTUAL resulting bounds; if the actual height differs from what was
+   * requested, re-anchors so the requested content still sits flush against the
+   * docked edge (bottom: `y = workArea.bottom - actualHeight`; top: `y =
+   * workArea.y`) — the window is allowed to extend away from the edge into the
+   * desktop, never past the work area on the docked side. Then (win32 only) clips
+   * hit-testing/paint down to the requested content rect with `setShape`, so the
+   * extra, otherwise-invisible-but-still-click-capturing window area (Electron
+   * transparent windows still capture clicks in transparent pixels) never intercepts
+   * anything. `lastShapeRect` is recorded on every platform (even where `setShape`
+   * is a no-op) so the e2e seam can assert it. */
+  private reanchorAndClip(requested: Rect): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    let actual = this.win.getBounds();
+
+    if (actual.height !== requested.height) {
+      const workArea = this.currentWorkArea();
+      const correctedY = this.settings.edge === 'top' ? workArea.y : workArea.y + workArea.height - actual.height;
+      if (actual.x !== requested.x || actual.y !== correctedY) {
+        this.win.setBounds({ x: requested.x, y: correctedY, width: actual.width, height: actual.height }, false);
+        actual = this.win.getBounds();
+      }
+    }
+
+    const shape: Rect =
+      requested.height >= actual.height
+        ? { x: 0, y: 0, width: actual.width, height: actual.height }
+        : this.settings.edge === 'top'
+          ? { x: 0, y: 0, width: actual.width, height: requested.height }
+          : { x: 0, y: actual.height - requested.height, width: actual.width, height: requested.height };
+
+    const shapeChanged =
+      !this.lastShapeRect ||
+      this.lastShapeRect.x !== shape.x ||
+      this.lastShapeRect.y !== shape.y ||
+      this.lastShapeRect.width !== shape.width ||
+      this.lastShapeRect.height !== shape.height;
+
+    this.lastShapeRect = shape;
+    if (shapeChanged && process.platform === 'win32') {
+      try {
+        this.win.setShape([shape]);
+      } catch (err) {
+        if (!this.shapeErrorLogged) {
+          this.shapeErrorLogged = true;
+          // eslint-disable-next-line no-console
+          console.error('StripWindow: setShape failed; falling back to no clipping', err);
+        }
+      }
+    }
   }
 
   private persistDock(d: DisplayLike): void {

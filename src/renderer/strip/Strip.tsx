@@ -1,7 +1,7 @@
 // renderer/strip/Strip — the collapsed strip's visual: DESIGN.md "The strip (pixel
 // spec)". A dumb component: StripApp computes state/title/chip/progress and passes
 // them down, and owns the ResizeObserver via `ref`.
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import type { MouseEventHandler } from 'react';
 import type { Edge } from '../../core/types';
 
@@ -22,6 +22,11 @@ export interface StripProps {
    * when total is 0"). */
   progress?: number;
   clickThrough?: boolean;
+  /** Incremented by StripApp to trigger a fresh 160 ms title slide-in (DESIGN.md
+   * "Motion" — fix round 1, finding 2): a plain boolean can't re-trigger a CSS
+   * animation on a class that's already applied, so the parent bumps a counter and
+   * this component reacts to it CHANGING, not to its value. */
+  slidePulse?: number;
   onHandleMouseDown?: MouseEventHandler;
   onMouseMove?: MouseEventHandler;
   onMouseEnter?: MouseEventHandler;
@@ -40,6 +45,7 @@ export const Strip = forwardRef<HTMLDivElement, StripProps>(function Strip(
     chip,
     progress,
     clickThrough,
+    slidePulse,
     onHandleMouseDown,
     onMouseMove,
     onMouseEnter,
@@ -50,6 +56,15 @@ export const Strip = forwardRef<HTMLDivElement, StripProps>(function Strip(
   ref
 ) {
   const chipClass = chip ? ['chip', chip.variant].filter(Boolean).join(' ') : '';
+
+  const [sliding, setSliding] = useState(false);
+  const prevPulse = useRef(slidePulse);
+  useEffect(() => {
+    if (slidePulse !== undefined && slidePulse !== prevPulse.current) {
+      prevPulse.current = slidePulse;
+      setSliding(true);
+    }
+  }, [slidePulse]);
 
   return (
     <div
@@ -66,7 +81,12 @@ export const Strip = forwardRef<HTMLDivElement, StripProps>(function Strip(
       <div className="handle" onMouseDown={onHandleMouseDown}>
         <div className="dot" />
       </div>
-      <div className="title" onClick={onTitleClick} onDoubleClick={onTitleDoubleClick}>
+      <div
+        className={sliding ? 'title slide-in' : 'title'}
+        onAnimationEnd={() => setSliding(false)}
+        onClick={onTitleClick}
+        onDoubleClick={onTitleDoubleClick}
+      >
         {strike ? <span className="strike">{title}</span> : title}
         {dim && <span className="dim">{dim}</span>}
       </div>

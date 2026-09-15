@@ -156,7 +156,12 @@ if (!gotLock) {
 
     const tray = new AppTray({
       store,
-      iconPath: path.join(app.getAppPath(), 'build', 'icon-16x16.png'),
+      // Fix round 1, finding 11: app.getAppPath() points inside the asar in a
+      // packaged build, where build/ isn't included — use the extraResources copy
+      // (package.json's electron-builder config) there instead.
+      iconPath: app.isPackaged
+        ? path.join(process.resourcesPath, 'icons', 'icon-16x16.png')
+        : path.join(app.getAppPath(), 'build', 'icon-16x16.png'),
       onComplete: () => {
         const current = store.get().today.current;
         if (!current) return;
@@ -208,7 +213,14 @@ if (!gotLock) {
       quitting = true;
       plannerWindow.setQuitting(true);
       hotkeys.unregisterAll();
-      void store.flush().then(() => app.quit());
+      // Fix round 1, finding 4: a rejected flush must not leave the app running with
+      // an unhandled rejection and no quit — always quit once the flush SETTLES,
+      // logging first if it failed. `quitting` (checked above) still guards against
+      // the re-entrant before-quit this app.quit() call fires.
+      store
+        .flush()
+        .catch((err: unknown) => console.error('before-quit: store.flush() failed', err))
+        .finally(() => app.quit());
     });
 
     const reloadedOnce = new WeakSet<WebContents>();

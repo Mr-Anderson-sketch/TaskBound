@@ -173,6 +173,15 @@ describe('registerIpc', () => {
     expect(snapshot).toMatchObject({ rev: 0 });
   });
 
+  // Fix round 1, finding 13.
+  it('accepts a sender whose file: URL drive letter differs in case from the allowed origin', async () => {
+    const { handlers } = setup(['file:///D:/app/']);
+
+    const snapshot = await handlers.get('store:get')!(eventFrom('file:///d:/app/index.html#/strip'));
+
+    expect(snapshot).toMatchObject({ rev: 0 });
+  });
+
   it('applies a valid task/add from an allowed origin and returns the new rev', async () => {
     const { handlers, store } = setup();
     const action = { type: 'task/add', id: 'a', now: 1000, title: 'Buy milk' };

@@ -9,7 +9,8 @@ import {
   handleRect,
   pointIn,
   isTaskbarAutoHide,
-  restorePosition
+  restorePosition,
+  nextCollapsedSize
 } from '../../src/main/windows/displays';
 import type { DisplayLike } from '../../src/main/windows/displays';
 
@@ -232,5 +233,23 @@ describe('restorePosition', () => {
   it('returns undefined when neither key is found', () => {
     const d = makeDisplay({ id: 7 });
     expect(restorePosition({}, d)).toBeUndefined();
+  });
+});
+
+// Fix round 1, finding 9: "strip stuck at pill width after un-collapsing" — the
+// reported width must only be adopted while collapsed.
+describe('nextCollapsedSize', () => {
+  it('adopts the reported width while collapsed (the pill is content-driven)', () => {
+    expect(nextCollapsedSize({ width: 180, height: 24 }, true, 420, 44)).toEqual({ width: 180, height: 24 });
+  });
+
+  it('ignores the reported width when not collapsed, tracking settingsWidth instead', () => {
+    // A stale pill-mode width (180) reported just after uncollapsing must not stick.
+    expect(nextCollapsedSize({ width: 180, height: 32 }, false, 420, 44)).toEqual({ width: 420, height: 32 });
+  });
+
+  it('caps the reported height at maxHeight regardless of collapsed', () => {
+    expect(nextCollapsedSize({ width: 420, height: 60 }, false, 420, 44)).toEqual({ width: 420, height: 44 });
+    expect(nextCollapsedSize({ width: 180, height: 60 }, true, 420, 44)).toEqual({ width: 180, height: 44 });
   });
 });

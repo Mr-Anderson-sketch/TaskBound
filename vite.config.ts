@@ -5,7 +5,21 @@ import path from 'node:path';
 export default defineConfig({
   root: path.resolve(__dirname, 'src/renderer'),
   base: './',
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Fix round 1, finding 10: the static CSP meta tag in index.html encodes the
+    // PRODUCTION policy (no 'unsafe-inline' script-src) so it's exactly
+    // contentSecurityPolicy(false) — but Vite's dev-server HMR client needs an
+    // inline preamble script, which that policy blocks (main's installCsp() header
+    // is more permissive in dev, but a stricter meta-tag CSP still applies
+    // independently and wins). Strip the meta tag in `vite dev`/`npm run dev` only;
+    // production builds (and this file itself) are untouched.
+    {
+      name: 'strip-csp-meta-in-dev',
+      apply: 'serve',
+      transformIndexHtml: (html: string) => html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\s*/i, '')
+    }
+  ],
   build: {
     outDir: path.resolve(__dirname, 'dist/renderer'),
     emptyOutDir: true,

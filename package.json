@@ -39,6 +39,10 @@
       "dist/**/*",
       "package.json"
     ],
+    "extraResources": [
+      { "from": "build/icon-16x16.png", "to": "icons/icon-16x16.png" },
+      { "from": "build/icon-32x32.png", "to": "icons/icon-32x32.png" }
+    ],
     "extraMetadata": {
       "main": "dist/main/main/main.js"
     },
