@@ -4,6 +4,19 @@
 // display. See docs/PLAN.md Task 7.1 and CLAUDE.md ("src/core/ is pure TypeScript" —
 // this module follows the same discipline even though it lives under src/main/,
 // mirroring src/main/windows/displays.ts).
+//
+// Fix round 1 (I-1): this module used to also do the DIP<->physical-pixel SCALING
+// (multiplying by `display.scaleFactor` from the display's own DIP origin) — that is
+// wrong for a secondary display with a different scale factor than the primary:
+// Windows' per-monitor DPI virtualization does not place a secondary monitor's
+// physical origin at `dipOrigin * itsOwnScaleFactor`, so the naive multiplication
+// silently produced the wrong physical rect (and therefore the wrong AppBar
+// reservation) whenever the primary and secondary displays scale differently. That
+// conversion now happens in `StripWindow` via the OS-correct, injectable
+// `screen.dipToScreenRect`/`screen.screenToDipRect` (see strip.ts's `syncAppBar`).
+// This module keeps only the EDGE/HEIGHT geometry — which edge, how tall, flush to
+// which side of the display's own (DIP) bounds — entirely in DIPs, no scale factor
+// anywhere in this file any more.
 import type { Edge } from '../../core/types';
 import type { DisplayLike, Rect } from '../windows/displays';
 
@@ -16,39 +29,46 @@ export interface RectPx {
   bottom: number;
 }
 
-/** The physical-pixel `RECT` to REQUEST from `SHAppBarMessage` for a strip of
- * `heightDip` (DIPs) docked to `edge` of `display`: scaled by `display.scaleFactor`,
- * spanning the display's full physical width, flush to that edge of
- * `display.bounds` (the display's own physical bounds — not `workArea`, which may
- * already be shrunk by a PRIOR reservation; the AppBar API itself decides how much
- * of this request it actually grants, via `ABM_QUERYPOS`/`ABM_SETPOS`). */
-export function appBarRect(display: DisplayLike, edge: Edge, heightDip: number): RectPx {
-  const s = display.scaleFactor;
-  const left = Math.round(display.bounds.x * s);
-  const right = Math.round((display.bounds.x + display.bounds.width) * s);
-  const heightPx = Math.round(heightDip * s);
-  const top =
-    edge === 'top' ? Math.round(display.bounds.y * s) : Math.round((display.bounds.y + display.bounds.height) * s) - heightPx;
-  const bottom = top + heightPx;
-  return { left, top, right, bottom };
+/** The DIP-space rect (`Rect`, `displays.ts`'s `{x,y,width,height}` shape) to REQUEST
+ * an AppBar reservation for: a strip of `heightDip` docked to `edge` of `display`,
+ * spanning the display's full (DIP) width, flush to that edge of `display.bounds`
+ * (Electron's `Display.bounds` is already in DIPs — not `workArea`, which may already
+ * be shrunk by a PRIOR reservation; the AppBar API itself decides how much of this
+ * request it actually grants, via `ABM_QUERYPOS`/`ABM_SETPOS`). The caller
+ * (`StripWindow.syncAppBar`) converts this to physical pixels via
+ * `screen.dipToScreenRect` before calling `SHAppBarMessage` — see this file's header
+ * comment for why that conversion must not happen here. */
+export function appBarRectDip(display: DisplayLike, edge: Edge, heightDip: number): Rect {
+  const { bounds } = display;
+  const y = edge === 'top' ? bounds.y : bounds.y + bounds.height - heightDip;
+  return { x: bounds.x, y, width: bounds.width, height: heightDip };
 }
 
-/** Converts a physical-pixel `RECT` (e.g. the AppBar's GRANTED rect) back to a DIP
- * `Rect` (`{x,y,width,height}`, `displays.ts`'s shape) using `scaleFactor` — the
- * inverse of the scaling half of `appBarRect`. Rounded to integers, same discipline
- * as `displays.ts`'s `roundRect` (every rect-shaped value leaving this module is an
- * integer so callers never have to round). */
-export function rectPxToDip(r: RectPx, scaleFactor: number): Rect {
-  const left = r.left / scaleFactor;
-  const top = r.top / scaleFactor;
-  const right = r.right / scaleFactor;
-  const bottom = r.bottom / scaleFactor;
-  return {
-    x: Math.round(left),
-    y: Math.round(top),
-    width: Math.round(right - left),
-    height: Math.round(bottom - top)
-  };
+/** Converts a Win32 `RECT` (left/top/right/bottom) to `displays.ts`'s `Rect`
+ * (x/y/width/height). Pure unit-preserving reshaping — no DIP/physical scaling of any
+ * kind — used at the koffi boundary where `SHAppBarMessage`'s `APPBARDATA.rc` (a
+ * `RECT`) meets `screen.dipToScreenRect`/`screenToDipRect` (which take/return
+ * Electron's `Rectangle`, i.e. this module's `Rect` shape). */
+export function rectPxToRect(r: RectPx): Rect {
+  return { x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top };
+}
+
+/** The inverse of `rectPxToRect`. */
+export function rectToRectPx(r: Rect): RectPx {
+  return { left: r.x, top: r.y, right: r.x + r.width, bottom: r.y + r.height };
+}
+
+/** The AppBar reservation "signature" for `display`/`edge`/`heightDip` — Task 7.1 fix
+ * round 1 (I-2): includes the display's own `bounds` (x, y, width, height) and
+ * `scaleFactor`, not just its id, so a display metrics change that leaves the id
+ * alone (resolution change, scale change, monitor moved in the OS's arrangement UI)
+ * still produces a DIFFERENT signature and triggers a fresh `ABM_NEW`/`SETPOS`
+ * sequence in `StripWindow.syncAppBar` — an id-only signature would otherwise treat
+ * the redock as a no-op and leave a STALE grant (sized/positioned for the display's
+ * previous metrics) in place indefinitely. */
+export function appBarSignature(d: DisplayLike, edge: Edge, heightDip: number): string {
+  const b = d.bounds;
+  return `${d.id}:${edge}:${heightDip}:${b.x},${b.y},${b.width},${b.height}:${d.scaleFactor}`;
 }
 
 /** True when `windowRect` covers its monitor's full rect within `tolerancePx` on

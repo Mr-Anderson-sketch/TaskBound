@@ -120,19 +120,45 @@ export function panelBounds(strip: Rect, edge: Edge, panelHeight: number): Rect 
 }
 
 /** The 4 px auto-hide sliver, spanning the strip's x/width but flush to the
- * *work area's* edge on the docked side (`workArea`, i.e. `DisplayLike.workArea`) —
- * NOT the display's physical bounds. A normal (non-auto-hide) taskbar occupies the
- * gap between the work area and the physical edge, so a sliver placed at the
- * physical edge would land inside the taskbar and pointing at taskbar buttons would
- * re-show the strip. When the taskbar itself auto-hides, `workArea` already reaches
- * the physical edge (see `isTaskbarAutoHide`), so this is flush to the true screen
- * edge in that case too — no separate handling needed. No 2 px reserve here (unlike
- * `dockBounds`'s `taskbarAutoHide` nudge): the sliver is meant to be right at the
- * work area boundary either way. */
-export function sliverBounds(strip: Rect, edge: Edge, workArea: Rect): Rect {
+ * *work area's* edge on the docked side (`d.workArea`) — NOT the display's physical
+ * bounds. A normal (non-auto-hide) taskbar occupies the gap between the work area and
+ * the physical edge, so a sliver placed at the physical edge would land inside the
+ * taskbar and pointing at taskbar buttons would re-show the strip. When the taskbar
+ * itself auto-hides, `workArea` already reaches the physical edge (see
+ * `isTaskbarAutoHide`), so this is flush to the true screen edge in that case too —
+ * no separate handling needed. No 2 px reserve here (unlike `dockBounds`'s
+ * `taskbarAutoHide` nudge): the sliver is meant to be right at the work area boundary
+ * either way (or the granted rect's boundary — see below).
+ *
+ * `grantedDip` (Task 7.1 fix round 1, I-3): when an AppBar reservation is active for
+ * `d`, the sliver must sit flush to the GRANTED rect's edge, not the (now-shrunk)
+ * `workArea` — otherwise the auto-hidden sliver would land one reservation-height
+ * further in than the strip it replaces, inside the reserved band instead of at its
+ * outer edge. Delegates to the exact same `dockedEdgeY` grant-aware helper
+ * `dockBounds` uses (no `taskbarAutoHide` reserve, matching this function's own
+ * previous behaviour), so the "grant vs. plain work area" decision lives in ONE
+ * place. */
+export function sliverBounds(strip: Rect, edge: Edge, d: DisplayLike, grantedDip?: Rect): Rect {
   const height = 4;
-  const y = edge === 'top' ? workArea.y : workArea.y + workArea.height - height;
+  const y = dockedEdgeY(d, edge, height, false, grantedDip);
   return roundRect({ x: strip.x, y, width: strip.width, height });
+}
+
+/** Task 7.1 fix round 1 (I-4): the strip's actual on-screen visibility, composed from
+ * every independent "wants it hidden" reason. Extracted as a pure function (out of
+ * `StripWindow.applyVisibility`) so the composition rules are unit-testable without a
+ * real `BrowserWindow`: a user-driven hide must survive a fullscreen exit; a
+ * fullscreen exit must never show a strip the user disabled; enabling the strip while
+ * some other app is fullscreen must keep it hidden until that app exits.
+ * `menuBarHidden` (Task 6.1, darwin-only "zero-pixel mode") composes exactly the same
+ * way and defaults to `false` when omitted — non-darwin callers never set it. */
+export function stripVisible(reasons: {
+  enabled: boolean;
+  userHidden: boolean;
+  fullscreenHidden: boolean;
+  menuBarHidden?: boolean;
+}): boolean {
+  return reasons.enabled && !reasons.userHidden && !reasons.fullscreenHidden && !(reasons.menuBarHidden ?? false);
 }
 
 /** The 24×24 drag/click-through handle, vertically centred in the strip, 4 px from
