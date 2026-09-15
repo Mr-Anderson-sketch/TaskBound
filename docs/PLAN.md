@@ -123,7 +123,7 @@ Deliverable: upgraded toolchain, test harness, skeleton, agent definition. The o
 
 ## Slice 1 — Focus strip (first shippable: the strip replaces the old window)
 
-Deliverable: launch → migrated tasks → 32 px strip docked bottom, hover panel, pill, hotkeys (toggle, complete, undo), tray, minimal capture (title only), planner placeholder listing Today. Old renderer removed. e2e: `focus.spec.ts`, `restart.spec.ts`, `capture.spec.ts` (title-only).
+**Done 2026-09-15.** Deliverable: launch → migrated tasks → 32 px strip docked bottom, hover panel, pill, hotkeys (toggle, complete, undo), tray, minimal capture (title only), planner placeholder listing Today. Old renderer removed. e2e: `focus.spec.ts`, `restart.spec.ts`, `capture.spec.ts` (title-only).
 
 ### Task 1.1: Core types and schema
 
@@ -207,7 +207,7 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 
 `src/core/schema.ts` exports `DataSchema`, `ActionSchema` (a `z.discriminatedUnion('type', [...])` with `.strict()` on every member, titles `max(200)`, tags `max(20)` of `max(40)`, arrays `max(10000)`), and `parseData(unknown): Data` which throws `DataInvalidError` with the zod issues. `src/core/defaults.ts` exports `INBOX_ID = 'inbox'`, `defaultSettings()`, `createEmptyData(now, appVersion)`. `src/core/dates.ts` exports `ymd(ms: number): Ymd`, `parseYmd(s: Ymd): Date /* local midnight */`, `addDays(s: Ymd, n: number): Ymd`, `startOfLocalDay(ms): number`, `isSameLocalDay(a, b)`, `dayKeyForRollover(ms, cutoffHour = 4)` (a day starts at 4 AM local per D17).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 // tests/core/dates.test.ts
@@ -256,10 +256,10 @@ describe('schema', () => {
 });
 ```
 
-- [ ] **Step 2: Run** `npx vitest run tests/core` → FAIL (modules missing).
-- [ ] **Step 3: Implement** the four files exactly per the interfaces above. `ymd` must use `getFullYear/getMonth/getDate`, never `toISOString`.
-- [ ] **Step 4: Run** `npm test` → PASS under both time zones.
-- [ ] **Step 5: Commit** `feat(core): data types, zod schema, local date helpers`.
+- [x] **Step 2: Run** `npx vitest run tests/core` → FAIL (modules missing).
+- [x] **Step 3: Implement** the four files exactly per the interfaces above. `ymd` must use `getFullYear/getMonth/getDate`, never `toISOString`.
+- [x] **Step 4: Run** `npm test` → PASS under both time zones.
+- [x] **Step 5: Commit** `feat(core): data types, zod schema, local date helpers`.
 
 ### Task 1.2: Reducer and selectors (the subset the strip needs)
 
@@ -282,7 +282,7 @@ export function orderBetween(a?: number, b?: number): number;      // fractional
 
 Rules implemented in this task: `task/add` (order = nextOrder within list; `today` defaults true when `makeCurrent`; `makeCurrent` sets order = min(order)−1000 among Today), `task/complete` (status done, completedAt, completedBy, stops timer folding elapsed into spentSeconds; if `recurrence` present and `spawnId` given, create the next occurrence via `nextOccurrence` from Task 3.3 — until then, a stub that copies `due.date` forward one day for `daily` only and is replaced in Task 3.3), `task/uncomplete`, `task/delete` (also deletes children), `task/makeCurrent`, `task/skip` (order = nextOrder among Today), `task/snooze`, `task/setToday`, `settings/patch` (deep merge), `data/replace`.
 
-- [ ] **Step 1: Tests**
+- [x] **Step 1: Tests**
 
 ```ts
 // tests/core/reducer.test.ts
@@ -339,7 +339,7 @@ describe('reducer: tasks', () => {
 });
 ```
 
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** with `produce` from immer; export `reduce` only. **Step 4: Run** → PASS. **Step 5: Commit** `feat(core): reducer and today selectors`.
+- [x] **Step 2: Run** → FAIL. **Step 3: Implement** with `produce` from immer; export `reduce` only. **Step 4: Run** → PASS. **Step 5: Commit** `feat(core): reducer and today selectors`.
 
 ### Task 1.3: Undo ring
 
@@ -357,7 +357,7 @@ export const UNDOABLE = new Set<Action['type']>(['task/add','task/edit','task/co
 export function labelFor(action: Action, data: Data): string;   // e.g. 'Completed "Email update"'
 ```
 
-- [ ] **Step 1: Test** property: for any sequence of ≤ 20 `task/add`/`task/complete`/`task/delete` actions, applying then undoing all returns a `Data` deep-equal to the start; redo all returns the end state; ring never exceeds 50.
+- [x] **Step 1: Test** property: for any sequence of ≤ 20 `task/add`/`task/complete`/`task/delete` actions, applying then undoing all returns a `Data` deep-equal to the start; redo all returns the end state; ring never exceeds 50.
 
 ```ts
 import { fc, it } from '@fast-check/vitest'; // or import fc from 'fast-check' and vitest it
@@ -365,7 +365,7 @@ import { fc, it } from '@fast-check/vitest'; // or import fc from 'fast-check' a
 
 Use `fc.array(fc.oneof(addArb, completeArb, deleteArb), { maxLength: 20 })`, ids from `fc.constantFrom('a','b','c','d')`, and `now` increasing.
 
-- [ ] **Step 2–5:** FAIL → implement (arrays of `{data,label}`, `shift()` when over limit) → PASS → commit `feat(core): undo ring with property tests`.
+- [x] **Step 2–5:** FAIL → implement (arrays of `{data,label}`, `shift()` when over limit) → PASS → commit `feat(core): undo ring with property tests`.
 
 ### Task 1.4: Legacy migration
 
@@ -378,8 +378,8 @@ export function migrateLegacy(raw: unknown, now: number, appVersion: string): Da
 
 Rules (E18): read raw, never replay time; `completed|struck → done` with `completedBy: 'timer'` for `struck` and `auto_complete` history, `'user'` otherwise; `timer = { plannedSeconds: timeAssignedSeconds, spentSeconds: max(0, assigned − remaining) }`, never running; `today: false`, `listId: 'inbox'`, order by original array index × 1000; `days` derived from each `completedAt` in local time; `settings.score = { enabled: score !== undefined && score !== 0, value: score ?? 0 }`; `meta.legacyImportedAt = now`.
 
-- [ ] Tests: fixture yields 26 tasks all done; a `struck` task has `completedBy 'timer'`; a task with `remainingSeconds 600, timeAssignedSeconds 1500` yields `spentSeconds 900`; `days` has the right per-day counts for `2025-12-16` (compute from fixture, local); garbage input (`{}` and `null`) yields empty data with `dropped 0`.
-- [ ] Commit `feat(core): migrate legacy state.json`.
+- [x] Tests: fixture yields 26 tasks all done; a `struck` task has `completedBy 'timer'`; a task with `remainingSeconds 600, timeAssignedSeconds 1500` yields `spentSeconds 900`; `days` has the right per-day counts for `2025-12-16` (compute from fixture, local); garbage input (`{}` and `null`) yields empty data with `dropped 0`.
+- [x] Commit `feat(core): migrate legacy state.json`.
 
 ### Task 1.5: Persistence (main)
 
@@ -399,8 +399,8 @@ export function cleanOrphans(deps: PersistDeps): Promise<void>;     // *.tmp old
 
 Layout in `dir`: `data.json`, `data.tmp-<pid>-<ts>.json`, `backups/data-YYYY-MM-DD.json`, `data.corrupt-<ts>.json`, `legacy-state.json` (copy of the imported legacy file).
 
-- [ ] Tests: save then load equals; corrupt `data.json` + valid backup → `source 'backup'` and corrupt file renamed; both corrupt → `'empty'`; `rename` throwing `EPERM` twice then succeeding → save succeeds and `log` shows two retries; two saves on the same local day produce one backup file; 31 backups → oldest removed; legacy path present and no `data.json` → `'legacy'` with 26 tasks and `legacy-state.json` copied, original untouched (`stat.mtime` equal).
-- [ ] Commit `feat(main): atomic persistence with backups and recovery`.
+- [x] Tests: save then load equals; corrupt `data.json` + valid backup → `source 'backup'` and corrupt file renamed; both corrupt → `'empty'`; `rename` throwing `EPERM` twice then succeeding → save succeeds and `log` shows two retries; two saves on the same local day produce one backup file; 31 backups → oldest removed; legacy path present and no `data.json` → `'legacy'` with 26 tasks and `legacy-state.json` copied, original untouched (`stat.mtime` equal).
+- [x] Commit `feat(main): atomic persistence with backups and recovery`.
 
 ### Task 1.6: Store, IPC contract, preload
 
@@ -450,8 +450,8 @@ export class Store {
 
 `dispatch` validates nothing (ipc.ts validates), pushes to `UndoStack` when `UNDOABLE.has(type)`, reduces, bumps `rev`, debounces `save` 250 ms (flush on `before-quit`), notifies subscribers. `ipc.ts` registers every `InvokeMap` channel with `ipcMain.handle`, validates `action` with `ActionSchema`, checks `event.senderFrame.url` starts with the app origin, and throws `IpcRejected` otherwise. Preload exposes exactly `window.tb` with a channel allowlist.
 
-- [ ] Tests: store bumps `rev` and calls `save` once for three rapid dispatches; undo returns label and restores; ipc rejects `{type:'task/add', title:'x'.repeat(201)}` and a payload from `senderFrame.url = 'https://evil'` (mock `ipcMain`).
-- [ ] Commit `feat(main): store, typed IPC, sandboxed preload`.
+- [x] Tests: store bumps `rev` and calls `save` once for three rapid dispatches; undo returns label and restores; ipc rejects `{type:'task/add', title:'x'.repeat(201)}` and a payload from `senderFrame.url = 'https://evil'` (mock `ipcMain`).
+- [x] Commit `feat(main): store, typed IPC, sandboxed preload`.
 
 ### Task 1.7: Strip window manager
 
@@ -468,8 +468,8 @@ export function panelBounds(strip: Rect, edge: Edge, panelHeight: number): Rect;
 
 `strip.ts` exports `class StripWindow` with `create(store)`, `show()`, `hide()`, `toggle()`, `setEdge(edge)`, `expand(open)`, `applySettings(s: Settings['strip'])`, `handleReportedSize({width,height})`, `beginDrag()`, `destroy()`. Rules: `new BrowserWindow({ frame:false, transparent:true, alwaysOnTop:true, focusable:false, skipTaskbar:true, resizable:false, hasShadow:false, show:false, type: process.platform==='darwin' ? 'panel' : undefined, webPreferences:{ preload, sandbox:true, contextIsolation:true } })`; on macOS also `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` and `setAlwaysOnTop(true, 'floating')`; `showInactive()` after the first `store:changed` is delivered; `setContentProtection(settings.hideFromCapture)`; position memory keyed by `displayKey`; re-dock on `screen` events `display-added`, `display-removed`, `display-metrics-changed`; drag = 60 Hz `setInterval` reading `screen.getCursorScreenPoint()` until the renderer reports mouseup or 10 s; hover poll = 100 ms `setInterval` comparing cursor to `getBounds()` while expanded or clickThrough, collapsing 300 ms after leaving; click-through = `setIgnoreMouseEvents(true, { forward: true })` except when the cursor is inside the 24×24 handle rect; auto-hide = after 3 s without hover and no running timer, `setBounds` to a 4 px sliver; panel expand = one `setBounds(panelBounds(...), false)`.
 
-- [ ] Tests for `displays.ts`: bottom dock on a 1366×768 display with 48 px taskbar gives `y = 720−32`; `taskbarAutoHide` reserves 2 px; `clampAlong` keeps the strip inside; panel above a bottom strip has `y = strip.y − panelHeight`.
-- [ ] Commit `feat(main): strip window manager with docking and per-display memory`.
+- [x] Tests for `displays.ts`: bottom dock on a 1366×768 display with 48 px taskbar gives `y = 720−32`; `taskbarAutoHide` reserves 2 px; `clampAlong` keeps the strip inside; panel above a bottom strip has `y = strip.y − panelHeight`.
+- [x] Commit `feat(main): strip window manager with docking and per-display memory`.
 
 ### Task 1.8: Strip renderer
 
@@ -477,9 +477,9 @@ export function panelBounds(strip: Rect, edge: Edge, panelHeight: number): Rect;
 
 Build exactly the DESIGN.md strip spec: root `<div class="strip" data-state=…>` with `.handle` (24×24, `onMouseDown` → `tb.invoke('strip:dragStart')` after 6 px / 200 ms rule, `onMouseEnter/Leave` for click-through), `.dot`, `.title` (fade mask), `.chip`, `.progress`. `ResizeObserver` on the root reports `strip:reportSize`. Hover 150 ms stationary rule → `strip:expand(true)`; the panel renders inside the same window above/below the strip per `edge`. `useDisplayTime` derives `remaining/elapsed` from `timer.runningSince` with a 1 s interval only while running. Completion animation: 1.2 s `.strike` then title swap; respects `prefers-reduced-motion` and the setting. `aria-hidden="true"` on the strip root (D30).
 
-- [ ] e2e `e2e/focus.spec.ts`: launch → exactly one visible window with URL hash `#/strip`; `bounds.height <= 40`; `bounds` inside the matching display's `workArea`; `isFocusable() === false`; `isAlwaysOnTop() === true`; title text equals the current task; `store:dispatch task/complete` via `app.evaluate` → title changes to the next task within 1.5 s.
-- [ ] e2e `e2e/restart.spec.ts`: add two tasks, move strip edge to top, quit, relaunch → same tasks, same edge, same position.
-- [ ] Commit `feat(strip): strip, pill, hover panel renderer`.
+- [x] e2e `e2e/focus.spec.ts`: launch → exactly one visible window with URL hash `#/strip`; `bounds.height <= 40`; `bounds` inside the matching display's `workArea`; `isFocusable() === false`; `isAlwaysOnTop() === true`; title text equals the current task; `store:dispatch task/complete` via `app.evaluate` → title changes to the next task within 1.5 s.
+- [x] e2e `e2e/restart.spec.ts`: add two tasks, move strip edge to top, quit, relaunch → same tasks, same edge, same position.
+- [x] Commit `feat(strip): strip, pill, hover panel renderer`.
 
 ### Task 1.9: Hotkeys, tray, palette shell, planner placeholder, app wiring
 
@@ -494,10 +494,10 @@ export class Hotkeys { apply(settings: Settings['hotkeys'], handlers: Record<key
 
 `main.ts`: single-instance lock; `app.setAppUserModelId('com.timebound.app')`; `app.whenReady` → CSP → `load` → `Store` → windows → hotkeys → tray → `showInactive` strip; `window-all-closed` does nothing (tray app); `before-quit` flushes save and `unregisterAll`. Tray: icon from `build/icon-16x16.png` (template PNG on macOS), tooltip = current title, menu: current title (disabled) · Complete · Quick capture · Show/Hide strip · Open planner · Quit. Palette window: `alwaysOnTop`, `frame:false`, `transparent:false`, 560×auto, centred on the display with the cursor, hides on blur/Escape, `app.hide()` on macOS after hide. Planner window: frameless (Windows) / `hiddenInset` (macOS), 1000×640 default, `close` → hide.
 
-- [ ] e2e `e2e/capture.spec.ts`: `palette:show('capture')` → window `#/palette` visible and focused; type "Write the baseline doc" + Enter → strip title updates; palette hidden; strip still not focused.
-- [ ] Tests: `validateAccelerator('Space')` → no-modifier; `'Alt+F4'` → denylisted; `'Control+Alt+Space'` ok.
-- [ ] `npm run build && npm run e2e` green; app launches from a clean data dir showing the empty-state strip ("Nothing yet · Ctrl+Alt+Space to add a task").
-- [ ] Update `CHANGELOG.md` ("Focus strip"), commit `feat: focus strip slice — hotkeys, tray, capture shell, planner placeholder`.
+- [x] e2e `e2e/capture.spec.ts`: `palette:show('capture')` → window `#/palette` visible and focused; type "Write the baseline doc" + Enter → strip title updates; palette hidden; strip still not focused.
+- [x] Tests: `validateAccelerator('Space')` → no-modifier; `'Alt+F4'` → denylisted; `'Control+Alt+Space'` ok.
+- [x] `npm run build && npm run e2e` green; app launches from a clean data dir showing the empty-state strip ("Nothing yet · Ctrl+Alt+Space to add a task").
+- [x] Update `CHANGELOG.md` ("Focus strip"), commit `feat: focus strip slice — hotkeys, tray, capture shell, planner placeholder`.
 
 
 ---
