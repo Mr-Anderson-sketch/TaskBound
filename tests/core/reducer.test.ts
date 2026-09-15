@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
-import { todayView } from '../../src/core/select';
+import { todayView, orderBetween } from '../../src/core/select';
 import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
 import { UNDOABLE, UndoStack } from '../../src/core/undo';
 import { remainingSeconds } from '../../src/core/timer';
@@ -81,8 +81,6 @@ describe('reducer: tasks', () => {
     let d = createEmptyData(t0, '2.0.0');
     d = add(d, 'a', 'A');
     const before = d;
-    expect(reduce(d, { type: 'task/edit', id: 'a', now: t0, patch: { title: 'x' } })).toBe(before);
-    expect(reduce(d, { type: 'task/move', id: 'a', now: t0 })).toBe(before);
     expect(reduce(d, { type: 'list/rename', id: INBOX_ID, now: t0, name: 'Inbox2' })).toBe(before);
     expect(reduce(d, { type: 'list/delete', id: INBOX_ID, now: t0, moveTasksTo: INBOX_ID })).toBe(before);
   });
@@ -700,5 +698,276 @@ describe('reducer: timer/startSession (Task 3.2 fix round 1, supersedes addendum
     d = reduce(d, { type: 'settings/patch', now: t0, patch: { score: { enabled: true, value: 5 } } });
     d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0, seconds: 60 });
     expect(d.settings.score.value).toBe(5);
+  });
+});
+
+describe('reducer: task/edit (Task 4.2)', () => {
+  it('trims title; an empty-after-trim title is a no-op for that field', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { title: '  New title  ' } });
+    expect(d.tasks[0].title).toBe('New title');
+    expect(d.tasks[0].updatedAt).toBe(t0 + 1);
+
+    const before = d;
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 2, patch: { title: '   ' } });
+    expect(d).toBe(before); // whole patch is a no-op: the only field present resolved to nothing
+    expect(d.tasks[0].title).toBe('New title');
+  });
+
+  it('lowercases, dedupes, and caps tags at 20', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { tags: ['Work', 'WORK', 'home'] } });
+    expect(d.tasks[0].tags).toEqual(['work', 'home']);
+
+    const many = Array.from({ length: 25 }, (_, i) => `tag${i}`);
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 2, patch: { tags: many } });
+    expect(d.tasks[0].tags).toHaveLength(20);
+    expect(d.tasks[0].tags).toEqual(many.slice(0, 20));
+  });
+
+  it('an unknown listId falls back to Inbox', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A', { listId: 'work' });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { listId: 'ghost' } });
+    expect(d.tasks[0].listId).toBe(INBOX_ID);
+  });
+
+  it('a known listId moves the task there', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { listId: 'work' } });
+    expect(d.tasks[0].listId).toBe('work');
+  });
+
+  it('`due` key present with an explicit date sets it; present with `undefined` clears it; absent leaves it alone', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A', { due: { date: '2026-09-20' } });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { due: { date: '2026-10-01', time: '09:00' } } });
+    expect(d.tasks[0].due).toEqual({ date: '2026-10-01', time: '09:00' });
+
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 2, patch: { due: undefined } });
+    expect(d.tasks[0].due).toBeUndefined();
+    expect(d.tasks[0].updatedAt).toBe(t0 + 2);
+
+    const before = d;
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 3, patch: { title: 'A' } }); // no `due` key at all
+    expect(d.tasks[0].due).toBeUndefined();
+    void before;
+  });
+
+  it('`recurrence` key present with a value replaces it; present with `undefined` clears it', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A', { recurrence: { kind: 'daily' } });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { recurrence: { kind: 'weekdays' } } });
+    expect(d.tasks[0].recurrence).toEqual({ kind: 'weekdays' });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 2, patch: { recurrence: undefined } });
+    expect(d.tasks[0].recurrence).toBeUndefined();
+  });
+
+  it('`today` sets the boolean flag', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A', { today: false });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { today: true } });
+    expect(d.tasks[0].today).toBe(true);
+  });
+
+  it('`plannedSeconds: null` clears the plan but keeps the timer object when spentSeconds > 0', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', plannedSeconds: 1500 });
+    d = { ...d, tasks: d.tasks.map((t) => (t.id === 'a' ? { ...t, timer: { ...t.timer!, spentSeconds: 30 } } : t)) };
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { plannedSeconds: null } });
+    expect(d.tasks[0].timer).toEqual({ spentSeconds: 30, plannedSeconds: undefined });
+  });
+
+  it('`plannedSeconds: null` removes the timer object entirely when there is no spent time and it is not running', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', plannedSeconds: 1500 });
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { plannedSeconds: null } });
+    expect(d.tasks[0].timer).toBeUndefined();
+  });
+
+  it('`plannedSeconds: null` on a task with no timer at all is a no-op', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { plannedSeconds: null } });
+    expect(d).toBe(before);
+  });
+
+  it('a number creates a timer (if missing) and sets plannedSeconds', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: { plannedSeconds: 600 } });
+    expect(d.tasks[0].timer).toEqual({ spentSeconds: 0, plannedSeconds: 600 });
+  });
+
+  it('an empty patch is a no-op (same reference)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    d = reduce(d, { type: 'task/edit', id: 'a', now: t0 + 1, patch: {} });
+    expect(d).toBe(before);
+  });
+
+  it('a missing task id is a no-op (same reference)', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'task/edit', id: 'ghost', now: t0, patch: { title: 'x' } })).toBe(d);
+  });
+
+  it('is undoable', () => {
+    expect(UNDOABLE.has('task/edit')).toBe(true);
+  });
+});
+
+describe('reducer: task/move (Task 4.2)', () => {
+  it('a known listId moves the task and its descendants there, leaving unrelated tasks alone', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A');
+    d = add(d, 'a1', 'A1', { parentId: 'a' });
+    d = add(d, 'a1a', 'A1A', { parentId: 'a1' });
+    d = add(d, 'b', 'B'); // unrelated, stays in Inbox
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, listId: 'work' });
+    expect(d.tasks.find((t) => t.id === 'a')!.listId).toBe('work');
+    expect(d.tasks.find((t) => t.id === 'a1')!.listId).toBe('work');
+    expect(d.tasks.find((t) => t.id === 'a1a')!.listId).toBe('work');
+    expect(d.tasks.find((t) => t.id === 'b')!.listId).toBe(INBOX_ID);
+  });
+
+  it('an unknown listId falls back to Inbox', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A', { listId: 'work' });
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, listId: 'ghost' });
+    expect(d.tasks[0].listId).toBe(INBOX_ID);
+  });
+
+  it('parentId: null detaches a sub-task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'a1', 'A1', { parentId: 'a' });
+    d = reduce(d, { type: 'task/move', id: 'a1', now: t0 + 1, parentId: null });
+    expect(d.tasks.find((t) => t.id === 'a1')!.parentId).toBeUndefined();
+  });
+
+  it('parentId: <id> attaches to an existing top-level task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'task/move', id: 'b', now: t0 + 1, parentId: 'a' });
+    expect(d.tasks.find((t) => t.id === 'b')!.parentId).toBe('a');
+  });
+
+  it('rejects (no-op) attaching a task to itself', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, parentId: 'a' });
+    expect(d).toBe(before);
+  });
+
+  it('rejects (no-op) attaching a task to one of its own descendants', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'a1', 'A1', { parentId: 'a' });
+    const before = d;
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, parentId: 'a1' });
+    expect(d).toBe(before);
+    expect(d.tasks.find((t) => t.id === 'a')!.parentId).toBeUndefined();
+  });
+
+  it('rejects (no-op) attaching to a target that is itself a sub-task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'a1', 'A1', { parentId: 'a' });
+    d = add(d, 'b', 'B');
+    const before = d;
+    d = reduce(d, { type: 'task/move', id: 'b', now: t0 + 1, parentId: 'a1' });
+    expect(d).toBe(before);
+    expect(d.tasks.find((t) => t.id === 'b')!.parentId).toBeUndefined();
+  });
+
+  it('afterId: null moves the task to the front of its sibling group (order = min - 1000)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A'); // order 1000
+    d = add(d, 'b', 'B'); // order 2000
+    d = add(d, 'c', 'C'); // order 3000
+    d = reduce(d, { type: 'task/move', id: 'c', now: t0 + 1, afterId: null });
+    expect(d.tasks.find((t) => t.id === 'c')!.order).toBe(1000 - 1000);
+    expect(d.tasks.find((t) => t.id === 'c')!.order).toBeLessThan(d.tasks.find((t) => t.id === 'a')!.order);
+  });
+
+  it('afterId: <id> places the task immediately after that sibling (order between it and the next)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A'); // 1000
+    d = add(d, 'b', 'B'); // 2000
+    d = add(d, 'c', 'C'); // 3000
+    d = reduce(d, { type: 'task/move', id: 'c', now: t0 + 1, afterId: 'a' });
+    const order = d.tasks.find((t) => t.id === 'c')!.order;
+    expect(order).toBe(orderBetween(1000, 2000));
+    const ids = [...d.tasks].sort((x, y) => x.order - y.order).map((t) => t.id);
+    expect(ids).toEqual(['a', 'c', 'b']);
+  });
+
+  it('afterId: <last sibling id> places the task at the end', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A'); // 1000
+    d = add(d, 'b', 'B'); // 2000
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, afterId: 'b' });
+    const ids = [...d.tasks].sort((x, y) => x.order - y.order).map((t) => t.id);
+    expect(ids).toEqual(['b', 'a']);
+  });
+
+  it('an afterId that is not a sibling is a no-op for ordering', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A');
+    d = add(d, 'w', 'W', { listId: 'work' });
+    const before = d;
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, afterId: 'w' });
+    expect(d).toBe(before);
+  });
+
+  it('list and afterId together: list is applied first, so afterId is scoped to the NEW list', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'list/add', id: 'work', now: t0, name: 'Work' });
+    d = add(d, 'a', 'A', { listId: 'work' }); // order 1000 in work
+    d = add(d, 'b', 'B', { listId: 'work' }); // order 2000 in work
+    d = add(d, 'c', 'C'); // order 1000 in Inbox
+    d = reduce(d, { type: 'task/move', id: 'c', now: t0 + 1, listId: 'work', afterId: 'a' });
+    const c = d.tasks.find((t) => t.id === 'c')!;
+    expect(c.listId).toBe('work');
+    expect(c.order).toBe(orderBetween(1000, 2000));
+  });
+
+  it('siblings are scoped by listId AND parentId, regardless of open/done status', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A'); // 1000
+    d = add(d, 'b', 'B'); // 2000
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1, afterId: 'b' });
+    const ids = [...d.tasks].sort((x, y) => x.order - y.order).map((t) => t.id);
+    expect(ids).toEqual(['b', 'a']);
+  });
+
+  it('a missing task id is a no-op (same reference)', () => {
+    const d = createEmptyData(t0, '2.0.0');
+    expect(reduce(d, { type: 'task/move', id: 'ghost', now: t0, listId: INBOX_ID })).toBe(d);
+  });
+
+  it('no fields given at all is a no-op (same reference)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    const before = d;
+    d = reduce(d, { type: 'task/move', id: 'a', now: t0 + 1 });
+    expect(d).toBe(before);
+  });
+
+  it('is undoable', () => {
+    expect(UNDOABLE.has('task/move')).toBe(true);
   });
 });

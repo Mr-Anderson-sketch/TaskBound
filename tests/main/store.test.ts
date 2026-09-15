@@ -49,9 +49,9 @@ describe('Store', () => {
     const rev1 = store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
     expect(rev1).toBe(rev0 + 1);
 
-    // task/edit is not implemented yet (Task 4.3) — the reducer is a documented no-op
+    // list/rename is not implemented yet (Task 4.3) — the reducer is a documented no-op
     // for it, so the Data reference is unchanged and rev must not move.
-    const rev2 = store.dispatch({ type: 'task/edit', id: 'a', now: 1000, patch: { title: 'Uno' } });
+    const rev2 = store.dispatch({ type: 'list/rename', id: 'inbox', now: 1000, name: 'Renamed' });
     expect(rev2).toBe(rev1);
   });
 

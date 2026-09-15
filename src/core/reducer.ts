@@ -6,7 +6,7 @@ import { produce } from 'immer';
 import type { Data, Action, Task, Rule, Settings, DayRecord, Ymd } from './types';
 import { INBOX_ID } from './defaults';
 import { addDays, rolloverCutoffMs, ymd } from './dates';
-import { nextOrder } from './select';
+import { nextOrder, orderBetween } from './select';
 import { elapsedSeconds } from './timer';
 import { nextOccurrence } from './recur';
 
@@ -49,6 +49,37 @@ function foldTimerSegment(draft: Data, task: Task, at: number): number {
   timer.runningSince = undefined;
   upsertDay(draft, ymd(clampedAt)).focusSeconds += elapsed;
   return elapsed;
+}
+
+/** `id` plus every descendant of `id` in `tasks` (recursive, grown iteratively like
+ * `task/delete`'s own cascade — Task 4.2 factors that cascade out to here so
+ * `task/move`'s listId case can share it). */
+function withDescendants(tasks: Task[], id: string): Set<string> {
+  const ids = new Set<string>([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const t of tasks) {
+      if (t.parentId !== undefined && ids.has(t.parentId) && !ids.has(t.id)) {
+        ids.add(t.id);
+        grew = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/** Whether `candidateId` IS `ancestorId` or a descendant of it (walks `candidateId`'s own
+ * `parentId` chain upward) — Task 4.2 addendum ruling 1's `task/move` rejection: a
+ * task cannot become its own parent, nor a descendant of itself. Bounded by `tasks.length`
+ * so a corrupt cyclic parentId chain can't loop forever. */
+function isSelfOrDescendant(tasks: Task[], ancestorId: string, candidateId: string): boolean {
+  let current = tasks.find((t) => t.id === candidateId);
+  for (let i = 0; i < tasks.length && current; i++) {
+    if (current.id === ancestorId) return true;
+    current = current.parentId !== undefined ? tasks.find((t) => t.id === current!.parentId) : undefined;
+  }
+  return false;
 }
 
 /** Move a task to the front of Today: `today = true`, order below every other open Today task. */
@@ -191,17 +222,8 @@ export function reduce(data: Data, action: Action): Data {
       }
 
       case 'task/delete': {
-        const toDelete = new Set<string>([action.id]);
-        let grew = true;
-        while (grew) {
-          grew = false;
-          for (const t of draft.tasks) {
-            if (t.parentId !== undefined && toDelete.has(t.parentId) && !toDelete.has(t.id)) {
-              toDelete.add(t.id);
-              grew = true;
-            }
-          }
-        }
+        if (!draft.tasks.some((t) => t.id === action.id)) break;
+        const toDelete = withDescendants(draft.tasks, action.id);
         draft.tasks = draft.tasks.filter((t) => !toDelete.has(t.id));
         break;
       }
@@ -247,11 +269,143 @@ export function reduce(data: Data, action: Action): Data {
         return action.data;
       }
 
-      // Every action below this line is a deliberate no-op for now: the draft is
-      // left untouched, so immer's `produce` returns the original `data` reference.
-      case 'task/edit': // implemented in Task 4.3
-      case 'task/move': // implemented in Task 4.3
+      // Task 4.2 addendum ruling 1: patch fields are applied only when actually present
+      // in `action.patch` (`'x' in patch`, not `patch.x !== undefined` — a present key
+      // with value `undefined` is how a caller clears `due`/`notes`/`recurrence`, which
+      // are all optional Task fields). `touched` tracks whether anything actually
+      // changed so a patch that changes nothing (e.g. `{}`, or `{ title: '   ' }` alone)
+      // leaves `draft` untouched and `produce` returns the same `Data` reference.
+      case 'task/edit': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task) break;
+        const patch = action.patch;
+        let touched = false;
+
+        if ('title' in patch && patch.title !== undefined) {
+          const title = patch.title.trim();
+          if (title !== '') {
+            task.title = title;
+            touched = true;
+          }
+        }
+        if ('notes' in patch) {
+          task.notes = patch.notes;
+          touched = true;
+        }
+        if ('listId' in patch && patch.listId !== undefined) {
+          task.listId = draft.lists.some((l) => l.id === patch.listId) ? patch.listId : INBOX_ID;
+          touched = true;
+        }
+        if ('tags' in patch && patch.tags !== undefined) {
+          const seen = new Set<string>();
+          const tags: string[] = [];
+          for (const raw of patch.tags) {
+            const tag = raw.toLowerCase();
+            if (seen.has(tag)) continue;
+            seen.add(tag);
+            tags.push(tag);
+            if (tags.length >= 20) break;
+          }
+          task.tags = tags;
+          touched = true;
+        }
+        if ('due' in patch) {
+          task.due = patch.due;
+          touched = true;
+        }
+        if ('recurrence' in patch) {
+          task.recurrence = patch.recurrence;
+          touched = true;
+        }
+        if (patch.today !== undefined) {
+          task.today = patch.today;
+          touched = true;
+        }
+        if ('plannedSeconds' in patch) {
+          if (patch.plannedSeconds === null) {
+            if (task.timer) {
+              const keepTimer = task.timer.spentSeconds > 0 || task.timer.runningSince !== undefined;
+              task.timer = keepTimer ? { ...task.timer, plannedSeconds: undefined } : undefined;
+              touched = true;
+            }
+          } else if (patch.plannedSeconds !== undefined) {
+            if (!task.timer) task.timer = { spentSeconds: 0 };
+            task.timer.plannedSeconds = patch.plannedSeconds;
+            touched = true;
+          }
+        }
+
+        if (touched) task.updatedAt = action.now;
         break;
+      }
+
+      case 'task/move': {
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task) break;
+
+        // 1. listId — cascades to every descendant too (ruling: "moves the task and its
+        // children to that list"); applied first so a combined listId+afterId move scopes
+        // the afterId step's sibling group to the NEW list, not the old one.
+        if (action.listId !== undefined) {
+          const listId = draft.lists.some((l) => l.id === action.listId) ? action.listId : INBOX_ID;
+          if (listId !== task.listId) {
+            const moved = withDescendants(draft.tasks, task.id);
+            for (const t of draft.tasks) {
+              if (moved.has(t.id)) t.listId = listId;
+            }
+            task.updatedAt = action.now;
+          }
+        }
+
+        // 2. parentId — null detaches; an id attaches, rejecting (no-op) a target that is
+        // this task itself, one of its own descendants, or itself a sub-task (only
+        // top-level tasks may be parents).
+        if (action.parentId !== undefined) {
+          if (action.parentId === null) {
+            if (task.parentId !== undefined) {
+              task.parentId = undefined;
+              task.updatedAt = action.now;
+            }
+          } else {
+            const parentId = action.parentId;
+            const target = draft.tasks.find((t) => t.id === parentId);
+            const rejected = !target || target.parentId !== undefined || isSelfOrDescendant(draft.tasks, task.id, parentId);
+            if (!rejected && task.parentId !== parentId) {
+              task.parentId = parentId;
+              task.updatedAt = action.now;
+            }
+          }
+        }
+
+        // 3. afterId — reorders within the task's CURRENT sibling group (same listId and
+        // parentId as the task now has, after steps 1-2 above): null moves to the front
+        // (order = min - 1000, or 1000 when the group is otherwise empty); an id places the
+        // task immediately after that sibling via `orderBetween`. An `afterId` that isn't
+        // (or is no longer, e.g. after a rejected/absent parentId move) an actual sibling is
+        // a no-op for ordering.
+        if (action.afterId !== undefined) {
+          const siblings = draft.tasks
+            .filter((t) => t.id !== task.id && t.listId === task.listId && t.parentId === task.parentId)
+            .sort((a, b) => a.order - b.order);
+          if (action.afterId === null) {
+            const order = siblings.length > 0 ? siblings[0].order - 1000 : 1000;
+            if (order !== task.order) {
+              task.order = order;
+              task.updatedAt = action.now;
+            }
+          } else {
+            const idx = siblings.findIndex((t) => t.id === action.afterId);
+            if (idx !== -1) {
+              const order = orderBetween(siblings[idx].order, siblings[idx + 1]?.order);
+              if (order !== task.order) {
+                task.order = order;
+                task.updatedAt = action.now;
+              }
+            }
+          }
+        }
+        break;
+      }
 
       case 'timer/start': {
         const task = draft.tasks.find((t) => t.id === action.id);
