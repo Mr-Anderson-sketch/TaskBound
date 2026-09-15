@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { launchApp, windowInfo } from './launch';
+
+const execFileAsync = promisify(execFile);
 
 test.setTimeout(60_000);
 
@@ -24,6 +28,35 @@ type Tb = {
 
 function getTb() {
   return (globalThis as unknown as { __tb: Tb }).__tb;
+}
+
+// Fix round 1 (C-1): reads the PRIMARY display's work-area height directly from the
+// OS via PowerShell, from the Playwright TEST process — not `app.evaluate` (Electron
+// `screen` module), which the new "quitting..." test below needs AFTER the app
+// process has already exited (`app.close()`), when there is no more `app.evaluate`
+// to call. Matches this task's SAFETY protocol (`[System.Windows.Forms.Screen]`).
+async function primaryWorkAreaHeight(): Promise<number> {
+  const { stdout } = await execFileAsync('powershell.exe', [
+    '-NoProfile',
+    '-Command',
+    "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height"
+  ]);
+  const n = parseInt(stdout.trim(), 10);
+  if (Number.isNaN(n)) throw new Error(`win32.spec.ts: could not parse PowerShell work-area output: ${JSON.stringify(stdout)}`);
+  return n;
+}
+
+async function pollPrimaryWorkAreaHeight(expected: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last = NaN;
+  while (Date.now() < deadline) {
+    last = await primaryWorkAreaHeight();
+    if (last === expected) return;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(
+    `win32.spec.ts: primary work area height did not return to ${expected} within ${timeoutMs}ms (last seen: ${last})`
+  );
 }
 
 test('capabilities are true on this Windows machine (koffi loads and every binding succeeds)', async () => {
@@ -101,13 +134,25 @@ test('reserveSpace shrinks the primary work area and the strip docks flush to th
     const contentBottom = stripInfo!.bounds.y + shape!.y + shape!.height;
     expect(Math.abs(contentBottom - (grantedRect!.y + grantedRect!.height))).toBeLessThanOrEqual(2);
 
+    // I-4 (fix round 1): "disabling restores the work area" is asserted HERE, inside
+    // `try` — it is a real assertion this test can fail on, not just something the
+    // `finally` safety net below happens to also do on the way out.
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: Tb }).__tb;
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: false } } });
+    });
+    await expect
+      .poll(async () => launched.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.height), { timeout: 3000 })
+      .toBe(originalHeight);
+
     expect(launched.errors()).toEqual([]);
   } finally {
-    // SAFETY: patch reserveSpace back to false and WAIT for the OS to actually
-    // restore the work area — unconditionally, even if an assertion above threw —
-    // before closing the app. `before-quit` also releases (belt and suspenders),
-    // but the poll below is the actual proof the reservation is gone. Wrapped in its
-    // own try/catch so a failure here (e.g. the app already crashed) still reaches
+    // SAFETY NET: patch reserveSpace back to false and WAIT for the OS to actually
+    // restore the work area — unconditionally, even if an assertion above (including
+    // the disable-and-restore assertion itself) threw before this point — before
+    // closing the app. Redundant with the `try` block on the happy path; this is what
+    // actually matters when something up there failed. Wrapped in its own try/catch
+    // so a failure here (e.g. the app already crashed) still reaches
     // `launched.close()` rather than leaking the Electron process too.
     try {
       await launched.app.evaluate(() => {
@@ -165,5 +210,88 @@ test('hideOverFullscreen: the watcher hides the strip when told a foreground app
     expect(launched.errors()).toEqual([]);
   } finally {
     await launched.close();
+  }
+});
+
+// C-1 (fix round 1): quitting with `reserveSpace` on used to be able to leak the
+// AppBar reservation forever — `before-quit` released it, but `settings.reserveSpace`
+// stayed true and `ABM_REMOVE`'s own `display-metrics-changed` event re-entered
+// `redock -> syncAppBar`, which re-reserved on the spot (and the window's `closed`
+// cleanup then skipped `ABM_REMOVE` a second time because the window already reported
+// destroyed). This test exercises the REAL quit path end to end: enable
+// `reserveSpace`, quit normally via `app.close()` WITHOUT turning the setting off
+// first (the exact scenario that used to leak), then confirm — from OUTSIDE the now-
+// exited Electron process, since there is no more `app.evaluate` once it's gone — that
+// the OS's real primary work area actually came back.
+test('quitting with reserveSpace on restores the work area (C-1)', async () => {
+  const launched = await launchApp();
+  const dataDir = launched.dataDir;
+  let originalHeight: number | undefined;
+  let closedViaQuit = false;
+  try {
+    await launched.window('strip', 5000);
+
+    const before = await launched.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea);
+    originalHeight = before.height;
+
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: Tb }).__tb;
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: true } } });
+    });
+    await expect
+      .poll(async () => launched.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.height), { timeout: 3000 })
+      .toBeLessThan(before.height);
+
+    // The real quit path (Electron's `before-quit`) — deliberately WITHOUT patching
+    // `reserveSpace` back to false first. `app.close()` triggers the same app.quit()
+    // a user closing every window / choosing Quit would.
+    await launched.app.close();
+    closedViaQuit = true;
+
+    // The Electron process is gone now: read the real OS work area from OUTSIDE it.
+    await pollPrimaryWorkAreaHeight(originalHeight, 5000);
+  } finally {
+    if (!closedViaQuit) {
+      // An assertion above threw before we ever reached `app.close()` — the app (and
+      // possibly the reservation) is still alive; fall back to the ordinary safe
+      // teardown used by the other tests in this file.
+      try {
+        await launched.app.evaluate(() => {
+          const tb = (globalThis as unknown as { __tb: Tb }).__tb;
+          tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: false } } });
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('win32.spec.ts: failed to disable reserveSpace on the still-running app', err);
+      }
+      await launched.close();
+    } else if (originalHeight !== undefined) {
+      // SAFETY: confirm the real work area actually came back; if it did not
+      // (`pollPrimaryWorkAreaHeight` above threw, or this test is being re-run after
+      // a prior failure left it shrunk), relaunch with the SAME data dir, explicitly
+      // disable reserveSpace, wait for the restore, close, and fail loudly — never
+      // leave the user's desktop shrunk silently.
+      const stillShrunk = (await primaryWorkAreaHeight().catch(() => NaN)) !== originalHeight;
+      if (stillShrunk) {
+        const recovery = await launchApp({ dataDir });
+        try {
+          await recovery.window('strip', 5000);
+          await recovery.app.evaluate(() => {
+            const tb = (globalThis as unknown as { __tb: Tb }).__tb;
+            tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { reserveSpace: false } } });
+          });
+          await expect
+            .poll(async () => recovery.app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.height), { timeout: 5000 })
+            .toBe(originalHeight);
+        } finally {
+          await recovery.close();
+        }
+        throw new Error(
+          'win32.spec.ts SAFETY: quitting with reserveSpace on left the primary work area shrunk after app.close(); ' +
+            'recovered by relaunching with the same data dir and disabling reserveSpace. This IS the C-1 bug — ' +
+            'investigate StripWindow.releaseAppBarReservation()/before-quit before re-running this test.'
+        );
+      }
+    }
   }
 });

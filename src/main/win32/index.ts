@@ -19,14 +19,35 @@ const MONITOR_DEFAULTTONEAREST = 2;
 
 let loggedLoadFailure = false;
 
+// Fix round 1 (M-3): `loadWin32` is idempotent — a second (or Nth) call returns the
+// SAME resolved `Win32` object without re-invoking `load()` or re-registering any
+// koffi struct name. This matters because `koffi.struct('TbRect', ...)` (and the
+// other struct names below) throw if registered twice in the same process — this
+// task's real `main.ts` only ever calls `loadWin32()` once, but caching makes that a
+// guarantee rather than an accident, and lets any future caller (or a future retry
+// path) call it again safely. Only a SUCCESSFUL load is cached — a failure (thrown
+// loader, a binding that throws) is deliberately NOT cached, so a transient failure
+// does not permanently wall off win32 support for the rest of the process lifetime.
+let cachedLoad: Promise<Win32 | undefined> | undefined;
+
 /** `load` is injectable so tests can exercise the failure path (a throwing loader)
  * and a fully-mocked success path WITHOUT importing the real `koffi` module or
  * calling a real Win32 function (addendum ruling 6) — it defaults to a real dynamic
  * `import('koffi')`, which only ever actually runs on a real win32 machine, since
- * this function returns before reaching it otherwise. */
+ * this function returns before reaching it otherwise. Idempotent (M-3): `load` is
+ * only ever actually invoked by the FIRST successful call; every call after that
+ * returns the cached result, ignoring whatever `load` it was given. */
 export async function loadWin32(load: () => Promise<unknown> = () => import('koffi')): Promise<Win32 | undefined> {
   if (process.platform !== 'win32') return undefined;
+  if (cachedLoad) return cachedLoad;
 
+  cachedLoad = loadWin32Uncached(load);
+  const result = await cachedLoad;
+  if (!result) cachedLoad = undefined; // failures are never cached — allow a retry
+  return result;
+}
+
+async function loadWin32Uncached(load: () => Promise<unknown>): Promise<Win32 | undefined> {
   try {
     const mod = await load();
     // A CommonJS package (koffi) loaded via dynamic `import()` surfaces as
@@ -70,28 +91,40 @@ export async function loadWin32(load: () => Promise<unknown> = () => import('kof
       'intptr_t __stdcall SHAppBarMessage(uint32_t dwMessage, _Inout_ TbAppBarData *pData)'
     );
     const getForegroundWindowFn = user32.func('uintptr_t __stdcall GetForegroundWindow()');
-    const getWindowRectFn = user32.func('bool __stdcall GetWindowRect(uintptr_t hWnd, _Out_ TbRect *lpRect)');
+    // Fix round 1 (M-2): declared `int`, not `bool` — Win32's `BOOL` is a 4-byte
+    // `int` (zero/nonzero), not a 1-byte C99 `_Bool`; declaring it `bool` risks koffi
+    // reading only 1 of the 4 return-value bytes on some ABIs. The `ok ? ... :
+    // undefined` call sites below treat any nonzero `int` as truthy already, so no
+    // other change is needed.
+    const getWindowRectFn = user32.func('int __stdcall GetWindowRect(uintptr_t hWnd, _Out_ TbRect *lpRect)');
     const monitorFromWindowFn = user32.func('uintptr_t __stdcall MonitorFromWindow(uintptr_t hwnd, uint32_t dwFlags)');
-    const getMonitorInfoFn = user32.func('bool __stdcall GetMonitorInfoW(uintptr_t hMonitor, _Inout_ TbMonitorInfo *lpmi)');
+    const getMonitorInfoFn = user32.func('int __stdcall GetMonitorInfoW(uintptr_t hMonitor, _Inout_ TbMonitorInfo *lpmi)');
     const getClassNameFn = user32.func(
       'int __stdcall GetClassNameW(uintptr_t hWnd, _Out_ char16_t *lpClassName, int nMaxCount)'
     );
-    // Bound (per addendum ruling 1) to prove it resolves in user32.dll, but not
-    // called by v1's fullscreen heuristic — ruling 5's check does not need the
-    // owning process id. Kept for parity/future use (e.g. excluding TimeBound's own
-    // process by pid instead of by hwnd list).
-    const getWindowThreadProcessIdFn = user32.func(
-      'uint32_t __stdcall GetWindowThreadProcessId(uintptr_t hWnd, _Out_ uint32_t *lpdwProcessId)'
-    );
+    // Fix round 1 (M-4): the AppBar callback message id, obtained from the OS itself
+    // via `RegisterWindowMessageW` — see appbar.ts's `AppBarDeps.callbackMessageId`
+    // doc comment for why this replaced a fixed sentinel. `const char16_t *` accepts
+    // a plain JS string directly for an input parameter (koffi's own Win32 example,
+    // `FindWindowExW`, does the same — see node_modules/koffi/doc/output.md).
+    const registerWindowMessageFn = user32.func('uint32_t __stdcall RegisterWindowMessageW(const char16_t *lpString)');
     const getShellWindowFn = user32.func('uintptr_t __stdcall GetShellWindow()');
     const getDesktopWindowFn = user32.func('uintptr_t __stdcall GetDesktopWindow()');
 
     const cbSizeAppBarData = koffi.sizeof(APPBARDATA);
     const cbSizeMonitorInfo = koffi.sizeof(MONITORINFO);
 
+    // Fix round 1 (M-4): 0 is not a valid `RegisterWindowMessageW` result on a real
+    // system (it fails only on catastrophic resource exhaustion) — the `|| 0x8837`
+    // fallback (the module's old fixed sentinel, still above `WM_APP`) only guards
+    // against that theoretical failure so `appBar` never ends up with an invalid 0
+    // callback message id.
+    const callbackMessageId = Number(registerWindowMessageFn('TimeBound.AppBar')) || 0x8000 + 0x37;
+
     const appBar = createAppBar({
       cbSize: cbSizeAppBarData,
-      shAppBarMessage: (dwMessage, data) => Number(shAppBarMessageFn(dwMessage, data))
+      shAppBarMessage: (dwMessage, data) => Number(shAppBarMessageFn(dwMessage, data)),
+      callbackMessageId
     });
 
     const fullscreen = createFullscreen({
@@ -120,10 +153,6 @@ export async function loadWin32(load: () => Promise<unknown> = () => import('kof
       getShellWindow: () => BigInt(getShellWindowFn()),
       getDesktopWindow: () => BigInt(getDesktopWindowFn())
     });
-
-    // Referenced only to keep the binding call from being an unused expression in
-    // strict lint configs and to document it is intentionally load-checked only.
-    void getWindowThreadProcessIdFn;
 
     return { appBar, fullscreen };
   } catch (err) {

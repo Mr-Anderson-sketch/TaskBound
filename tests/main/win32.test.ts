@@ -5,11 +5,25 @@
 // unmocked.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { loadWin32 } from '../../src/main/win32';
-import { appBarRect, rectPxToDip, isFullscreenRect, isShellClass, hwndValue } from '../../src/main/win32/geometry';
+import {
+  appBarRectDip,
+  appBarSignature,
+  rectPxToRect,
+  rectToRectPx,
+  isFullscreenRect,
+  isShellClass,
+  hwndValue
+} from '../../src/main/win32/geometry';
 import { createAppBar } from '../../src/main/win32/appbar';
 import type { AppBarDataIo } from '../../src/main/win32/appbar';
 import { createFullscreen } from '../../src/main/win32/fullscreen';
 import { FullscreenWatcher } from '../../src/main/win32/watcher';
+
+// Every `createAppBar` call below needs a `callbackMessageId` (fix round 1, M-4) —
+// its exact value is irrelevant to these pure-sequencing tests (only `index.ts`'s
+// real `RegisterWindowMessageW` binding matters in production), so a fixed constant
+// stands in for it everywhere here.
+const TEST_CALLBACK_MESSAGE_ID = 0x8037;
 
 async function withPlatform(platform: NodeJS.Platform, fn: () => void | Promise<void>): Promise<void> {
   const original = process.platform;
@@ -82,59 +96,103 @@ describe('loadWin32', () => {
     expect(result).toBeDefined();
     expect(typeof result!.appBar.reserve).toBe('function');
     expect(typeof result!.appBar.release).toBe('function');
+    expect(typeof result!.appBar.releaseByValue).toBe('function');
     expect(typeof result!.fullscreen.isForegroundFullscreen).toBe('function');
     // Calling into the mocked bindings must not throw (GetForegroundWindow's stub
     // returns 0 -> "no foreground window" -> false, without any real Win32 call).
     expect(result!.fullscreen.isForegroundFullscreen([])).toBe(false);
   });
+
+  // Fix round 1 (M-3): idempotent — relies on the PRECEDING test in this file having
+  // already loaded successfully (module-level cache in src/main/win32/index.ts), so
+  // this call reuses that cached `Win32` object instead of invoking `loader` at all —
+  // proving `loadWin32` never re-registers a koffi struct name (which throws on a
+  // real `koffi` module if attempted twice) on a second call.
+  it('is idempotent: a call after an already-successful load reuses the cached result and never invokes the new loader', async () => {
+    await withPlatform('win32', async () => {
+      const loader = vi.fn(async () => {
+        throw new Error(
+          'should never be invoked — the preceding test in this file already loaded successfully and loadWin32 must reuse that cached result'
+        );
+      });
+      const result = await loadWin32(loader as unknown as () => Promise<unknown>);
+      expect(loader).not.toHaveBeenCalled();
+      expect(result).toBeDefined();
+      expect(typeof result!.appBar.reserve).toBe('function');
+    });
+  });
 });
 
 // --- geometry (pure) -----------------------------------------------------------------
 
-describe('appBarRect', () => {
-  it('at scale 1, bottom edge: full display width, flush to the physical bottom edge', () => {
+describe('appBarRectDip', () => {
+  it('bottom edge: full display width, flush to the physical bottom edge (DIP units)', () => {
     const d = { id: 1, bounds: { x: 0, y: 0, width: 1366, height: 768 }, workArea: { x: 0, y: 0, width: 1366, height: 720 }, scaleFactor: 1 };
-    const rc = appBarRect(d, 'bottom', 32);
-    expect(rc).toEqual({ left: 0, top: 768 - 32, right: 1366, bottom: 768 });
+    const rc = appBarRectDip(d, 'bottom', 32);
+    expect(rc).toEqual({ x: 0, y: 768 - 32, width: 1366, height: 32 });
   });
 
-  it('at scale 1, top edge: flush to the physical top edge', () => {
+  it('top edge: flush to the physical top edge', () => {
     const d = { id: 1, bounds: { x: 0, y: 0, width: 1366, height: 768 }, workArea: { x: 0, y: 0, width: 1366, height: 768 }, scaleFactor: 1 };
-    const rc = appBarRect(d, 'top', 32);
-    expect(rc).toEqual({ left: 0, top: 0, right: 1366, bottom: 32 });
+    const rc = appBarRectDip(d, 'top', 32);
+    expect(rc).toEqual({ x: 0, y: 0, width: 1366, height: 32 });
   });
 
-  it('at scale 1.25, scales every dimension and rounds', () => {
-    const d = { id: 1, bounds: { x: 0, y: 0, width: 1366, height: 768 }, workArea: { x: 0, y: 0, width: 1366, height: 768 }, scaleFactor: 1.25 };
-    const rc = appBarRect(d, 'bottom', 32);
-    // 1366*1.25 = 1707.5 -> 1708 (rounded); 768*1.25 = 960; 32*1.25 = 40.
-    expect(rc.left).toBe(0);
-    expect(rc.right).toBe(1708);
-    expect(rc.bottom).toBe(960);
-    expect(rc.top).toBe(960 - 40);
-  });
-
-  it('at scale 1.5 on a secondary display with a non-zero bounds.x, offsets and scales left/right together', () => {
+  // I-1 (fix round 1): the OLD `appBarRect` multiplied every dimension by
+  // `display.scaleFactor` here — WRONG for a secondary display with a different
+  // scale factor than the primary, since Windows' per-monitor DPI virtualization does
+  // NOT place a secondary monitor's physical origin at `dipOrigin * itsOwnScaleFactor`
+  // (that conversion is now `StripWindow`'s job, via the OS-correct, injectable
+  // `screen.dipToScreenRect`/`screenToDipRect` — see win32.spec.ts and strip.ts's
+  // `syncAppBar`). This function stays in DIPs regardless of `scaleFactor`: a
+  // high-DPI secondary display's rect here is identical in SHAPE to a scale-1
+  // display's, just offset by its own `bounds.x`/`bounds.y` — no multiplication.
+  it('a secondary display with a non-zero bounds.x and a different scale factor stays in pure DIPs (no scaling)', () => {
     const d = { id: 2, bounds: { x: 1366, y: 0, width: 1280, height: 720 }, workArea: { x: 1366, y: 0, width: 1280, height: 720 }, scaleFactor: 1.5 };
-    const rc = appBarRect(d, 'top', 32);
-    expect(rc.left).toBe(Math.round(1366 * 1.5));
-    expect(rc.right).toBe(Math.round((1366 + 1280) * 1.5));
-    expect(rc.top).toBe(0);
-    expect(rc.bottom).toBe(Math.round(32 * 1.5));
+    const rc = appBarRectDip(d, 'top', 32);
+    expect(rc).toEqual({ x: 1366, y: 0, width: 1280, height: 32 });
   });
 });
 
-describe('rectPxToDip', () => {
-  it('is the inverse of appBarRect at scale 1', () => {
-    const rc = { left: 0, top: 688, right: 1366, bottom: 720 };
-    expect(rectPxToDip(rc, 1)).toEqual({ x: 0, y: 688, width: 1366, height: 32 });
+describe('rectPxToRect / rectToRectPx', () => {
+  it('rectPxToRect converts a Win32 RECT (left/top/right/bottom) to x/y/width/height', () => {
+    expect(rectPxToRect({ left: 0, top: 688, right: 1366, bottom: 720 })).toEqual({ x: 0, y: 688, width: 1366, height: 32 });
   });
 
-  it('divides by scaleFactor and rounds', () => {
-    const rc = { left: 0, top: 960 - 40, right: 1708, bottom: 960 };
-    const dip = rectPxToDip(rc, 1.25);
-    expect(dip.width).toBe(Math.round(1708 / 1.25));
-    expect(dip.height).toBe(32);
+  it('rectToRectPx is the exact inverse — no scaling, pure reshaping', () => {
+    const rect = { x: 0, y: 688, width: 1366, height: 32 };
+    expect(rectToRectPx(rect)).toEqual({ left: 0, top: 688, right: 1366, bottom: 720 });
+    expect(rectPxToRect(rectToRectPx(rect))).toEqual(rect);
+  });
+});
+
+describe('appBarSignature', () => {
+  const d = { id: 1, bounds: { x: 0, y: 0, width: 1366, height: 768 }, workArea: { x: 0, y: 0, width: 1366, height: 720 }, scaleFactor: 1 };
+
+  it('is stable for the same display/edge/height', () => {
+    expect(appBarSignature(d, 'bottom', 32)).toBe(appBarSignature({ ...d }, 'bottom', 32));
+  });
+
+  it('changes when the edge or the content height changes', () => {
+    const base = appBarSignature(d, 'bottom', 32);
+    expect(appBarSignature(d, 'top', 32)).not.toBe(base);
+    expect(appBarSignature(d, 'bottom', 40)).not.toBe(base);
+  });
+
+  // I-2 (fix round 1): a display metrics change that leaves `id` untouched (a
+  // resolution change, a monitor rearranged in the OS's display settings) must still
+  // change the signature, so `StripWindow.syncAppBar` re-reserves instead of leaving
+  // a STALE grant (sized/positioned for the display's previous metrics) in place.
+  it('changes when bounds change but the id stays the same', () => {
+    const base = appBarSignature(d, 'bottom', 32);
+    const moved = { ...d, bounds: { ...d.bounds, width: 1920 } };
+    expect(appBarSignature(moved, 'bottom', 32)).not.toBe(base);
+  });
+
+  it('changes when scaleFactor changes but the id and bounds stay the same', () => {
+    const base = appBarSignature(d, 'bottom', 32);
+    const rescaled = { ...d, scaleFactor: 1.5 };
+    expect(appBarSignature(rescaled, 'bottom', 32)).not.toBe(base);
   });
 });
 
@@ -207,7 +265,7 @@ describe('createAppBar', () => {
       }
       return 1;
     });
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
 
     const rectPx = { left: 0, top: 688, right: 1366, bottom: 720 };
     const result = appBar.reserve(makeHwnd(0x1n), 'bottom', rectPx);
@@ -227,7 +285,7 @@ describe('createAppBar', () => {
       }
       return 1;
     });
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     const rectPx = { left: 0, top: 0, right: 1366, bottom: 32 };
     const result = appBar.reserve(makeHwnd(0x6n), 'top', rectPx);
     // top: 0 -> 8; bottom re-derived to restore the 32px height: 8 + 32 = 40.
@@ -236,7 +294,7 @@ describe('createAppBar', () => {
 
   it('reserve(): a no-op QUERYPOS (nothing else registered on this edge) leaves the requested rect unchanged', () => {
     const shAppBarMessage = vi.fn(() => 1); // never mutates rc
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     const rectPx = { left: 0, top: 688, right: 1366, bottom: 720 };
     const result = appBar.reserve(makeHwnd(0x7n), 'bottom', rectPx);
     expect(result).toEqual({ granted: rectPx });
@@ -248,7 +306,7 @@ describe('createAppBar', () => {
       calls.push(dwMessage);
       return 1;
     });
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     const rectPx = { left: 0, top: 688, right: 1366, bottom: 720 };
     const hwnd = makeHwnd(0x2n);
 
@@ -265,7 +323,7 @@ describe('createAppBar', () => {
       calls.push(dwMessage);
       return 0; // ABM_NEW failed
     });
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     const result = appBar.reserve(makeHwnd(0x3n), 'bottom', { left: 0, top: 0, right: 1366, bottom: 32 });
     expect(result).toBeUndefined();
     expect(calls).toEqual([0x0]);
@@ -277,7 +335,7 @@ describe('createAppBar', () => {
       calls.push(dwMessage);
       return 1;
     });
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     const hwnd = makeHwnd(0x4n);
     appBar.reserve(hwnd, 'bottom', { left: 0, top: 0, right: 1366, bottom: 32 });
     calls.length = 0;
@@ -292,9 +350,57 @@ describe('createAppBar', () => {
 
   it('release(): a no-op (sends nothing) for an hwnd that was never reserved', () => {
     const shAppBarMessage = vi.fn(() => 1);
-    const appBar = createAppBar({ cbSize: 40, shAppBarMessage });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
     appBar.release(makeHwnd(0x5n));
     expect(shAppBarMessage).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1 (C-1): `releaseByValue` is what `StripWindow`'s `closed`/`destroy`
+  // cleanup calls — the whole point is that it works from just the raw handle VALUE,
+  // with no `Buffer`/live `BrowserWindow` involved at all.
+  it('releaseByValue(): sends ABM_REMOVE for a registered hwnd VALUE, and is idempotent', () => {
+    const calls: number[] = [];
+    const shAppBarMessage = vi.fn((dwMessage: number, _data: AppBarDataIo) => {
+      calls.push(dwMessage);
+      return 1;
+    });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
+    const value = 0x8n;
+    appBar.reserve(makeHwnd(value), 'bottom', { left: 0, top: 0, right: 1366, bottom: 32 });
+    calls.length = 0;
+
+    appBar.releaseByValue(value);
+    expect(calls).toEqual([0x1 /* ABM_REMOVE */]);
+
+    calls.length = 0;
+    appBar.releaseByValue(value); // idempotent
+    expect(calls).toEqual([]);
+  });
+
+  it('releaseByValue(): a no-op for a value that was never reserved', () => {
+    const shAppBarMessage = vi.fn(() => 1);
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
+    appBar.releaseByValue(0x9n);
+    expect(shAppBarMessage).not.toHaveBeenCalled();
+  });
+
+  it('reserve() then release() then releaseByValue() for the SAME value: the second (releaseByValue) is a no-op', () => {
+    const calls: number[] = [];
+    const shAppBarMessage = vi.fn((dwMessage: number, _data: AppBarDataIo) => {
+      calls.push(dwMessage);
+      return 1;
+    });
+    const appBar = createAppBar({ cbSize: 40, shAppBarMessage, callbackMessageId: TEST_CALLBACK_MESSAGE_ID });
+    const value = 0xan;
+    appBar.reserve(makeHwnd(value), 'bottom', { left: 0, top: 0, right: 1366, bottom: 32 });
+    calls.length = 0;
+
+    appBar.release(makeHwnd(value));
+    expect(calls).toEqual([0x1]);
+
+    calls.length = 0;
+    appBar.releaseByValue(value);
+    expect(calls).toEqual([]);
   });
 });
 
@@ -479,6 +585,66 @@ describe('FullscreenWatcher', () => {
     fullscreen = true;
     scheduler.fireAll(); // nothing pending
     expect(onEnter).not.toHaveBeenCalled();
+  });
+
+  // M-1 (fix round 1): stop() while genuinely mid-fullscreen must not leave the
+  // strip stuck auto-hidden forever — there is no more polling left to ever notice
+  // the fullscreen app closing, so stop() itself must fire the exit.
+  it('stop() while in fullscreen resets state and fires onExit exactly once, so the strip is not left auto-hidden', () => {
+    const scheduler = makeFakeIntervalScheduler();
+    let fullscreen = true;
+    const onEnter = vi.fn();
+    const onExit = vi.fn();
+    const watcher = new FullscreenWatcher({
+      isFullscreen: () => fullscreen,
+      setInterval: scheduler.setInterval,
+      clearInterval: scheduler.clearInterval,
+      onEnter,
+      onExit
+    });
+    watcher.start();
+    scheduler.fireAll();
+    expect(onEnter).toHaveBeenCalledTimes(1);
+
+    watcher.stop();
+    expect(onExit).toHaveBeenCalledTimes(1);
+
+    // A later start()+tick(), still fullscreen, fires onEnter again — proof
+    // `inFullscreen` was actually reset to false by stop(), not just that onExit
+    // happened to be called once more on top of an unchanged internal state.
+    watcher.start();
+    scheduler.fireAll();
+    expect(onEnter).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop() while NOT in fullscreen does not fire onExit (unchanged behaviour)', () => {
+    const scheduler = makeFakeIntervalScheduler();
+    const onExit = vi.fn();
+    const watcher = new FullscreenWatcher({
+      isFullscreen: () => false,
+      setInterval: scheduler.setInterval,
+      clearInterval: scheduler.clearInterval,
+      onEnter: vi.fn(),
+      onExit
+    });
+    watcher.start();
+    scheduler.fireAll();
+    watcher.stop();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it('stop() when never started is a harmless no-op (does not fire onExit)', () => {
+    const scheduler = makeFakeIntervalScheduler();
+    const onExit = vi.fn();
+    const watcher = new FullscreenWatcher({
+      isFullscreen: () => true,
+      setInterval: scheduler.setInterval,
+      clearInterval: scheduler.clearInterval,
+      onEnter: vi.fn(),
+      onExit
+    });
+    watcher.stop();
+    expect(onExit).not.toHaveBeenCalled();
   });
 
   it('start() is idempotent: a second start() does not schedule a second timer', () => {

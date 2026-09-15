@@ -36,7 +36,21 @@ const isDev = !app.isPackaged && !!process.env.VITE_DEV_SERVER_URL;
 
 // --- paths (must run before whenReady) ------------------------------------------
 
-if (!app.isPackaged && !process.env.TIMEBOUND_DATA_DIR) {
+// Test-only: e2e sets this because Electron on Windows does not honor an overridden
+// `APPDATA` environment variable for its OWN default `userData` resolution — it
+// still resolves the real roaming AppData folder even when the child test process's
+// `env.APPDATA` points at an isolated temp dir, which (without this) would point
+// every e2e-launched app at the SAME real `%APPDATA%\TimeBound(-dev)` folder: a
+// shared single-instance lock with the owner's own preview app and every other
+// concurrently-running test app, and real user files at risk. `app.setPath('userData',
+// ...)` is an explicit, always-honored override (unlike the env-based resolution),
+// and must run before `app.requestSingleInstanceLock()` below (and before
+// `resolveDataDir`, which reads `app.getPath('userData')`) so both the lock and the
+// data dir are correctly isolated per test run. Checked BEFORE the ordinary dev-mode
+// branch below so a test run is never accidentally caught by that branch instead.
+if (process.env.TIMEBOUND_USERDATA_DIR) {
+  app.setPath('userData', process.env.TIMEBOUND_USERDATA_DIR);
+} else if (!app.isPackaged && !process.env.TIMEBOUND_DATA_DIR) {
   app.setPath('userData', path.join(app.getPath('appData'), 'TimeBound-dev'));
 }
 app.setAppUserModelId('com.timebound.app');

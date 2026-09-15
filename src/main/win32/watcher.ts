@@ -11,11 +11,14 @@ export interface FullscreenWatcherDeps {
   /** Called exactly once on the transition into fullscreen (not on every tick while
    * still fullscreen) — the caller hides the strip with reason `'fullscreen'`. */
   onEnter(): void;
-  /** Called exactly once on the transition OUT of fullscreen. The caller un-hides
-   * the strip for the `'fullscreen'` reason only — composing with any separate
-   * user-toggle hide is `StripWindow.setAutoHidden`'s job, not this class's: a user
-   * who hid the strip themselves must not see it reappear just because whatever app
-   * was fullscreen stopped being fullscreen. */
+  /** Called exactly once on the transition OUT of fullscreen — and once more, per
+   * fix round 1 (M-1), if `stop()` is called while still in fullscreen (a
+   * synthesised exit, so the strip is never left permanently auto-hidden just
+   * because polling stopped). The caller un-hides the strip for the `'fullscreen'`
+   * reason only — composing with any separate user-toggle hide is
+   * `StripWindow.setAutoHidden`'s job, not this class's: a user who hid the strip
+   * themselves must not see it reappear just because whatever app was fullscreen
+   * stopped being fullscreen. */
   onExit(): void;
 }
 
@@ -34,17 +37,24 @@ export class FullscreenWatcher {
     this.timer = this.deps.setInterval(() => this.tick(), intervalMs);
   }
 
-  /** Idempotent. Does NOT itself call `onExit()` — stopping the watcher (e.g.
-   * because `hideOverFullscreen` was turned off, or the strip was disabled) is a
-   * deliberate "stop caring", not an observed exit from fullscreen; a caller that
-   * wants the strip visible again after stopping must do so itself (main.ts's
-   * `hideOverFullscreen`-off path un-hides via `setAutoHidden('fullscreen', false)`
-   * directly, matching the addendum's "release on reserveSpace false" symmetry for
-   * the AppBar side). */
+  /** Idempotent. Fix round 1 (M-1): if the watcher was mid-fullscreen when stopped,
+   * this resets `inFullscreen` and fires `onExit()` exactly once — stopping the
+   * watcher (e.g. because `hideOverFullscreen` was turned off, or the strip was
+   * disabled) must not leave the strip stuck auto-hidden forever, since there is no
+   * more polling left to ever notice the fullscreen app closing. (The previous
+   * behaviour — stop() never calling `onExit()` — relied on `main.ts` separately
+   * un-hiding via `setAutoHidden('fullscreen', false)` after every `stop()` call;
+   * that call site is kept as a belt-and-suspenders no-op for the "wasn't in
+   * fullscreen" case, but this class no longer depends on it.) A caller that stops
+   * while NOT in fullscreen sees no `onExit()` call, same as before. */
   stop(): void {
     if (this.timer === undefined) return;
     this.deps.clearInterval(this.timer);
     this.timer = undefined;
+    if (this.inFullscreen) {
+      this.inFullscreen = false;
+      this.deps.onExit();
+    }
   }
 
   get running(): boolean {

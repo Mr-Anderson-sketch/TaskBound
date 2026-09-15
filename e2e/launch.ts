@@ -52,6 +52,14 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<Launched> {
   env.TIMEBOUND_DATA_DIR = dataDir;
   // The pre-rebuild app resolves %APPDATA%\TimeBound; keep it isolated too.
   env.APPDATA = dataDir;
+  // Electron on Windows ignores this overridden `APPDATA` for its OWN default
+  // `userData` path resolution (it still resolves the real roaming AppData folder
+  // regardless) — every e2e-launched app would otherwise share the SAME real
+  // `%APPDATA%\TimeBound(-dev)` folder: a shared single-instance lock with the
+  // owner's own preview app and any other concurrently-running test app, and real
+  // user files at risk. `main.ts` honors this test-only var via an explicit
+  // `app.setPath('userData', ...)`, which Electron always respects.
+  env.TIMEBOUND_USERDATA_DIR = path.join(dataDir, 'userData');
   // Exposes globalThis.__tb (store/strip/palette/planner/hotkeys/tray) for e2e specs.
   // Never set outside of tests — see main.ts's "test seam" comment.
   env.TIMEBOUND_E2E = '1';

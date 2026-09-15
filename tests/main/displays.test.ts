@@ -13,7 +13,8 @@ import {
   restorePosition,
   nextCollapsedSize,
   nextReportedWidth,
-  reanchorY
+  reanchorY,
+  stripVisible
 } from '../../src/main/windows/displays';
 import type { DisplayLike } from '../../src/main/windows/displays';
 
@@ -198,8 +199,8 @@ describe('panelBounds', () => {
 describe('sliverBounds', () => {
   it('bottom sliver on a 1366x768 display with a 48 px taskbar (workArea height 720) is flush to the work area, y = 716', () => {
     const strip = { x: 100, y: 720 - 32, width: 420, height: 32 };
-    const workArea = { x: 0, y: 0, width: 1366, height: 720 };
-    const rect = sliverBounds(strip, 'bottom', workArea);
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 720 } });
+    const rect = sliverBounds(strip, 'bottom', d);
     expect(rect).toEqual({ x: 100, y: 716, width: 420, height: 4 });
   });
 
@@ -207,23 +208,65 @@ describe('sliverBounds', () => {
     // workArea reaches the full display height when the taskbar auto-hides, so the
     // work-area-edge sliver and the physical-edge sliver coincide here.
     const strip = { x: 100, y: 768 - 32 - 2, width: 420, height: 32 }; // dockBounds' 2 px reserve
-    const workArea = { x: 0, y: 0, width: 1366, height: 768 };
-    const rect = sliverBounds(strip, 'bottom', workArea);
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 768 } });
+    const rect = sliverBounds(strip, 'bottom', d);
     expect(rect).toEqual({ x: 100, y: 764, width: 420, height: 4 });
   });
 
   it('top sliver mirrors the bottom case: flush to workArea.y, not the taskbar-auto-hide-reserved strip y', () => {
     const strip = { x: 100, y: 40 + 2, width: 420, height: 32 }; // reserved 2 px from the work area top
-    const workArea = { x: 0, y: 40, width: 1366, height: 728 };
-    const rect = sliverBounds(strip, 'top', workArea);
+    const d = makeDisplay({ workArea: { x: 0, y: 40, width: 1366, height: 728 } });
+    const rect = sliverBounds(strip, 'top', d);
     expect(rect).toEqual({ x: 100, y: 40, width: 420, height: 4 });
   });
 
   it('top sliver on an auto-hide taskbar display (workArea = bounds) is flush to the physical top edge', () => {
     const strip = { x: 100, y: 2, width: 420, height: 32 };
-    const workArea = { x: 0, y: 0, width: 1366, height: 768 };
-    const rect = sliverBounds(strip, 'top', workArea);
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 768 } });
+    const rect = sliverBounds(strip, 'top', d);
     expect(rect).toEqual({ x: 100, y: 0, width: 420, height: 4 });
+  });
+
+  // Task 7.1 fix round 1 (I-3): while an AppBar reservation is active, the sliver
+  // must sit flush to the GRANTED rect's edge, not the (shrunk) work area's — the
+  // reserved band is where the strip (and its sliver) actually docks.
+  it('bottom sliver with an active grant sits flush to the granted rect bottom, not workArea', () => {
+    const strip = { x: 100, y: 720 - 32, width: 420, height: 32 };
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 720 } }); // reservation already shrank this
+    const granted = { x: 0, y: 640, width: 1366, height: 80 }; // grant bottom = 720
+    const rect = sliverBounds(strip, 'bottom', d, granted);
+    expect(rect).toEqual({ x: 100, y: 720 - 4, width: 420, height: 4 });
+  });
+
+  it('top sliver with an active grant sits flush to the granted rect top', () => {
+    const strip = { x: 100, y: 32, width: 420, height: 32 };
+    const d = makeDisplay({ workArea: { x: 0, y: 32, width: 1366, height: 736 } });
+    const granted = { x: 0, y: 0, width: 1366, height: 32 }; // grant top = 0
+    const rect = sliverBounds(strip, 'top', d, granted);
+    expect(rect).toEqual({ x: 100, y: 0, width: 420, height: 4 });
+  });
+});
+
+describe('stripVisible', () => {
+  it('visible when enabled and nothing hides it', () => {
+    expect(stripVisible({ enabled: true, userHidden: false, fullscreenHidden: false })).toBe(true);
+  });
+
+  it('a user-driven hide survives a fullscreen exit (fullscreenHidden goes false, userHidden stays true)', () => {
+    expect(stripVisible({ enabled: true, userHidden: true, fullscreenHidden: false })).toBe(false);
+  });
+
+  it('a fullscreen exit never shows a strip the user disabled', () => {
+    expect(stripVisible({ enabled: false, userHidden: false, fullscreenHidden: false })).toBe(false);
+  });
+
+  it('enabling the strip while some other app is fullscreen keeps it hidden until that app exits', () => {
+    expect(stripVisible({ enabled: true, userHidden: false, fullscreenHidden: true })).toBe(false);
+  });
+
+  it('menuBarHidden (darwin) composes the same way, defaulting to false when omitted', () => {
+    expect(stripVisible({ enabled: true, userHidden: false, fullscreenHidden: false, menuBarHidden: true })).toBe(false);
+    expect(stripVisible({ enabled: true, userHidden: false, fullscreenHidden: false })).toBe(true);
   });
 });
 

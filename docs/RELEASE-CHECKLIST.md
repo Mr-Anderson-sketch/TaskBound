@@ -27,6 +27,7 @@ Playwright cannot prove that a foreign app keeps keyboard focus, so this matrix 
 | W17 | "Reserve screen space" on, Chrome maximised | — | Chrome stops at the strip edge; off: Chrome extends under it | automated partially by e2e/win32.spec.ts (verifies the primary work area shrinks by the strip's height and the strip docks flush to the granted rect, and restores on disable — via the OS's own work-area bookkeeping, not a real maximised Chrome window); manual check still required |
 | W18 | Start on login enabled, sign out and in | — | Strip appears without the planner; no focus taken from the desktop | |
 | W19 | Installer | Run `TimeBound Setup x.y.z.exe` | SmartScreen warning (unsigned; expected until signing); installs per-user; launches; uninstall keeps `%APPDATA%\TimeBound` | |
+| W20 | "Reserve screen space" on, then kill the process from Task Manager (not a normal quit — `before-quit` never runs) | Check the primary display's work area (Settings > System > Display, or `[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea`) | See `docs/DECISIONS.md`'s "AppBar cleanup on an unclean exit" entry: the reservation is expected to survive the kill (unverified against an official Microsoft source; community-reported). Manual recovery is signing out and back in (or a restart) — confirm that actually restores it | |
 
 ## macOS — parity (spec Part 5)
 

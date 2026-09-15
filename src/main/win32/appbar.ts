@@ -22,15 +22,6 @@ const ABE_TOP = 1;
 const ABE_RIGHT = 2;
 const ABE_BOTTOM = 3;
 
-// `APPBARDATA.uCallbackMessage` must be a window-message id the AppBar API will
-// (harmlessly) post to our hwnd for notifications (e.g. another AppBar registering,
-// taskbar auto-hide state changes) — v1 does not hook into the window's message
-// loop to handle these (Electron does not expose one), so this is a fixed sentinel
-// above WM_APP rather than a value obtained from `RegisterWindowMessageW` (not in
-// this task's koffi binding list). Undelivered/unhandled notifications are harmless
-// here: we simply never react to them. Documented per addendum ruling 3.
-const ABN_CALLBACK_MESSAGE = 0x8000 + 0x37;
-
 function edgeToAbe(edge: Edge): number {
   return edge === 'top' ? ABE_TOP : ABE_BOTTOM;
 }
@@ -60,6 +51,17 @@ export interface AppBarDeps {
    * `index.ts` (which owns the koffi struct declaration) and injected here so this
    * module never needs to import koffi itself. */
   cbSize: number;
+  /** `APPBARDATA.uCallbackMessage` — a window-message id the AppBar API will
+   * (harmlessly) post to our hwnd for notifications (e.g. another AppBar
+   * registering, taskbar auto-hide state changes). Fix round 1 (M-4): obtained by
+   * `index.ts` via `RegisterWindowMessageW('TimeBound.AppBar')` (previously a fixed
+   * sentinel above `WM_APP`, which risked colliding with another app's own
+   * unregistered sentinel — `RegisterWindowMessageW` guarantees a system-wide unique
+   * id for this exact string). v1 still does not hook into the window's message loop
+   * to handle these notifications (Electron does not expose one), so
+   * undelivered/unhandled notifications remain harmless — we simply never react to
+   * them. Documented per addendum ruling 3. */
+  callbackMessageId: number;
 }
 
 export interface AppBarApi {
@@ -77,6 +79,15 @@ export interface AppBarApi {
    * "give up the reservation" path (settings change, `before-quit`, window
    * destroy) without first checking whether one is actually held. */
   release(hwnd: Buffer): void;
+  /** Fix round 1 (C-1): identical to `release()`, but takes the raw handle VALUE
+   * directly instead of a `Buffer` — for the one path that matters most,
+   * `StripWindow`'s `closed`/`destroy` cleanup, the `BrowserWindow` can already be
+   * destroyed by the time cleanup runs (`getNativeWindowHandle()` throws on a
+   * destroyed window), but the hwnd value captured back when `reserve()` succeeded is
+   * still perfectly valid to pass to `ABM_REMOVE` — the AppBar registry is keyed by
+   * that raw value, and Windows does not care that the window it once named has
+   * since been destroyed. Idempotent, same as `release()`. */
+  releaseByValue(hwnd: bigint): void;
 }
 
 export function createAppBar(deps: AppBarDeps): AppBarApi {
@@ -93,7 +104,7 @@ export function createAppBar(deps: AppBarDeps): AppBarApi {
       const newData: AppBarDataIo = {
         cbSize: deps.cbSize,
         hWnd: h,
-        uCallbackMessage: ABN_CALLBACK_MESSAGE,
+        uCallbackMessage: deps.callbackMessageId,
         uEdge,
         rc: rectPx,
         lParam: 0
@@ -119,7 +130,7 @@ export function createAppBar(deps: AppBarDeps): AppBarApi {
     const queryData: AppBarDataIo = {
       cbSize: deps.cbSize,
       hWnd: h,
-      uCallbackMessage: ABN_CALLBACK_MESSAGE,
+      uCallbackMessage: deps.callbackMessageId,
       uEdge,
       rc: { ...rectPx },
       lParam: 0
@@ -142,13 +153,14 @@ export function createAppBar(deps: AppBarDeps): AppBarApi {
     return { granted: setData.rc };
   }
 
-  function release(hwnd: Buffer): void {
-    const h = hwndValue(hwnd);
+  // Shared by `release()` (Buffer) and `releaseByValue()` (raw bigint) — see
+  // AppBarApi's doc comments for why both entry points exist (fix round 1, C-1).
+  function doRelease(h: bigint): void {
     if (!registered.has(h)) return;
     const data: AppBarDataIo = {
       cbSize: deps.cbSize,
       hWnd: h,
-      uCallbackMessage: ABN_CALLBACK_MESSAGE,
+      uCallbackMessage: deps.callbackMessageId,
       uEdge: ABE_LEFT,
       rc: { left: 0, top: 0, right: 0, bottom: 0 },
       lParam: 0
@@ -157,5 +169,13 @@ export function createAppBar(deps: AppBarDeps): AppBarApi {
     registered.delete(h);
   }
 
-  return { reserve, release };
+  function release(hwnd: Buffer): void {
+    doRelease(hwndValue(hwnd));
+  }
+
+  function releaseByValue(hwnd: bigint): void {
+    doRelease(hwnd);
+  }
+
+  return { reserve, release, releaseByValue };
 }
