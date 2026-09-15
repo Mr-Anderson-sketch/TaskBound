@@ -5,6 +5,8 @@ import { todayView, orderBetween } from '../../src/core/select';
 import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
 import { UNDOABLE, UndoStack } from '../../src/core/undo';
 import { remainingSeconds } from '../../src/core/timer';
+import { MAX_TASKS } from '../../src/core/schema';
+import type { Data, Task } from '../../src/core/types';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -1064,5 +1066,68 @@ describe('reducer: task/move (Task 4.2)', () => {
 
   it('is undoable', () => {
     expect(UNDOABLE.has('task/move')).toBe(true);
+  });
+});
+
+// Final-review fix 6: the recurrence spawn's "today" is the 04:00 rollover day, not
+// the calendar date — completing a daily task at 01:00 still belongs to yesterday.
+describe('reducer: recurrence spawn uses the 04:00 rollover day', () => {
+  it('completing a daily task at 01:00 spawns for the same calendar day (not the day after)', () => {
+    const at0100 = new Date(2026, 8, 15, 1, 0).getTime(); // Tue 2026-09-15 01:00 local, rollover day 09-14
+    let d = createEmptyData(at0100, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: at0100, title: 'A', recurrence: { kind: 'daily' } });
+    d = reduce(d, { type: 'task/complete', id: 'a', now: at0100, by: 'user', spawnId: 'a-2' });
+    expect(d.tasks.find(t => t.id === 'a-2')!.due?.date).toBe('2026-09-15');
+  });
+  it('completing a daily task at 05:00 spawns for the next calendar day', () => {
+    const at0500 = new Date(2026, 8, 15, 5, 0).getTime();
+    let d = createEmptyData(at0500, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: at0500, title: 'A', recurrence: { kind: 'daily' } });
+    d = reduce(d, { type: 'task/complete', id: 'a', now: at0500, by: 'user', spawnId: 'a-2' });
+    expect(d.tasks.find(t => t.id === 'a-2')!.due?.date).toBe('2026-09-16');
+  });
+});
+
+// Final-review fix 2: MAX_TASKS is enforced by the reducer, not just the schema.
+describe('reducer: task-count cap (MAX_TASKS)', () => {
+  function atCap(extraOpen: Partial<Task> = {}): Data {
+    const d = createEmptyData(t0, '2.0.0');
+    const tasks: Task[] = Array.from({ length: MAX_TASKS }, (_, i) => ({
+      id: `t${i}`, title: `T${i}`, listId: INBOX_ID, tags: [], order: i, today: false,
+      status: 'open' as const, createdAt: t0, updatedAt: t0, ...(i === 0 ? extraOpen : {})
+    }));
+    return { ...d, tasks };
+  }
+  it('task/add is a no-op at the cap', () => {
+    const d = atCap();
+    expect(reduce(d, { type: 'task/add', id: 'over', now: t0, title: 'Over' })).toBe(d);
+  });
+  it('completing a recurring task at the cap still completes it but skips the spawn', () => {
+    const d = atCap({ recurrence: { kind: 'daily' } });
+    const next = reduce(d, { type: 'task/complete', id: 't0', now: t0, by: 'user', spawnId: 'spawn' });
+    expect(next.tasks.length).toBe(MAX_TASKS);
+    expect(next.tasks[0].status).toBe('done');
+    expect(next.tasks.some(t => t.id === 'spawn')).toBe(false);
+  });
+});
+
+// Final-review fix 7: an import's completion is not a user completion.
+describe('reducer: task/complete by import', () => {
+  it('does not change the score or the day completed count', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'settings/patch', now: t0, patch: { score: { enabled: true } } });
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 5, by: 'import' });
+    expect(d.tasks[0].status).toBe('done');
+    expect(d.settings.score.value).toBe(0);
+    expect(d.days.find(r => r.date === ymd(t0 + 5))?.completed ?? 0).toBe(0);
+  });
+  it('reopening an imported done task does not decrement a completion that never counted', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A'); d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 5, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0 + 5, by: 'import' });
+    d = reduce(d, { type: 'task/uncomplete', id: 'b', now: t0 + 6 });
+    expect(d.days.find(r => r.date === ymd(t0 + 5))!.completed).toBe(1);
   });
 });

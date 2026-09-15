@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseData, ActionSchema } from '../../src/core/schema';
+import { parseData, parseDataForLoad, ActionSchema, MAX_TASKS } from '../../src/core/schema';
 import { createEmptyData, defaultSettings } from '../../src/core/defaults';
 describe('schema', () => {
   it('round-trips empty data', () => {
@@ -110,5 +110,26 @@ describe('schema', () => {
     expect(ActionSchema.safeParse({ type: 'settings/patch', now: 1, patch: { timer: { defaultPlannedMinutes: 241 } } }).success).toBe(
       false
     );
+  });
+});
+
+// Final-review fix 2: the schema's task bound is MAX_TASKS (100,000), and loading uses
+// a variant without the bound so over-cap data is never treated as corrupt.
+describe('schema: task-count bound', () => {
+  function withTasks(n: number) {
+    const d = createEmptyData(1_000, '2.0.0');
+    const tasks = Array.from({ length: n }, (_, i) => ({
+      id: `t${i}`, title: 'T', listId: 'inbox', tags: [], order: i, today: false, status: 'open', createdAt: 1, updatedAt: 1
+    }));
+    return { ...d, tasks };
+  }
+  it('MAX_TASKS is 100,000 and parseData accepts exactly that many', () => {
+    expect(MAX_TASKS).toBe(100_000);
+    expect(parseData(withTasks(MAX_TASKS)).tasks.length).toBe(MAX_TASKS);
+    expect(() => parseData(withTasks(MAX_TASKS + 1))).toThrow();
+  });
+  it('parseDataForLoad accepts more than MAX_TASKS but still validates everything else', () => {
+    expect(parseDataForLoad(withTasks(MAX_TASKS + 1)).tasks.length).toBe(MAX_TASKS + 1);
+    expect(() => parseDataForLoad({ ...withTasks(1), extra: 1 })).toThrow();
   });
 });

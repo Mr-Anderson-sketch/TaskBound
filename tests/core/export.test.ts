@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { toJson, fromJson, toMarkdown, fromMarkdown, importPlan, validateImportActions, ImportTooLargeError } from '../../src/core/export';
-import { DataInvalidError } from '../../src/core/schema';
+import { toJson, fromJson, toMarkdown, fromMarkdown, importPlan, validateImportActions, validateImportCapacity, ImportTooLargeError } from '../../src/core/export';
+import { DataInvalidError, MAX_TASKS } from '../../src/core/schema';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData } from '../../src/core/defaults';
 import type { Action, Data, Task } from '../../src/core/types';
@@ -174,7 +174,7 @@ describe('importPlan', () => {
     const completeIndex = actions.findIndex((a) => a.type === 'task/complete');
     const lastAddIndex = actions.map((a) => a.type).lastIndexOf('task/add');
     expect(completeIndex).toBeGreaterThan(lastAddIndex);
-    expect(actions[completeIndex]).toMatchObject({ by: 'user' });
+    expect(actions[completeIndex]).toMatchObject({ by: 'import' });
 
     let next = current;
     for (const action of actions) next = reduce(next, action);
@@ -278,5 +278,42 @@ describe('validateImportActions', () => {
       }
     ];
     expect(validateImportActions(actions)).toBeDefined();
+  });
+});
+
+// Final-review fix 7: imported completions are not user completions.
+describe('importPlan: imported done tasks do not count as completions', () => {
+  it('leaves the score and the day completed count unchanged', () => {
+    let current = createEmptyData(t0, APP_VERSION);
+    current = reduce(current, { type: 'settings/patch', now: t0, patch: { score: { enabled: true } } });
+    const md = '# Inbox\n- [x] Old done task\n- [x] Another\n- [ ] Open one\n';
+    let n = 0;
+    const { tasks, lists } = fromMarkdown(md, t0, () => `m${n++}`);
+    let next = current;
+    for (const action of importPlan(current, { tasks, lists }, t0, () => `i${n++}`)) next = reduce(next, action);
+    expect(next.tasks.filter((t) => t.status === 'done')).toHaveLength(2);
+    expect(next.settings.score.value).toBe(0);
+    expect(next.days.reduce((sum, r) => sum + r.completed, 0)).toBe(0);
+  });
+});
+
+// Final-review fix 2: an import that would push the task count past MAX_TASKS is
+// rejected up front with a clear message, before anything is dispatched.
+describe('validateImportCapacity', () => {
+  function withTasks(n: number): Data {
+    const d = createEmptyData(t0, APP_VERSION);
+    const tasks: Task[] = Array.from({ length: n }, (_, i) => ({
+      id: `t${i}`, title: 'T', listId: 'inbox', tags: [], order: i, today: false, status: 'open', createdAt: t0, updatedAt: t0
+    }));
+    return { ...d, tasks };
+  }
+  const adds = (k: number): Action[] => Array.from({ length: k }, (_, i) => ({ type: 'task/add', id: `n${i}`, now: t0, title: 'N' }));
+  it('accepts an import that lands exactly on the cap', () => {
+    expect(validateImportCapacity(withTasks(MAX_TASKS - 2), adds(2))).toBeUndefined();
+  });
+  it('rejects an import that would exceed the cap, naming the limit', () => {
+    const msg = validateImportCapacity(withTasks(MAX_TASKS - 1), adds(2));
+    expect(msg).toMatch(/100,000/);
+    expect(msg).toMatch(/2 tasks/);
   });
 });

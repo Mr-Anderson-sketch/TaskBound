@@ -5,7 +5,8 @@
 import { produce } from 'immer';
 import type { Data, Action, Task, Rule, Settings, DayRecord, Ymd } from './types';
 import { INBOX_ID } from './defaults';
-import { addDays, rolloverCutoffMs, ymd } from './dates';
+import { addDays, dayKeyForRollover, rolloverCutoffMs, ymd } from './dates';
+import { MAX_TASKS } from './schema';
 import { nextOrder, orderBetween } from './select';
 import { elapsedSeconds } from './timer';
 import { nextOccurrence } from './recur';
@@ -117,6 +118,9 @@ export function reduce(data: Data, action: Action): Data {
   return produce(data, (draft) => {
     switch (action.type) {
       case 'task/add': {
+        // Final-review fix 2: at the MAX_TASKS cap a new task is a no-op (same Data
+        // reference back), so the store never persists a file the schema would reject.
+        if (draft.tasks.length >= MAX_TASKS) break;
         // Controller ruling (fix round 1, defect 1b, defence in depth): a listId/parentId
         // that doesn't reference anything real (e.g. a paste's second line reused a
         // /list name whose paired list/add the reducer just no-op'd because an earlier
@@ -159,8 +163,16 @@ export function reduce(data: Data, action: Action): Data {
 
         task.status = 'done';
         task.completedAt = action.now;
-        task.completedBy = action.by;
         task.updatedAt = action.now;
+
+        // Final-review fix 7: an import carrying over a task that was already done is
+        // not a completion the user made today — no day count, no score, and no
+        // `completedBy` (which `task/uncomplete` uses to know there's a count to undo).
+        if (action.by === 'import') {
+          task.completedBy = undefined;
+          break;
+        }
+        task.completedBy = action.by;
 
         const completionDay = upsertDay(draft, ymd(action.now));
         completionDay.completed += 1;
@@ -175,8 +187,12 @@ export function reduce(data: Data, action: Action): Data {
         // date, and completing a task that's days overdue still spawns from today,
         // not from the stale due date. A task with `recurrence` but no `spawnId`
         // (e.g. a programmatic completion that opted out) spawns nothing.
-        if (task.recurrence && action.spawnId) {
-          const todayYmd = ymd(action.now);
+        // Final-review fix 6: "today" is the 04:00 rollover day (D17), so completing a
+        // daily task at 01:00 schedules the next one for later that same calendar day
+        // rather than skipping a day. At the MAX_TASKS cap the spawn is skipped; the
+        // completion above still applies.
+        if (task.recurrence && action.spawnId && draft.tasks.length < MAX_TASKS) {
+          const todayYmd = dayKeyForRollover(action.now);
           const dueOrToday = task.due?.date ?? todayYmd;
           const after = dueOrToday > todayYmd ? dueOrToday : todayYmd;
           const nextDate = nextOccurrence(task.recurrence, after);
@@ -210,7 +226,8 @@ export function reduce(data: Data, action: Action): Data {
         // Addendum ruling 2: decrement the ORIGINAL completion day's `completed`
         // (floor 0), read BEFORE completedAt is cleared below. Leaves focusSeconds
         // alone — the focus time was genuinely spent regardless of the reopen.
-        if (task.completedAt !== undefined) {
+        // An imported completion (no `completedBy`, see task/complete) never counted.
+        if (task.completedAt !== undefined && task.completedBy !== undefined) {
           const rec = draft.days.find((d) => d.date === ymd(task.completedAt!));
           if (rec) rec.completed = Math.max(0, rec.completed - 1);
         }
