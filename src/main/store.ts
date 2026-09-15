@@ -157,8 +157,9 @@ export class Store {
     this.lastUndone = undefined;
     this.rev++;
     // The replacing data is, by construction, already what's on disk (the watcher's
-    // external-change path) or about to be written by the caller (backup restore) —
-    // either way there is nothing new for a debounced save to catch up on.
+    // external-change path) or about to be explicitly persisted via `saveNow()`
+    // right after (backup restore) — either way there is nothing new for a
+    // debounced save to catch up on the moment `replace()` itself returns.
     this.savedRev = this.rev;
     this.notify();
   }
@@ -181,6 +182,31 @@ export class Store {
       this.saveTimer = undefined;
       this.enqueueSave();
     }
+    await this.pendingSave;
+  }
+
+  /** Fix round 3, item 2: enqueues an IMMEDIATE save of the current in-memory data
+   * through the exact same serialised chain every debounced save uses (never a
+   * direct, out-of-band `save()` call), and returns a promise that resolves once
+   * THAT save has completed. Cancels any pending debounce timer first, so its
+   * (now redundant) save doesn't also fire later. Unlike `flush()` — which only
+   * acts if a save is already scheduled — this ALWAYS enqueues a fresh save, even
+   * with nothing pending (e.g. right after `replace()`, which marks the data as
+   * already "caught up" with no debounce of its own to flush).
+   *
+   * Used by callers that must durably persist a change right now without risking
+   * an EARLIER, already-in-flight save landing afterwards and overwriting it with
+   * stale data (e.g. a backup restore: `store.replace(data)` then `saveNow()` —
+   * never a direct `save()` call, which could complete before, and then be
+   * clobbered by, a save already in flight from an edit made just before the
+   * restore). Because every save (debounced or explicit) shares the one chain,
+   * this one is always guaranteed to run, and land, last. */
+  async saveNow(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+    this.enqueueSave();
     await this.pendingSave;
   }
 

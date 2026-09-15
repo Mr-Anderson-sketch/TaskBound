@@ -270,6 +270,78 @@ describe('rename retries', () => {
   }, 10000);
 });
 
+describe('save() detects an external change landing before its own write (fix round 3, item 1)', () => {
+  it('preserves an externally-written file as a conflict copy before overwriting it', async () => {
+    const dir = await mkTmpDir();
+    const writeTracker = createWriteTracker();
+    const deps = makeDeps(dir, () => localMs(2026, 7, 1), { writeTracker });
+
+    const first = createEmptyData(deps.now(), APP_VERSION);
+    await save(deps, first); // establishes a baseline hash in the tracker
+
+    // Something else writes directly to data.json between our two saves — exactly
+    // the race the Store's 250ms debounce vs. the watcher's 500ms one opens up.
+    const external = createEmptyData(deps.now() + 1000, APP_VERSION);
+    await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
+
+    const second = { ...createEmptyData(deps.now() + 2000, APP_VERSION), tasks: [] };
+    await save(deps, second);
+
+    const entries = await realFs.readdir(dir);
+    const conflictFiles = entries.filter((f) => f.startsWith('data.conflict-'));
+    expect(conflictFiles.length).toBe(1);
+    const preserved = JSON.parse(await realFs.readFile(path.join(dir, conflictFiles[0]), 'utf8'));
+    expect(preserved).toEqual(external);
+
+    // Our own (second) save still wins on disk — this isn't a rollback, just a
+    // guarantee that the external content isn't silently lost.
+    const onDisk = JSON.parse(await realFs.readFile(path.join(dir, 'data.json'), 'utf8'));
+    expect(onDisk).toEqual(second);
+  });
+
+  it('creates no conflict file when nothing external touched data.json between saves', async () => {
+    const dir = await mkTmpDir();
+    const writeTracker = createWriteTracker();
+    const deps = makeDeps(dir, () => localMs(2026, 7, 2), { writeTracker });
+
+    await save(deps, createEmptyData(deps.now(), APP_VERSION));
+    await save(deps, { ...createEmptyData(deps.now(), APP_VERSION), tasks: [] });
+
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.conflict-'))).toBe(false);
+  });
+
+  it('does not falsely flag a conflict on the very first save of a session (no prior tracked write)', async () => {
+    const dir = await mkTmpDir();
+    // Simulates a session that LOADED an existing data.json (load()'s source:
+    // 'data' path never calls save()) without having written anything yet — the
+    // tracker has no baseline to compare the pre-existing file against.
+    const preExisting = createEmptyData(localMs(2026, 7, 3), APP_VERSION);
+    await realFs.mkdir(dir, { recursive: true });
+    await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(preExisting, null, 2), 'utf8');
+
+    const writeTracker = createWriteTracker(); // never written to yet
+    const deps = makeDeps(dir, () => localMs(2026, 7, 3) + 1000, { writeTracker });
+
+    await save(deps, { ...createEmptyData(deps.now(), APP_VERSION), tasks: [] });
+
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.conflict-'))).toBe(false);
+  });
+
+  it('without a writeTracker at all, save() behaves exactly as before (no conflict check attempted)', async () => {
+    const dir = await mkTmpDir();
+    const deps = makeDeps(dir, () => localMs(2026, 7, 4)); // no writeTracker
+
+    await save(deps, createEmptyData(deps.now(), APP_VERSION));
+    await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify({ not: 'ours' }), 'utf8');
+    await expect(save(deps, createEmptyData(deps.now(), APP_VERSION))).resolves.toBeUndefined();
+
+    const entries = await realFs.readdir(dir);
+    expect(entries.some((f) => f.startsWith('data.conflict-'))).toBe(false);
+  });
+});
+
 describe('daily backup rotation', () => {
   it('two saves on the same local day produce exactly one backup file', async () => {
     const dir = await mkTmpDir();
