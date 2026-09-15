@@ -189,6 +189,32 @@ export async function save(deps: PersistDeps, data: Data): Promise<void> {
   const dp = dataPath(deps);
   try {
     await fs.writeFile(tmp, text, 'utf8');
+
+    // Fix round 3, item 1: the Store's own debounce (250 ms) is shorter than the
+    // watcher's (500 ms), so a save can land BEFORE the watcher ever notices an
+    // external write that happened in between — and once this overwrites
+    // data.json with our own content, the watcher's later check sees our own
+    // (matching) hash and never learns anything external happened at all. Guard
+    // against this HERE, immediately before the rename that would clobber it:
+    // if the file currently on disk isn't what we last wrote (its hash doesn't
+    // match the tracker), preserve it as a conflict copy first. Skipped when the
+    // tracker has no recorded hash yet — this session's very first save has no
+    // baseline to compare against (a freshly loaded data.json is the starting
+    // point, not a foreign change), and the watcher's own hasPendingSave()-gated
+    // check already covers that narrow window from the moment it starts at boot.
+    if (deps.writeTracker?.lastWrittenHash !== undefined) {
+      try {
+        const onDisk = await readFileRetrying(deps, dp);
+        if (onDisk !== undefined && hashText(onDisk) !== deps.writeTracker.lastWrittenHash) {
+          const conflictPath = path.join(deps.dir, `data.conflict-${deps.now()}.json`);
+          await fs.writeFile(conflictPath, onDisk, 'utf8').catch(() => {});
+        }
+      } catch (err) {
+        // A read failure here must never block the save itself — best-effort only.
+        deps.log?.(`persist: pre-save conflict check failed (${errorCode(err) ?? 'error'})`);
+      }
+    }
+
     await withRetry(deps, 'save rename', () => fs.rename(tmp, dp));
     // Only recorded once the rename actually lands data.json — a failed save must
     // not make the watcher think this (unwritten) content is now "ours".

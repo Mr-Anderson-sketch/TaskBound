@@ -36,7 +36,19 @@ const isDev = !app.isPackaged && !!process.env.VITE_DEV_SERVER_URL;
 
 // --- paths (must run before whenReady) ------------------------------------------
 
-if (!app.isPackaged && !process.env.TIMEBOUND_DATA_DIR) {
+// Fix round 3, test-isolation note: `app.getPath('appData')` reads Windows' real
+// per-user roaming folder via a native OS lookup — overriding the `APPDATA`
+// environment variable (as e2e/launch.ts does for `TIMEBOUND_DATA_DIR` isolation)
+// does NOT affect it. `TIMEBOUND_USERDATA_DIR` is the escape hatch specifically for
+// e2e specs that exercise the default-userData-folder path (the data-location
+// pointer file, resolveDataDir's own default) without TIMEBOUND_DATA_DIR forcing a
+// specific data dir: it points `userData` at an isolated temp folder directly, so
+// those specs can never collide with another real TimeBound-dev/TimeBound instance
+// running on the same machine (e.g. a different worktree's `npm run dev`). Never
+// set outside of tests.
+if (process.env.TIMEBOUND_USERDATA_DIR) {
+  app.setPath('userData', process.env.TIMEBOUND_USERDATA_DIR);
+} else if (!app.isPackaged && !process.env.TIMEBOUND_DATA_DIR) {
   app.setPath('userData', path.join(app.getPath('appData'), 'TimeBound-dev'));
 }
 app.setAppUserModelId('com.timebound.app');
@@ -232,7 +244,13 @@ if (!gotLock) {
         const text = await fsp.readFile(resolved, 'utf8');
         const data = fromJson(text); // same validation load() applies (parseData)
         store.replace(data);
-        await save(persistDeps(), data);
+        // Fix round 3, item 2: through the Store's own save queue, never a direct
+        // save() — an earlier in-flight debounced save (from an edit made just
+        // before the restore) is otherwise not guaranteed to land BEFORE this one,
+        // and could overwrite the restored data with stale data right after.
+        // saveNow() shares the same serialised chain as every debounced save, so
+        // this one is guaranteed to run, and land, last.
+        await store.saveNow();
         return { ok: true };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Restore failed' };

@@ -9,6 +9,29 @@ import type { Data, Task } from '../src/core/types';
 
 test.setTimeout(60_000);
 
+/**
+ * `launchApp()`, retrying on a launch failure. Relaunching against the exact same
+ * `userData` path shortly after a prior instance's `close()` (used below by the
+ * data-location-pointer tests, which deliberately reuse one `appDataRoot` across two
+ * sequential launches) can occasionally lose Electron's single-instance lock if the
+ * OS hasn't finished releasing the previous process's lock yet — worse the busier the
+ * machine is (e.g. other apps/builders using Electron concurrently). A short backoff
+ * and a couple of retries make that OS-timing race a non-issue without masking a
+ * real, consistent app failure (which would still fail every attempt).
+ */
+async function launchAppRetrying(opts: Parameters<typeof launchApp>[0] = {}, attempts = 3): Promise<Awaited<ReturnType<typeof launchApp>>> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 750));
+    try {
+      return await launchApp(opts);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 // Task 5.3 acceptance, all against temp dirs: export/import via the e2e seam
 // (globalThis.__tb.data — the exact code the real dialog-backed IPC handlers call),
 // the external-change watcher, and folder switching.
@@ -171,15 +194,19 @@ test('switching the data dir via the seam creates data.json in the new folder an
 // fallback when a redirected folder is unavailable, and adopt/refuse on chooseDir.
 
 test('switch then relaunch with the same default folder opens the new folder', async () => {
-  // TIMEBOUND_DATA_DIR overridden to '' (falsy) so main.ts takes its normal
-  // "default userData folder" path instead of the harness's usual forced dir — the
-  // data-location pointer only matters on that path. `dataDir` still isolates
-  // %APPDATA% (and so the default userData folder) to a temp dir, reused across both
-  // launches so the second one looks in the same default folder as the first.
-  const appDataRoot = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-appdata-'));
+  // TIMEBOUND_DATA_DIR overridden to '' (falsy) so main.ts takes its normal "default
+  // userData folder" path (where the data-location pointer lives) instead of the
+  // harness's usual forced dir. `TIMEBOUND_USERDATA_DIR` pins that default folder to
+  // an isolated temp dir directly — NOT `env.APPDATA` (what the harness normally uses
+  // for isolation): `app.getPath('appData')` resolves via a native OS lookup on
+  // Windows and ignores the APPDATA env var override, so without this, "the default
+  // folder" would really be the machine's real per-user TimeBound-dev folder,
+  // colliding with any other real instance (e.g. a different worktree's own `npm run
+  // dev`) — reused across both launches so the second one looks in the same place.
+  const userDataDir = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-userdata-'));
   const newDir = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-target-'));
 
-  const first = await launchApp({ dataDir: appDataRoot, env: { TIMEBOUND_DATA_DIR: '' } });
+  const first = await launchAppRetrying({ env: { TIMEBOUND_DATA_DIR: '', TIMEBOUND_USERDATA_DIR: userDataDir } });
   try {
     await first.window('strip');
     await first.app.evaluate(() => {
@@ -203,7 +230,7 @@ test('switch then relaunch with the same default folder opens the new folder', a
     await first.close();
   }
 
-  const second = await launchApp({ dataDir: appDataRoot, env: { TIMEBOUND_DATA_DIR: '' } });
+  const second = await launchAppRetrying({ env: { TIMEBOUND_DATA_DIR: '', TIMEBOUND_USERDATA_DIR: userDataDir } });
   try {
     await second.window('strip');
     const tasks = await second.app.evaluate(
@@ -216,30 +243,17 @@ test('switch then relaunch with the same default folder opens the new folder', a
 });
 
 test('a redirected folder that no longer exists falls back to the default folder, creates nothing there, and flags dataLocationUnavailable', async () => {
-  const appDataRoot = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-appdata-missing-'));
+  const userDataDir = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-userdata-missing-'));
   const missingParent = await mkdtemp(path.join(tmpdir(), 'timebound-e2e-missing-parent-'));
   const missingDir = path.join(missingParent, 'never-created');
 
-  // Phase 1: launch once, with no pointer file yet, purely to discover the REAL
-  // default userData folder main.ts resolves for this environment — more robust
-  // than assuming its exact naming convention (e.g. a dev-mode suffix) from outside.
-  let userDataDir: string;
-  const discover = await launchApp({ dataDir: appDataRoot, env: { TIMEBOUND_DATA_DIR: '' } });
-  try {
-    await discover.window('strip');
-    userDataDir = await discover.app.evaluate((electron) => electron.app.getPath('userData'));
-  } finally {
-    await discover.close();
-  }
-
-  // Pre-seed the pointer file at that CONFIRMED default folder, pointing at a
-  // folder that doesn't exist (simulating an unmounted drive / not-yet-synced
-  // folder / manually deleted folder).
+  // Pre-seed the pointer file at the (isolated, known in advance via
+  // TIMEBOUND_USERDATA_DIR) default folder, pointing at a folder that doesn't exist
+  // (simulating an unmounted drive / not-yet-synced folder / manually deleted one).
   await mkdir(userDataDir, { recursive: true });
   await writeFile(path.join(userDataDir, 'data-location.json'), JSON.stringify({ dataDir: missingDir }, null, 2), 'utf8');
 
-  // Phase 2: relaunch against the SAME default folder, which now has the pointer.
-  const launched = await launchApp({ dataDir: appDataRoot, env: { TIMEBOUND_DATA_DIR: '' } });
+  const launched = await launchAppRetrying({ env: { TIMEBOUND_DATA_DIR: '', TIMEBOUND_USERDATA_DIR: userDataDir } });
   try {
     await launched.window('strip');
 

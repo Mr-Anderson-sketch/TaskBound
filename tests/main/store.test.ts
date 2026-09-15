@@ -426,3 +426,70 @@ describe('Store.hasPendingSave', () => {
     expect(store.hasPendingSave()).toBe(false);
   });
 });
+
+describe('Store.saveNow', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('routes through the same save chain, so an EARLIER in-flight save cannot land after it (backup-restore race)', async () => {
+    const calls: Data[] = [];
+    let resolveFirst!: () => void;
+    const save = vi.fn((d: Data) => {
+      calls.push(d);
+      if (calls.length === 1) {
+        return new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const data = createEmptyData(1000, APP_VERSION);
+    const store = new Store(data, { save, now: () => 1000, appVersion: APP_VERSION, platform: 'win32', systemDark: () => false });
+
+    // An edit lands, its debounce fires, and its save() call starts but is stuck
+    // in flight (simulating a slow disk / the window right before a restore).
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'Pending edit before restore' });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    // A backup restore happens WHILE that save is still in flight.
+    const restored = createEmptyData(2000, APP_VERSION);
+    store.replace(restored);
+    const saveNowPromise = store.saveNow();
+
+    // The restore's save must not even be attempted until the earlier one settles.
+    expect(save).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await saveNowPromise;
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(calls[1]).toEqual(restored); // the restored data landed LAST, not the stale pending edit
+    expect(store.hasPendingSave()).toBe(false);
+  });
+
+  it('resolves once its own save completes, even with no debounce pending', async () => {
+    const { store, save } = makeStore();
+    expect(store.hasPendingSave()).toBe(false);
+
+    await store.saveNow();
+
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a pending (not-yet-fired) debounce timer, so no redundant extra save follows', async () => {
+    const { store, save } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' }); // schedules a debounce, not yet fired
+
+    await store.saveNow();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(250); // the original debounce, if still pending, would fire here
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+});
