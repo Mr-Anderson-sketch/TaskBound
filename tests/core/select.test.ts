@@ -352,4 +352,16 @@ describe('logbook (Task 4.1)', () => {
     d = add(d, 'a', 'A');
     expect(logbook(d)).toEqual([]);
   });
+
+  // Fix round 1, item 4 (minor): pins the CURRENT tie-break for equal completedAt — a
+  // plain `.sort()` is stable, so ties keep their original `data.tasks` array order,
+  // which is creation order (oldest-created-first), not newest-created-first.
+  it('equal completedAt: ties keep their original (oldest-created-first) order — a stable sort artifact', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A' });
+    d = reduce(d, { type: 'task/add', id: 'b', now: t0, title: 'B' });
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0, by: 'user' });
+    expect(logbook(d).map((t) => t.id)).toEqual(['a', 'b']);
+  });
 });

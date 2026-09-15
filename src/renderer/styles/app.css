@@ -1101,23 +1101,45 @@ body[data-route='palette'] {
   font-weight: 500;
 }
 
+/* Fix round 1, item 1: keep the 16 px visual circle (drawn by ::before below) but give
+   the button itself a 28×28 hit area (DESIGN.md "nothing interactive under 24×24 CSS
+   px"). The -6px margin on all sides cancels the extra 12px in the flex row's main-axis
+   sizing (28 + -6 + -6 = 16), so the title's position is byte-for-byte unchanged from
+   the old 16×16 button — only the button's own real box (and so its actual
+   getBoundingClientRect(), not just a click-through overlay) grows to 28×28, still
+   vertically centred in the 34 px row. */
 .planner .task .cb {
-  width: 16px;
-  height: 16px;
+  position: relative;
+  width: 28px;
+  height: 28px;
+  margin: -6px;
   border-radius: 50%;
-  border: 1.5px solid var(--muted);
+  border: 0;
   flex: none;
   background: none;
   padding: 0;
   cursor: pointer;
 }
 
-.planner .task.cur .cb {
+.planner .task .cb::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  transform: translate(-50%, -50%);
+}
+
+.planner .task.cur .cb::before {
   border-color: var(--accent);
   background: radial-gradient(circle, var(--accent) 45%, transparent 48%);
 }
 
-.planner .task.done .cb {
+.planner .task.done .cb::before {
   background: var(--ok);
   border-color: var(--ok);
 }

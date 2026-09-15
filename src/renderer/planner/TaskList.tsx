@@ -7,6 +7,7 @@ import type { Data, Task } from '../../core/types';
 import { INBOX_ID } from '../../core/defaults';
 import { todayTasks, upcomingGroups, tasksInList, tasksWithTag, logbook, dayStats } from '../../core/select';
 import { ymd, addDays, dayKeyForRollover } from '../../core/dates';
+import { longDayLabel } from '../lib/dateLabels';
 import { TaskRow, shortDateLabel } from './TaskRow';
 
 export type ViewId = 'today' | 'upcoming' | 'inbox' | 'logbook' | `list:${string}` | `tag:${string}`;
@@ -39,8 +40,6 @@ function formatFocus(seconds: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-const TODAY_META_FMT = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
-
 /** Turns a `ViewId` into the sections TaskList renders, plus the main pane's title and
  * date/counts line (DESIGN.md "Planner": view title in Instrument Serif with the date
  * and counts beside it). Pure — no dispatch, no DOM. */
@@ -52,7 +51,7 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
     if (upNext.length > 0) sections.push({ key: 'upnext', label: 'Up next', ariaLabel: 'Up next', tasks: upNext });
     if (done.length > 0) sections.push({ key: 'done', label: 'Done', ariaLabel: 'Done', tasks: done });
     const stats = dayStats(data, dayKeyForRollover(now), now);
-    const meta = `${TODAY_META_FMT.format(new Date(now))} · ${stats.done} of ${stats.planned} done · ${formatFocus(stats.focusSeconds)} focused`;
+    const meta = `${longDayLabel(now)} · ${stats.done} of ${stats.planned} done · ${formatFocus(stats.focusSeconds)} focused`;
     return { title: 'Today', meta, sections, isEmpty: !current && upNext.length === 0 && done.length === 0 };
   }
 
@@ -117,13 +116,20 @@ function Section({ section, now, selectedId, onSelect, onToggle, fill }: Section
     enabled: virtual
   });
 
-  const row = (task: Task) => (
+  // aria-setsize/aria-posinset (fix round 1, item 3): every option row reports its
+  // 1-based position and the section's total count, for virtualised and plain
+  // rendering alike — a screen reader can't otherwise tell a virtualised listbox's true
+  // extent from the handful of rows actually in the DOM at once.
+  const setsize = section.tasks.length;
+  const row = (task: Task, index: number) => (
     <TaskRow
       key={task.id}
       task={task}
       now={now}
       current={section.currentId === task.id}
       selected={selectedId === task.id}
+      posinset={index + 1}
+      setsize={setsize}
       onSelect={onSelect}
       onToggle={onToggle}
     />
@@ -149,14 +155,14 @@ function Section({ section, now, selectedId, onSelect, onToggle, fill }: Section
                 key={vi.key}
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, height: vi.size, transform: `translateY(${vi.start}px)` }}
               >
-                {row(section.tasks[vi.index])}
+                {row(section.tasks[vi.index], vi.index)}
               </div>
             ))}
           </div>
         </div>
       ) : (
         <div role="listbox" aria-label={section.ariaLabel}>
-          {section.tasks.map(row)}
+          {section.tasks.map((task, i) => row(task, i))}
         </div>
       )}
     </>

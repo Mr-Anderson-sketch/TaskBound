@@ -21,11 +21,16 @@ export function shortDateLabel(date: Ymd): string {
   return `${DOW_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
 }
 
+export interface DueInfo {
+  text: string;
+  overdue: boolean;
+}
+
 /** Addendum ruling 3: `due 9:00` for a same-day due with a time, `Wed 16 Sep` otherwise
  * (date only, or a time on a different day — the date carries more information than the
  * time there). `overdue` is a separate flag (due.date < today) applied as styling, not a
- * text change. */
-function dueInfo(due: Due, now: number): { text: string; overdue: boolean } {
+ * text change. Exported for unit testing (Task 4.1 fix round 1, item 4). */
+export function dueInfo(due: Due, now: number): DueInfo {
   const today = ymd(now);
   const overdue = due.date < today;
   if (due.date === today && due.time !== undefined) return { text: `due ${due.time}`, overdue };
@@ -38,11 +43,15 @@ export interface TaskRowProps {
   /** Renders with the "current task" styling (accent radio, 500-weight title). */
   current?: boolean;
   selected?: boolean;
+  /** 1-based position within the enclosing section's listbox (fix round 1, item 3). */
+  posinset: number;
+  /** The enclosing section's total task count. */
+  setsize: number;
   onSelect: (task: Task) => void;
   onToggle: (task: Task) => void;
 }
 
-export function TaskRow({ task, now, current, selected, onSelect, onToggle }: TaskRowProps) {
+export function TaskRow({ task, now, current, selected, posinset, setsize, onSelect, onToggle }: TaskRowProps) {
   const done = task.status === 'done';
   // Only ticks (setInterval) while THIS task's timer is actually running (see
   // useDisplayTime) — safe to call per-row even in a 500-row virtualised Logbook.
@@ -54,6 +63,8 @@ export function TaskRow({ task, now, current, selected, onSelect, onToggle }: Ta
     <div
       role="option"
       aria-selected={Boolean(selected)}
+      aria-posinset={posinset}
+      aria-setsize={setsize}
       className={['task', current && 'cur', done && 'done', selected && 'sel'].filter(Boolean).join(' ')}
       onClick={() => onSelect(task)}
     >

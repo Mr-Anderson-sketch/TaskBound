@@ -101,11 +101,18 @@ test('planner: Today sections, Upcoming grouping, rail navigation, inline captur
     const rowCount = await planner.locator('.main [role="option"]').count();
     expect(rowCount).toBeLessThan(80);
 
+    // Fix round 1, item 3: every option row (virtualised or not) reports its true
+    // position/extent within the section, not just its handful of DOM neighbours.
+    const firstOption = planner.locator('.main [role="option"]').first();
+    await expect(firstOption).toHaveAttribute('aria-setsize', '500');
+    await expect(firstOption).toHaveAttribute('aria-posinset', '1');
+
     await planner.evaluate(() => {
       const scroller = document.querySelector('.main [role="listbox"]') as HTMLElement;
       scroller.scrollTop = scroller.scrollHeight;
     });
     await expect(planner.locator('.task .t', { hasText: 'Done task 0' })).toBeVisible({ timeout: 2000 });
+    await expect(planner.locator('.main [role="option"]').last()).toHaveAttribute('aria-posinset', '500');
 
     expect(launched.errors()).toEqual([]);
   } finally {
