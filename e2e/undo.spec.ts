@@ -56,7 +56,10 @@ test('undo via the hotkey handler updates the strip; the planner toast confirms 
     });
     const planner = await launched.window('planner', 5000);
 
-    const toast = planner.locator('[role="status"]');
+    // `[role="status"]` alone is ambiguous: dnd-kit (planner drag-reorder) injects its
+    // own hidden `#DndLiveRegion-*` with the same role, so scope to the toast's own
+    // class (`.toast[role="status"]`, see Toast.tsx) to avoid a strict-mode violation.
+    const toast = planner.locator('.toast[role="status"]');
     await expect(toast).toBeVisible({ timeout: 5000 });
     await expect(toast).toContainText('Undid: Completed');
     await planner.screenshot({ path: path.join(SCREENSHOT_DIR, 'planner-undo-toast.png') });
