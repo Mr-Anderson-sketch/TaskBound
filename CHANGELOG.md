@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Settings (2026-09-15)
+- Settings: strip, theme, timer, startup and score, all applied instantly.
+
 ### Windows integration (2026-09-15)
 - Windows: optionally reserve screen space for the strip, and hide it over full-screen apps.
 

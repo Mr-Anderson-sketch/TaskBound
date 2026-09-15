@@ -66,6 +66,14 @@ export type EventMap = {
   /** Broadcast by main's Clock while a pomodoro break is active (`{ endsAt }`) and
    * when it ends or is cancelled (`null`) — see task-3.2-addendum ruling 7. */
   'timer:break': { endsAt: number } | null;
+  /** Task 5.1 addendum ruling 1: sent by main right after `planner.show()` (the tray's
+   * "Settings…" item) to route the planner straight to a settings section. Typed as a
+   * plain string here rather than the renderer-only `ViewId` (src/renderer/planner/
+   * TaskList.tsx) — pulling that type in would drag renderer .tsx sources into the
+   * main/preload TypeScript projects (tsconfig.main.json/tsconfig.preload.json only
+   * include src/main, src/shared, src/core). The renderer casts it back to `ViewId` on
+   * receipt; main only ever sends its own known-valid literals (e.g. "settings:strip"). */
+  'planner:navigate': string;
 };
 
 export interface Bridge {

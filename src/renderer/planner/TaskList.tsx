@@ -11,7 +11,12 @@ import { ymd, addDays, dayKeyForRollover } from '../../core/dates';
 import { longDayLabel } from '../lib/dateLabels';
 import { TaskRow, shortDateLabel, rowDomId } from './TaskRow';
 
-export type ViewId = 'today' | 'upcoming' | 'inbox' | 'logbook' | `list:${string}` | `tag:${string}`;
+// Task 5.1 addendum ruling 1: `settings:<section>` extends the view space (section is
+// one of settingsModel.ts's SettingsSection — kept as a loose `${string}` here rather
+// than importing that union, so TaskList.tsx/PlannerApp.tsx don't need to know the
+// settings module's internal section list; Settings.tsx's `sectionFromView` validates
+// it and falls back to the first section for anything unrecognised).
+export type ViewId = 'today' | 'upcoming' | 'inbox' | 'logbook' | `list:${string}` | `tag:${string}` | `settings:${string}`;
 
 export interface TaskListSection {
   key: string;

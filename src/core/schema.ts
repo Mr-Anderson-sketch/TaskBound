@@ -166,9 +166,11 @@ const SettingsSchema = z
         // reducer-side clamp of its own (unlike timer/addTime).
         workMinutes: z.number().int().min(1).max(240),
         breakMinutes: z.number().int().min(1).max(240),
-        idlePauseMinutes: z.number().positive(),
-        awayThresholdMinutes: z.number().positive(),
-        defaultPlannedMinutes: z.number().positive()
+        // Task 5.1 addendum ruling 4: 0 means "never" (clock.ts only pauses on idle
+        // when > 0), so the floor is 0, not 1, unlike the other minute fields here.
+        idlePauseMinutes: z.number().int().min(0).max(120),
+        awayThresholdMinutes: z.number().int().min(1).max(120),
+        defaultPlannedMinutes: z.number().int().min(1).max(240)
       })
       .strict(),
     score: z

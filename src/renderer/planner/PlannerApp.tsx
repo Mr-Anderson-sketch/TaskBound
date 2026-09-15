@@ -25,6 +25,7 @@ import { rowDomId } from './TaskRow';
 import { usePlannerKeys, runPaletteAction } from './usePlannerKeys';
 import type { MenuState } from './usePlannerKeys';
 import { snoozeOptions } from './keys';
+import { Settings } from '../settings/Settings';
 
 const THREE_COL_MIN_WIDTH = 900;
 
@@ -169,11 +170,25 @@ export function PlannerApp() {
       } else if (key === 'y') {
         e.preventDefault();
         void window.tb.invoke('store:redo');
+      } else if (e.key === ',') {
+        // Task 5.1 addendum ruling 1: Ctrl+, / ⌘, opens Settings from ANYWHERE in the
+        // planner, not just while the task list has focus (keys.ts's commandForKey
+        // handles the task-list-focused case; this global listener is the fallback for
+        // every other focus target, e.g. the settings pane's own controls).
+        e.preventDefault();
+        setView('settings:strip');
+        setSelectedId(undefined);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [platform]);
+
+  // Task 5.1 addendum ruling 1: main sends this after `planner.show()` (the tray's
+  // "Settings…" item) to route straight to a settings section.
+  useEffect(() => {
+    return window.tb.on('planner:navigate', (v) => selectView(v as ViewId));
+  }, []);
 
   const selectView = (v: ViewId): void => {
     setView(v);
@@ -197,7 +212,9 @@ export function PlannerApp() {
     );
 
   const now = Date.now();
-  const resolved = snapshot ? resolveView(view, snapshot.data, now) : { title: '', meta: '', sections: [], isEmpty: true };
+  const isSettings = view.startsWith('settings:');
+  const resolved =
+    snapshot && !isSettings ? resolveView(view, snapshot.data, now) : { title: '', meta: '', sections: [], isEmpty: true };
 
   const keys = usePlannerKeys({
     taskListRef,
@@ -241,26 +258,45 @@ export function PlannerApp() {
       <div className="body">
         <Rail data={snapshot.data} view={view} now={now} onSelect={selectView} />
         <div className="main">
-          <div className="h">
-            <span className="d">{resolved.title}</span>
-            <span className="m">{resolved.meta}</span>
-          </div>
-          {resolved.isEmpty ? (
-            <EmptyStateFor view={view} title={resolved.title} platform={platform} captureAccelerator={snapshot.data.settings.hotkeys.capture} />
-          ) : (
-            <TaskList
-              ref={taskListRef}
-              sections={resolved.sections}
-              now={now}
-              selectedId={selectedId}
-              activeDescendantId={selectedId}
-              onSelect={onSelectTask}
-              onToggle={onToggle}
-              editingId={keys.editingId}
-              onEditSave={keys.onEditSave}
-              onEditCancel={keys.onEditCancel}
-              onKeyDown={keys.onKeyDown}
+          {isSettings ? (
+            <Settings
+              view={view}
+              data={snapshot.data}
+              platform={platform}
+              capabilities={snapshot.capabilities}
+              systemDark={snapshot.systemDark}
+              onSelectSection={selectView}
+              dispatchOwn={dispatchOwn}
             />
+          ) : (
+            <>
+              <div className="h">
+                <span className="d">{resolved.title}</span>
+                <span className="m">{resolved.meta}</span>
+              </div>
+              {resolved.isEmpty ? (
+                <EmptyStateFor
+                  view={view}
+                  title={resolved.title}
+                  platform={platform}
+                  captureAccelerator={snapshot.data.settings.hotkeys.capture}
+                />
+              ) : (
+                <TaskList
+                  ref={taskListRef}
+                  sections={resolved.sections}
+                  now={now}
+                  selectedId={selectedId}
+                  activeDescendantId={selectedId}
+                  onSelect={onSelectTask}
+                  onToggle={onToggle}
+                  editingId={keys.editingId}
+                  onEditSave={keys.onEditSave}
+                  onEditCancel={keys.onEditCancel}
+                  onKeyDown={keys.onKeyDown}
+                />
+              )}
+            </>
           )}
         </div>
       </div>

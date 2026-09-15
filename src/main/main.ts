@@ -309,6 +309,22 @@ if (!gotLock) {
       onCapture: () => palette.show('capture'),
       onToggleStrip: () => strip.toggle(),
       onOpenPlanner: () => plannerWindow.show(),
+      // Task 5.1 addendum ruling 1: opens the planner and routes it straight to
+      // Settings. `plannerWindow.show()` calls `create()` lazily (first open), so the
+      // webContents can still be mid-load; wait for `did-finish-load` in that case so
+      // the navigate event never arrives before the renderer's listener is attached.
+      onOpenSettings: () => {
+        plannerWindow.show();
+        const wc = plannerWindow.webContents;
+        if (!wc || wc.isDestroyed()) return;
+        if (wc.isLoading()) {
+          wc.once('did-finish-load', () => {
+            if (!wc.isDestroyed()) wc.send('planner:navigate', 'settings:strip');
+          });
+        } else {
+          wc.send('planner:navigate', 'settings:strip');
+        }
+      },
       onPlanToday: () => palette.show('plan'),
       onCloseDay: () => palette.show('close'),
       onQuit: () => app.quit()
