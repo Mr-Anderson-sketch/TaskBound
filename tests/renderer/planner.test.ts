@@ -5,8 +5,8 @@
 import { describe, it, expect } from 'vitest';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
-import { resolveView } from '../../src/renderer/planner/TaskList';
-import { dueInfo, shortDateLabel } from '../../src/renderer/planner/TaskRow';
+import { resolveView, activeDescendantFor } from '../../src/renderer/planner/TaskList';
+import { dueInfo, shortDateLabel, rowDomId } from '../../src/renderer/planner/TaskRow';
 import { ymd, addDays } from '../../src/core/dates';
 import type { Data } from '../../src/core/types';
 
@@ -179,6 +179,24 @@ describe('resolveView: tag:<name>', () => {
   it('isEmpty: true for an unused tag', () => {
     const resolved = resolveView('tag:nope', createEmptyData(now, '2.0.0'), now);
     expect(resolved.isEmpty).toBe(true);
+  });
+});
+
+describe('activeDescendantFor (Task 4.2 fix round 1, finding 2)', () => {
+  it('returns rowDomId(selectedId) when selectedId is in mountedIds', () => {
+    expect(activeDescendantFor('a', new Set(['a', 'b']))).toBe(rowDomId('a'));
+  });
+
+  it('returns undefined when selectedId is NOT mounted (e.g. scrolled out of a virtualised range)', () => {
+    expect(activeDescendantFor('a', new Set(['b', 'c']))).toBeUndefined();
+  });
+
+  it('returns undefined when nothing is selected', () => {
+    expect(activeDescendantFor(undefined, new Set(['a', 'b']))).toBeUndefined();
+  });
+
+  it('returns undefined when mountedIds is empty', () => {
+    expect(activeDescendantFor('a', new Set())).toBeUndefined();
   });
 });
 

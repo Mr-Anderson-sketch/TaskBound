@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { allCommands, filterCommands } from './commandsModel';
 import type { CommandsContext, PaletteCommandAction } from './commandsModel';
+import { useFocusTrap } from './useFocusTrap';
 
 export interface CommandsProps {
   ctx: CommandsContext;
@@ -27,6 +28,12 @@ export function Commands({ ctx, onRun, onClose }: CommandsProps) {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Fix round 1, finding 1: the palette is `aria-modal`, so Tab must never move focus
+  // out of it. With the input as the palette's only tabbable element, this keeps Tab
+  // simply parked on it (Task 4.2 fix round 1 binding: "Tab with a single tabbable
+  // input simply stays on the input") rather than escaping to whatever's behind it.
+  useFocusTrap(rootRef, true);
 
   useEffect(() => {
     setActiveIndex(0);

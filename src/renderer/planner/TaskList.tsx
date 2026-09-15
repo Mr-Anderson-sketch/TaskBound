@@ -1,7 +1,7 @@
 // renderer/planner/TaskList — resolves a planner `ViewId` into rendered sections
 // (Task 4.1 addendum rulings 1 and 4) and renders them, virtualising any section over
 // 60 rows (always, for the Logbook) with `@tanstack/react-virtual`.
-import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Data, Task } from '../../core/types';
@@ -102,6 +102,21 @@ export function resolveView(view: ViewId, data: Data, now: number): ResolvedView
  * it already has, without re-deriving TaskList's internals. */
 export function flatRowIds(sections: TaskListSection[]): string[] {
   return sections.flatMap((s) => s.tasks.map((t) => t.id));
+}
+
+/**
+ * `rowDomId(selectedId)` when `selectedId` names a row currently MOUNTED in the DOM
+ * (`mountedIds`), else `undefined` (Task 4.2 fix round 1, finding 2). A virtualised
+ * section only ever mounts the rows within its scroll range plus overscan — the
+ * selected row can be scrolled well out of that window (a fast `j`/`k` run, or a
+ * `scrollToId` whose target hasn't actually rendered yet) — so `aria-activedescendant`
+ * must never name an id with no matching element, which some assistive tech treats as
+ * a broken reference. Pure; the DOM-scanning that produces `mountedIds` lives in
+ * `TaskList`'s own effect below (unit-tested via this helper, not the DOM scan itself —
+ * see `tests/renderer/planner.test.ts`).
+ */
+export function activeDescendantFor(selectedId: string | undefined, mountedIds: ReadonlySet<string>): string | undefined {
+  return selectedId !== undefined && mountedIds.has(selectedId) ? rowDomId(selectedId) : undefined;
 }
 
 export interface SectionHandle {
@@ -265,13 +280,34 @@ export const TaskList = forwardRef<TaskListHandle, TaskListProps>(function TaskL
     []
   );
 
+  // Fix round 1, finding 2: `mountedIds` mirrors the DOM directly (every row carries
+  // `data-row-id`, from TaskRow.tsx), not the virtualizer's own range math — the source
+  // of truth for "does an element with this id exist" is the DOM itself. Re-scanned on
+  // an animation frame after every render (not synchronously in the effect, which can
+  // run before the virtualizer's own async layout — including right after
+  // `scrollToId` — has actually mounted the target row) and whenever the virtualizer's
+  // rendered range changes (each such change re-renders `Section`, which re-renders
+  // this component's children, which re-runs this effect — it has no dependency array
+  // on purpose, matching the binding's "and when the virtualizer's rendered range
+  // changes"). Skips the state update when the set is unchanged so this doesn't loop.
+  const [mountedIds, setMountedIds] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const root = rootElRef.current;
+      if (!root) return;
+      const found = new Set(Array.from(root.querySelectorAll<HTMLElement>('[data-row-id]')).map((el) => el.dataset.rowId!));
+      setMountedIds((prev) => (found.size === prev.size && [...found].every((id) => prev.has(id)) ? prev : found));
+    });
+    return () => cancelAnimationFrame(raf);
+  });
+
   return (
     <div
       ref={rootElRef}
       className="tl-scroll"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      aria-activedescendant={activeDescendantId ? rowDomId(activeDescendantId) : undefined}
+      aria-activedescendant={activeDescendantFor(activeDescendantId, mountedIds)}
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: fill ? 'hidden' : 'auto' }}
     >
       {sections.map((s) => (

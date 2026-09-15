@@ -7,6 +7,7 @@
 // on close").
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, KeyboardEvent } from 'react';
+import { useFocusTrap } from './useFocusTrap';
 
 export interface MenuItem {
   id: string;
@@ -39,6 +40,13 @@ export function Menu({ anchor, items, onSelect, children, onClose, label }: Menu
     if (!items) return;
     rootRef.current?.focus();
   }, [items]);
+
+  // Fix round 1, finding 1: Tab/Shift+Tab now cycle within the menu instead of
+  // escaping it. Runs after the effect above (same component: declaration order), so
+  // when it activates finds focus already on the root (items) — or, for a custom body
+  // (DueField), already on that body's own first control, focused by ITS OWN effect,
+  // which — as a child component — always runs before any of Menu's own effects.
+  useFocusTrap(rootRef, true);
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent): void => {
@@ -86,6 +94,10 @@ export function Menu({ anchor, items, onSelect, children, onClose, label }: Menu
               role="menuitem"
               className={i === activeIndex ? 'mi sel' : 'mi'}
               onMouseEnter={() => setActiveIndex(i)}
+              // Tab now moves REAL focus onto individual items (useFocusTrap above) —
+              // keep `activeIndex` (Enter's target, and the `.sel` highlight) in sync
+              // with wherever native focus actually is, not just mouse hover.
+              onFocus={() => setActiveIndex(i)}
               onClick={() => onSelect?.(item.id)}
             >
               {item.label}

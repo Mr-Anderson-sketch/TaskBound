@@ -123,3 +123,102 @@ test('planner: keyboard model — nav, complete, reorder, today, delete+undo, sn
     await launched.close();
   }
 });
+
+// Task 4.2 fix round 1, finding 1: neither overlay let Tab escape it before this fix.
+test('planner: focus trap — Tab stays inside the command palette and wraps inside the snooze menu', async () => {
+  const launched = await launchApp();
+  try {
+    await launched.window('strip');
+
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => { rev: number } } } }).__tb;
+      tb.store.dispatch({ type: 'task/add', id: 'ft1', now: Date.now(), title: 'Focus task', today: true });
+    });
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { planner: { show: () => void } } }).__tb.planner.show();
+    });
+    const planner = await launched.window('planner', 5000);
+    const list = planner.locator('.tl-scroll');
+    await list.focus();
+    await expect(planner.locator('.task.sel .t')).toHaveText('Focus task', { timeout: 3000 });
+
+    const platform = await launched.app.evaluate(() => process.platform);
+
+    // --- Command palette: an aria-modal dialog with a single tabbable (its input) —
+    // Tab three times must never move focus out of it. ---
+    await list.press(platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    const palette = planner.locator('[role="dialog"]');
+    await expect(palette).toBeVisible({ timeout: 3000 });
+    const paletteInput = palette.locator('input');
+    await expect(paletteInput).toBeFocused();
+    for (let i = 0; i < 3; i++) await planner.keyboard.press('Tab');
+    await expect(paletteInput).toBeFocused();
+    const stillInsideDialog = await planner.evaluate(() => document.activeElement?.closest('[role="dialog"]') != null);
+    expect(stillInsideDialog).toBe(true);
+    await planner.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
+
+    // --- Snooze menu: Tab to the last item, then Tab once more ("past" it) wraps to
+    // the first — snoozeOptions' exact item count varies with time-of-day (This
+    // evening is hidden after 17:00), so this counts them rather than hardcoding 5. ---
+    await list.press('s');
+    const menu = planner.locator('[role="menu"]');
+    await expect(menu).toBeVisible({ timeout: 3000 });
+    const items = menu.getByRole('menuitem');
+    const itemCount = await items.count();
+    expect(itemCount).toBeGreaterThan(1);
+    for (let i = 0; i < itemCount; i++) await planner.keyboard.press('Tab');
+    await expect(items.last()).toBeFocused();
+    await planner.keyboard.press('Tab'); // past the last item
+    await expect(items.first()).toBeFocused();
+    await planner.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});
+
+// Task 4.2 fix round 1, finding 2: aria-activedescendant must never name a row the
+// virtualizer hasn't actually mounted.
+test('planner: aria-activedescendant names a mounted row even after fast keyboard nav through a virtualised Inbox', async () => {
+  const launched = await launchApp();
+  try {
+    await launched.window('strip');
+
+    // 100 Inbox tasks: tasksInList sorts by order then createdAt, so `v0..v99` land in
+    // that exact order (posinset 1..100) and the Inbox section virtualises (> 60 rows).
+    await launched.app.evaluate(() => {
+      const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => { rev: number } } } }).__tb;
+      const now = Date.now();
+      for (let i = 0; i < 100; i++) {
+        tb.store.dispatch({ type: 'task/add', id: `v${i}`, now: now + i, title: `Inbox task ${i}` });
+      }
+    });
+    await launched.app.evaluate(() => {
+      (globalThis as unknown as { __tb: { planner: { show: () => void } } }).__tb.planner.show();
+    });
+    const planner = await launched.window('planner', 5000);
+    await planner.locator('.rail button', { hasText: 'Inbox' }).click();
+
+    const list = planner.locator('.tl-scroll');
+    await list.focus();
+    await expect(planner.locator('.task.sel')).toHaveCount(1, { timeout: 3000 }); // row 0 auto-selected
+
+    // No fixed sleeps: 99 awaited `j` presses (each already resolves only once
+    // Playwright has dispatched and the page processed the keydown), racing selection
+    // state against the virtualizer's own async layout — exactly the scenario the fix
+    // guards against.
+    for (let i = 0; i < 99; i++) await list.press('j');
+
+    await expect(list).toHaveAttribute('aria-activedescendant', 'task-row-v99', { timeout: 3000 });
+    const namedRow = planner.locator('#task-row-v99');
+    await expect(namedRow).toHaveCount(1);
+    await expect(namedRow).toHaveAttribute('aria-posinset', '100');
+
+    expect(launched.errors()).toEqual([]);
+  } finally {
+    await launched.close();
+  }
+});
