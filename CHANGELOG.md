@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Reliability (2026-09-16)
+- Safer restore and undo: restoring a backup keeps a copy of your current data, and undo no longer rolls back timers or settings.
+
 ### Onboarding (2026-09-16)
 - First run (no existing settings) walks through three cards before the planner ever opens: add your first task (the real capture field — or, when this run came from a legacy import, "Imported N tasks from your previous TimeBound"), pick an edge (the strip moves live as you choose), and five keys to remember. Skip on any card, or finish the last one; either way it won't show again.
 - Polish: the planner title bar's `Ctrl+K` hint no longer renders as a stray empty input box; the rail's Settings button now lines up icon-then-label like every other rail item; Strip settings' "Menu bar mode" toggle is enabled on macOS now that tray-title support has landed.

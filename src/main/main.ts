@@ -13,6 +13,7 @@ import type { PersistDeps, DataWatcher } from './persist';
 import { readDataLocationPointer, writeDataLocationPointer } from './dataLocation';
 import { resolveDataDir } from './paths';
 import { Store } from './store';
+import { handleBootFailure, shouldRegisterLoginItem, createLoginItemSync } from './boot';
 import { registerIpc } from './ipc';
 import { installCsp } from './windows/csp';
 import { StripWindow } from './windows/strip';
@@ -74,16 +75,26 @@ const preloadPath = path.join(__dirname, '../../preload/main/preload.js');
 // --- single instance --------------------------------------------------------------
 
 let planner: PlannerWindow | undefined;
+// The data folder named in the boot-failure error box: the resolved default until
+// boot adopts a redirected folder (data-location pointer), then that one.
+let bootDataDir = dataDir;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    planner?.show();
+    // Final-review fix 3: a second launch while boot is still running (or after it
+    // failed) has no planner to show yet — do nothing rather than throw.
+    if (!planner) return;
+    planner.show();
   });
 
-  app.whenReady().then(async () => {
+  // Final-review fix 3: the whole boot is one async function whose rejection is
+  // handled below — any throw (unreadable data folder, a window failing to create,
+  // …) shows an error box and exits instead of leaving a headless, lock-holding
+  // process behind.
+  const boot = async (): Promise<void> => {
     installCsp(session.defaultSession, isDev);
 
     // Task 3.2 fix round 1, minor "break replay" (fix round 2, item 2: `.once` ->
@@ -135,6 +146,7 @@ if (!gotLock) {
         if (redirected !== currentDataDir) {
           if (await hasValidDataFile({ dir: redirected, now: Date.now })) {
             currentDataDir = redirected;
+            bootDataDir = redirected;
           } else {
             dataLocationUnavailable = redirected;
           }
@@ -163,6 +175,16 @@ if (!gotLock) {
       capabilities,
       dataLocationUnavailable
     });
+
+    // --- start on login (final-review fix 5): registered only for a packaged build
+    // outside tests/data-folder overrides; applied now and whenever the setting changes.
+    const syncLoginItem = createLoginItemSync({
+      shouldRegister: shouldRegisterLoginItem({ isPackaged: app.isPackaged, env: process.env }),
+      setLoginItemSettings: (openAtLogin) => app.setLoginItemSettings({ openAtLogin }),
+      log: (message) => console.log(message)
+    });
+    syncLoginItem(store.get().data.settings.startOnLogin);
+    store.subscribe((s) => syncLoginItem(s.data.settings.startOnLogin));
 
     // --- data folder watcher (Task 5.3): reconciles external changes to data.json
     // (another instance, a synced folder, manual editing) against the live store. ---
@@ -655,5 +677,17 @@ if (!gotLock) {
         }
       };
     }
-  });
+  };
+
+  app
+    .whenReady()
+    .then(boot)
+    .catch((err: unknown) =>
+      handleBootFailure(err, bootDataDir, {
+        log: (message, e) => console.error(message, e),
+        showErrorBox: (title, content) => dialog.showErrorBox(title, content),
+        releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
+        exit: (code) => app.exit(code)
+      })
+    );
 }
