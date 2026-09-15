@@ -914,3 +914,42 @@ body[data-route='palette'] {
   padding: 0 5px;
   background: var(--surface);
 }
+
+/* Toast (DESIGN.md "Component inventory": bottom of planner, 12 px, accent-tint,
+   role="status") — Task 2.4. */
+.planner .toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-5);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  max-width: calc(100vw - var(--s-6));
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-2);
+  background: var(--accent-tint);
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  box-shadow: 0 0 0 1px var(--line);
+  z-index: 10;
+}
+
+.planner .toast span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner .toast button {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}

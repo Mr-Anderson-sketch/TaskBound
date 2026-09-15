@@ -283,6 +283,73 @@ describe('Store', () => {
     expect(store.get().lastUndo).toBeUndefined();
   });
 
+  it('undo() sets lastUndone to { label, rev, kind: "undo" } (Task 2.4)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    expect(store.get().lastUndone).toBeUndefined();
+
+    const rev = store.dispatch({ type: 'task/add', id: 'b', now: 1000, title: 'Two' });
+    const label = store.undo();
+
+    expect(label).toBe('Added "Two"');
+    expect(store.get().lastUndone).toEqual({ label: 'Added "Two"', rev: rev + 1, kind: 'undo' });
+  });
+
+  it('redo() sets lastUndone to { label, rev, kind: "redo" } (Task 2.4)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+
+    const label = store.redo();
+
+    expect(label).toBe('Added "One"');
+    expect(store.get().lastUndone).toEqual({ label: 'Added "One"', rev: store.get().rev, kind: 'redo' });
+  });
+
+  it('undo()/redo() on an empty stack leaves lastUndone unchanged (Task 2.4)', () => {
+    const { store } = makeStore();
+    expect(store.undo()).toBeUndefined();
+    expect(store.get().lastUndone).toBeUndefined();
+    expect(store.redo()).toBeUndefined();
+    expect(store.get().lastUndone).toBeUndefined();
+  });
+
+  it('a data-changing dispatch() clears lastUndone (Task 2.4)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+    expect(store.get().lastUndone).toBeDefined();
+
+    store.dispatch({ type: 'task/add', id: 'b', now: 1000, title: 'Two' });
+
+    expect(store.get().lastUndone).toBeUndefined();
+  });
+
+  it('a no-op dispatch() does not clear lastUndone (Task 2.4)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+    const before = store.get().lastUndone;
+    expect(before).toBeDefined();
+
+    // task/edit is undoable but its reducer is a no-op (unimplemented) — no data
+    // change means dispatch() must return before touching lastUndone.
+    store.dispatch({ type: 'task/edit', id: 'missing', now: 1000, patch: {} });
+
+    expect(store.get().lastUndone).toEqual(before);
+  });
+
+  it('replace() clears lastUndone (Task 2.4)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    store.undo();
+    expect(store.get().lastUndone).toBeDefined();
+
+    store.replace(createEmptyData(2000, APP_VERSION));
+
+    expect(store.get().lastUndone).toBeUndefined();
+  });
+
   it('get() reflects the systemDark and platform deps and default capabilities', () => {
     const save = vi.fn(async () => {});
     const data = createEmptyData(1000, APP_VERSION);

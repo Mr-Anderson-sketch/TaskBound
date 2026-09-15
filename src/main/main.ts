@@ -15,6 +15,7 @@ import { StripWindow } from './windows/strip';
 import { PaletteWindow } from './windows/palette';
 import { PlannerWindow } from './windows/planner';
 import { Hotkeys, validateAccelerator } from './hotkeys';
+import type { HotkeyHandlers } from './hotkeys';
 import { AppTray } from './tray';
 import { Clock } from './clock';
 import type { Snapshot } from '../shared/ipc';
@@ -126,8 +127,16 @@ if (!gotLock) {
 
     const hotkeys = new Hotkeys(globalShortcut);
 
+    // Kept in a variable (not inlined into hotkeys.apply()) so the exact record of
+    // handlers can be exposed on the e2e seam below — Task 2.4's `undo.spec.ts` calls
+    // `globalThis.__tb.hotkeyHandlers.completeAdvance()` / `.undo()` directly, since
+    // the `Hotkeys` instance itself does not expose its registered handlers.
+    // Definite-assignment: always set by applyHotkeys() below before this is read
+    // again (called synchronously a few lines down, before any other code runs).
+    let hotkeyHandlers!: HotkeyHandlers;
+
     function applyHotkeys(settings: Settings): void {
-      hotkeys.apply(settings, {
+      hotkeyHandlers = {
         capture: () => palette.show('capture'),
         toggleStrip: () => strip.toggle(),
         completeAdvance: () => {
@@ -147,7 +156,8 @@ if (!gotLock) {
         undo: () => {
           store.undo();
         }
-      });
+      };
+      hotkeys.apply(settings, hotkeyHandlers);
     }
 
     applyHotkeys(store.get().data.settings);
@@ -250,7 +260,16 @@ if (!gotLock) {
     // --- test seam ---------------------------------------------------------------
 
     if (process.env.TIMEBOUND_E2E === '1') {
-      (globalThis as unknown as { __tb: unknown }).__tb = { store, strip, palette, planner: plannerWindow, hotkeys, tray, clock };
+      (globalThis as unknown as { __tb: unknown }).__tb = {
+        store,
+        strip,
+        palette,
+        planner: plannerWindow,
+        hotkeys,
+        hotkeyHandlers,
+        tray,
+        clock
+      };
     }
   });
 }

@@ -209,6 +209,17 @@ export function StripApp() {
 
   useEffect(() => () => clearTimeout(undoRowTimeoutRef.current), []);
 
+  // --- Task 2.4 addendum ruling 4: an undo/redo from ANYWHERE (hotkey, planner) —
+  // not just this panel's own Undo click, which already hides it inline in onUndo()
+  // below — must hide the "just changed" row too. `lastUndone` changes identity only
+  // when Store.undo()/redo() actually undoes/redoes something, so this never fires
+  // spuriously on unrelated snapshot updates. -------------------------------------
+  useEffect(() => {
+    if (!snapshot?.lastUndone) return;
+    setShowUndoRow(false);
+    clearTimeout(undoRowTimeoutRef.current);
+  }, [snapshot?.lastUndone]);
+
   // --- hover-to-expand: 150ms stationary within 4px ------------------------------
   const onMouseMove: MouseEventHandler = (e) => {
     const point = { x: e.clientX, y: e.clientY };

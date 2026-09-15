@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Undo (2026-09-15)
+- Undo from the strip, the planner, and Ctrl+Alt+Backspace, with a confirmation toast.
+
 ### Daily ritual (2026-09-15)
 - The day now rolls over at 4 AM local (immediately on launch too, and again on system resume/unlock), carrying open tasks still marked Today forward and recording how many rolled over. "Plan today" (tray, or the strip's plan chip) lists what rolled over, what's due or overdue, and up to 10 Inbox tasks — arrow keys/j·k to move, Space to check, Enter to commit. "Close the day" (tray) shows today's completed count, focus time, and rolled-over count, with an optional note.
 

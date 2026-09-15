@@ -29,6 +29,7 @@ export class Store {
   private rev = 0;
   private undoStack = new UndoStack();
   private lastUndo: { label: string; rev: number } | undefined;
+  private lastUndone: { label: string; rev: number; kind: 'undo' | 'redo' } | undefined;
   private readonly subscribers = new Set<(s: Snapshot) => void>();
   private readonly capabilities: { appBar: boolean; fullscreenDetect: boolean };
   private readonly platform: 'win32' | 'darwin' | 'linux';
@@ -57,6 +58,7 @@ export class Store {
       canUndo: this.undoStack.canUndo,
       canRedo: this.undoStack.canRedo,
       lastUndo: this.lastUndo,
+      lastUndone: this.lastUndone,
       platform: this.platform,
       systemDark: this.deps.systemDark(),
       capabilities: this.capabilities
@@ -84,6 +86,10 @@ export class Store {
       if (label !== undefined) {
         this.lastUndo = { label, rev: this.rev };
       }
+      // A data-changing dispatch clears `lastUndone` (addendum ruling 1): the
+      // planner's confirmation toast must not reappear because of an unrelated
+      // later action that happens to land on the same rev-tracking logic.
+      this.lastUndone = undefined;
       this.scheduleSave();
       this.notify();
     }
@@ -96,6 +102,7 @@ export class Store {
     this.data = result.data;
     this.lastUndo = undefined;
     this.rev++;
+    this.lastUndone = { label: result.label, rev: this.rev, kind: 'undo' };
     this.scheduleSave();
     this.notify();
     return result.label;
@@ -107,6 +114,7 @@ export class Store {
     this.data = result.data;
     this.lastUndo = undefined;
     this.rev++;
+    this.lastUndone = { label: result.label, rev: this.rev, kind: 'redo' };
     this.scheduleSave();
     this.notify();
     return result.label;
@@ -125,6 +133,7 @@ export class Store {
     this.data = data;
     this.undoStack = new UndoStack();
     this.lastUndo = undefined;
+    this.lastUndone = undefined;
     this.rev++;
     this.notify();
   }

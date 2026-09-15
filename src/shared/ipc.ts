@@ -15,6 +15,13 @@ export interface Snapshot {
    * panel's "Completed X · Undo" row keys off `rev` changing, not `label`, so it
    * re-triggers even when two consecutive actions happen to produce the same label. */
   lastUndo?: { label: string; rev: number };
+  /** Set by `Store.undo()`/`redo()` whenever one of them actually undoes/redoes an
+   * entry (`rev` is the resulting `Snapshot.rev`); cleared by a data-changing
+   * `dispatch()` and by `replace()`. Drives the planner's confirmation toast
+   * ("Undid: …" / "Redid: …") regardless of which window (or the global hotkey)
+   * triggered the undo/redo — unlike `lastUndo` above, which is per-dispatch and
+   * used by the strip panel's own "just changed" row. */
+  lastUndone?: { label: string; rev: number; kind: 'undo' | 'redo' };
   platform: 'win32' | 'darwin' | 'linux';
   systemDark: boolean;
   capabilities: { appBar: boolean; fullscreenDetect: boolean };
