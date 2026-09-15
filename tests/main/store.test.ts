@@ -366,4 +366,63 @@ describe('Store', () => {
     expect(snap.systemDark).toBe(true);
     expect(snap.capabilities).toEqual({ appBar: false, fullscreenDetect: false });
   });
+
+  it('get() reports dataLocationUnavailable when supplied, undefined otherwise', () => {
+    const { store: normal } = makeStore();
+    expect(normal.get().dataLocationUnavailable).toBeUndefined();
+
+    const save = vi.fn(async () => {});
+    const data = createEmptyData(1000, APP_VERSION);
+    const store = new Store(data, {
+      save,
+      now: () => 1000,
+      appVersion: APP_VERSION,
+      platform: 'win32',
+      systemDark: () => false,
+      dataLocationUnavailable: '/missing/folder'
+    });
+    expect(store.get().dataLocationUnavailable).toBe('/missing/folder');
+  });
+});
+
+describe('Store.hasPendingSave', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is false when idle, true right after a dispatch, and false again once the debounced save completes', async () => {
+    const { store, save } = makeStore();
+    expect(store.hasPendingSave()).toBe(false);
+
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    expect(store.hasPendingSave()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(store.hasPendingSave()).toBe(false);
+  });
+
+  it('replace() marks the data as caught up (no pending save)', () => {
+    const { store } = makeStore();
+    store.dispatch({ type: 'task/add', id: 'a', now: 1000, title: 'One' });
+    expect(store.hasPendingSave()).toBe(true);
+
+    store.replace(createEmptyData(2000, APP_VERSION));
+    expect(store.hasPendingSave()).toBe(false);
+  });
+
+  it('a no-op dispatch (unchanged data) leaves hasPendingSave() false', () => {
+    const { store } = makeStore();
+    expect(store.hasPendingSave()).toBe(false);
+
+    // list/rename is not implemented yet (Task 4.3): the reducer is a documented
+    // no-op for it, so this dispatch never schedules a save.
+    store.dispatch({ type: 'list/rename', id: 'inbox', now: 1000, name: 'Renamed' });
+    expect(store.hasPendingSave()).toBe(false);
+  });
 });

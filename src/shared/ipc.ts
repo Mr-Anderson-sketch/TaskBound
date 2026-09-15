@@ -25,6 +25,11 @@ export interface Snapshot {
   platform: 'win32' | 'darwin' | 'linux';
   systemDark: boolean;
   capabilities: { appBar: boolean; fullscreenDetect: boolean };
+  /** Task 5.3 fix round 2: set once at boot when a redirected data folder (the
+   * data-location pointer) was missing or invalid and the app fell back to the
+   * default folder — the absolute path of the folder that couldn't be used, so a
+   * settings UI can tell the user. undefined in the normal case. */
+  dataLocationUnavailable?: string;
 }
 
 export type PaletteMode = 'capture' | 'plan' | 'close' | 'commands' | 'onboarding';
@@ -50,7 +55,7 @@ export type InvokeMap = {
   'app:quit': () => void;
   'data:export': (format: 'json' | 'md') => { path?: string };
   'data:import': () => { imported?: number; error?: string };
-  'data:chooseDir': () => { dir?: string };
+  'data:chooseDir': () => { dir?: string; error?: string };
   'data:listBackups': () => string[];
   'data:restoreBackup': (backupPath: string) => { ok: boolean; error?: string };
   'hotkeys:test': (accelerator: string) => { ok: boolean; reason?: string };

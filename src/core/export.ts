@@ -4,7 +4,7 @@
 // every new id comes from an injected `idGen`. See CLAUDE.md and
 // .superpowers/sdd/PLAN/task-5.3-brief.md.
 import type { Action, Data, Due, Id, List, Task } from './types';
-import { DataInvalidError, parseData } from './schema';
+import { ActionSchema, DataInvalidError, parseData } from './schema';
 import { z } from 'zod';
 
 // --- size guard -------------------------------------------------------------------
@@ -120,6 +120,16 @@ const CHILD_TASK_RE = /^\s+-\s\[([ xX])\]\s*(.*)$/;
 const DUE_RE = /\(due (\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\)/;
 const TAG_RE = /#(\S+)/g;
 
+// Mirrors schema.ts's TitleSchema/TagsSchema exactly (Task 5.3 fix round 2, item 5):
+// fromJson's tasks already went through `parseData`, which enforces these same
+// limits, but fromMarkdown's hand-rolled parsing does not — so a hand-edited (or
+// hostile) Markdown file with a huge title or absurd tags used to sail through here
+// and only fail much later, at persistence-time validation, in a way that looked like
+// data corruption (triggering a backup fallback) rather than a rejected import.
+const MD_TITLE_MAX = 200;
+const MD_TAG_MAX_LEN = 40;
+const MD_TAGS_MAX_COUNT = 20;
+
 function parseTaskBody(body: string): { title: string; due?: Due; tags: string[] } {
   let work = body;
   let due: Due | undefined;
@@ -130,10 +140,14 @@ function parseTaskBody(body: string): { title: string; due?: Due; tags: string[]
   }
   const tags: string[] = [];
   work = work.replace(TAG_RE, (_m, tag: string) => {
-    tags.push(tag);
+    // Always stripped from the title text regardless of whether it's kept — it's
+    // unambiguously a tag token, not title prose — but over-long tags are dropped,
+    // and no more than MD_TAGS_MAX_COUNT are kept.
+    if (tag.length <= MD_TAG_MAX_LEN && tags.length < MD_TAGS_MAX_COUNT) tags.push(tag);
     return '';
   });
-  return { title: work.replace(/\s+/g, ' ').trim(), due, tags };
+  const title = work.replace(/\s+/g, ' ').trim().slice(0, MD_TITLE_MAX);
+  return { title, due, tags };
 }
 
 /** Inverse of `toMarkdown`: round-trips titles, done state, due, tags, and hierarchy.
@@ -281,4 +295,23 @@ export function importPlan(current: Data, imported: { tasks: Task[]; lists: List
   }
 
   return actions;
+}
+
+/**
+ * Validates every action in `actions` against `ActionSchema` — the exact same
+ * validation `store:dispatch` applies over IPC. An import must never dispatch some
+ * of its actions and then fail partway through (Task 5.3 fix round 2, item 5): the
+ * caller should call this once on the FULL plan and, if it returns a message, dispatch
+ * NOTHING and surface the message instead. Returns the first validation failure's
+ * message, or `undefined` when every action is valid.
+ */
+export function validateImportActions(actions: Action[]): string | undefined {
+  for (const action of actions) {
+    const result = ActionSchema.safeParse(action);
+    if (!result.success) {
+      const detail = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      return `Import produced an invalid ${action.type} action: ${detail}`;
+    }
+  }
+  return undefined;
 }

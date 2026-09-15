@@ -35,7 +35,7 @@ export interface WindowCommands {
   quit(): void | Promise<void>;
   dataExport(format: 'json' | 'md'): { path?: string } | Promise<{ path?: string }>;
   dataImport(): { imported?: number; error?: string } | Promise<{ imported?: number; error?: string }>;
-  dataChooseDir(): { dir?: string } | Promise<{ dir?: string }>;
+  dataChooseDir(): { dir?: string; error?: string } | Promise<{ dir?: string; error?: string }>;
   dataListBackups(): string[] | Promise<string[]>;
   dataRestoreBackup(backupPath: string): { ok: boolean; error?: string } | Promise<{ ok: boolean; error?: string }>;
   hotkeysTest(accelerator: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;

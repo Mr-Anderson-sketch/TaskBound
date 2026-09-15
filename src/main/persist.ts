@@ -3,6 +3,7 @@
 // No Electron import: main.ts supplies `dir` (derived via paths.ts) and `now`.
 import * as fsReal from 'node:fs/promises';
 import { watch as fsWatch } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Data } from '../core/types';
 import { parseData } from '../core/schema';
@@ -10,11 +11,31 @@ import { migrateLegacy } from '../core/migrate';
 import { createEmptyData } from '../core/defaults';
 import { ymd } from '../core/dates';
 
+/** Mutable, shared between every `save()` call for a session and `watchDataFile` (Task
+ * 5.3 fix round 2, item 1): records a hash of the exact bytes `save()` last wrote, so
+ * the watcher can tell its OWN writes apart from genuine external ones without relying
+ * on `meta.lastSavedAt` (which changes on every in-memory edit, saved or not, and so
+ * can't distinguish "just saved" from "has unsaved changes"). One tracker instance is
+ * reused across a data-folder switch — the initial save into the new folder and the
+ * watcher that starts watching it right after share the same object. */
+export interface WriteTracker {
+  lastWrittenHash?: string;
+}
+
+export function createWriteTracker(): WriteTracker {
+  return {};
+}
+
+function hashText(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
 export interface PersistDeps {
   dir: string;
   now: () => number;
   fs?: typeof import('node:fs/promises');
   log?: (m: string) => void;
+  writeTracker?: WriteTracker;
 }
 
 export interface LoadResult {
@@ -163,11 +184,15 @@ export async function save(deps: PersistDeps, data: Data): Promise<void> {
   await ensureDirs(deps);
   await rotateBackup(deps);
 
+  const text = JSON.stringify(data, null, 2);
   const tmp = tempPath(deps);
   const dp = dataPath(deps);
   try {
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+    await fs.writeFile(tmp, text, 'utf8');
     await withRetry(deps, 'save rename', () => fs.rename(tmp, dp));
+    // Only recorded once the rename actually lands data.json — a failed save must
+    // not make the watcher think this (unwritten) content is now "ours".
+    if (deps.writeTracker) deps.writeTracker.lastWrittenHash = hashText(text);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw err;
@@ -354,6 +379,83 @@ export async function load(deps: PersistDeps, appVersion: string, legacyPath?: s
   return { data, source: 'empty', ...(corruptSavedAs ? { corruptSavedAs } : {}) };
 }
 
+/** Whether `dir`'s data.json currently exists AND is valid — a pure read-only check
+ * (Task 5.3 fix round 2, item 3): no quarantine, no backup fallback, no fresh-data
+ * creation, unlike `load()`. Used at startup to decide whether a redirected data
+ * folder (the data-location pointer, or previously `settings.dataDir`) is safe to
+ * adopt — a missing, unmounted, or not-yet-synced folder must never get files
+ * created in it just because the app looked at it. */
+export async function hasValidDataFile(deps: PersistDeps): Promise<boolean> {
+  const outcome = await readAndValidate(deps, dataPath(deps));
+  return outcome.kind === 'valid';
+}
+
+// --- data folder switch (Task 5.3 fix round 2, item 4) ----------------------------
+
+export type PrepareDirSwitchOutcome =
+  | { kind: 'adopted'; data: Data }
+  | { kind: 'switched' }
+  | { kind: 'refused'; error: string };
+
+/**
+ * Decides what `data:chooseDir` should do about `deps.dir` (the NEW target folder),
+ * given the CURRENT in-memory `currentData`. Never touches the old folder.
+ *  - Target already has a VALID data.json: 'adopted' — the caller should
+ *    `store.replace(outcome.data)`. `currentData` would otherwise be silently
+ *    discarded, so it's preserved first, written to `data.previous-<ts>.json` INSIDE
+ *    the target folder.
+ *  - Target's data.json exists but fails to parse/validate: 'refused' — nothing is
+ *    written anywhere; the caller must leave persistence and the watcher untouched.
+ *  - Target has no data.json: 'switched' — `currentData` is saved there (unchanged
+ *    behavior from before this fix: first time this folder is used).
+ */
+export async function prepareDirSwitch(deps: PersistDeps, currentData: Data): Promise<PrepareDirSwitchOutcome> {
+  const outcome = await readAndValidate(deps, dataPath(deps));
+
+  if (outcome.kind === 'invalid') {
+    return { kind: 'refused', error: 'That folder has a TimeBound data file that could not be read.' };
+  }
+
+  if (outcome.kind === 'valid') {
+    const fs = fsOf(deps);
+    await ensureDirs(deps);
+    const previousPath = path.join(deps.dir, `data.previous-${deps.now()}.json`);
+    await fs.writeFile(previousPath, JSON.stringify(currentData, null, 2), 'utf8');
+    return { kind: 'adopted', data: outcome.data };
+  }
+
+  await save(deps, currentData);
+  return { kind: 'switched' };
+}
+
+// --- backup restore path safety (Task 5.3 fix round 2, item 6) --------------------
+
+const BACKUP_FILENAME_RE = /^data-\d{4}-\d{2}-\d{2}\.json$/;
+
+/**
+ * Resolves `requestedPath` to a real, absolute path strictly INSIDE `dir`'s backups
+ * folder, or `undefined` if it isn't one. Follows symlinks/junctions on BOTH sides via
+ * `fs.realpath` before comparing, so a link inside the backups folder that points
+ * outside it can't be used to escape it (a plain string-prefix/`path.relative` check
+ * on the un-resolved paths cannot catch this). Also requires the filename to match a
+ * real backup's `data-YYYY-MM-DD.json` shape, so nothing else that happens to live in
+ * the backups folder can be "restored". Returns `undefined` (never throws) for a
+ * path that doesn't exist, isn't inside the real backups folder, or has the wrong
+ * filename shape.
+ */
+export async function resolveBackupPath(deps: PersistDeps, requestedPath: string): Promise<string | undefined> {
+  const fs = fsOf(deps);
+  try {
+    const realBackupsRoot = await fs.realpath(backupsDir(deps));
+    const realTarget = await fs.realpath(requestedPath);
+    if (!BACKUP_FILENAME_RE.test(path.basename(realTarget))) return undefined;
+    if (path.dirname(realTarget) !== realBackupsRoot) return undefined;
+    return realTarget;
+  } catch {
+    return undefined;
+  }
+}
+
 // --- watcher (Task 5.3) -----------------------------------------------------------
 
 const WATCH_DEBOUNCE_MS = 500;
@@ -362,6 +464,14 @@ export interface WatchDataFileDeps extends PersistDeps {
   /** Reads the CURRENT in-memory Data, fresh on every check — never cached across
    * events (the store may have dispatched more actions between watch callbacks). */
   getCurrentData: () => Data;
+  /** Whether the Store has local changes not yet durably saved (Task 5.3 fix round 2,
+   * item 1) — a debounced save scheduled, or one still in flight. Decides conflict
+   * vs. plain adoption for a change that isn't our own write. */
+  hasPendingSave: () => boolean;
+  /** Shared with every `save()` call for this dir (see `WriteTracker`'s own doc) —
+   * required here, unlike on plain `PersistDeps`, since the watcher cannot safely
+   * tell its own writes apart from external ones without it. */
+  writeTracker: WriteTracker;
 }
 
 export interface DataWatcher {
@@ -372,15 +482,21 @@ export interface DataWatcher {
  * Watches `dir/data.json` for changes made OUTSIDE this process (another TimeBound
  * instance, a synced-folder tool, manual editing) and reconciles them against the
  * live in-memory `Data`, debounced 500 ms:
- *  - Same `meta.lastSavedAt` as in memory: an echo of our own `save()` (which persists
- *    the in-memory data verbatim, `lastSavedAt` included) — ignored.
- *  - A strictly NEWER `meta.lastSavedAt`: a genuine external update — `onExternalChange`
- *    is called with the parsed `Data` so the caller can `store.replace(newData)`.
- *  - An OLDER `meta.lastSavedAt`: the in-memory data has unsaved changes newer than
- *    what just landed on disk (divergence) — the external file is preserved at
- *    `data.conflict-<ts>.json` and `data.json` is overwritten with the current
- *    in-memory data via `save()`, keeping the in-memory data as the source of truth.
- *    `onExternalChange` is NOT called (nothing changed in memory).
+ *  - The file's bytes hash-match `writeTracker.lastWrittenHash` (the last thing WE
+ *    wrote via `save()`, in this dir or a just-switched-to one): an echo of our own
+ *    write — ignored outright, regardless of timing.
+ *  - Otherwise, genuinely different content landed on disk. If `hasPendingSave()` is
+ *    false (no unsaved local edits), this is an unambiguous external update —
+ *    `onExternalChange` is called with the parsed `Data` so the caller can
+ *    `store.replace(newData)`; its hash is then recorded as "known" too, so a
+ *    duplicate fs event for the same write doesn't fire `onExternalChange` again.
+ *  - If `hasPendingSave()` is true, the in-memory data has unsaved changes that a
+ *    blind replace would silently discard — a conflict. The external file is
+ *    preserved at `data.conflict-<ts>.json`; `data.json` itself is left alone here
+ *    (never a direct `save()` from the watcher — the store's own already-scheduled
+ *    or in-flight save will write the correct in-memory data on its own, and a
+ *    watcher-issued save could otherwise race it and land AFTER it, clobbering newer
+ *    data with older).
  * An unreadable/invalid file (e.g. a transient partial write by whatever external
  * tool is writing) is silently ignored — the next change event retries.
  *
@@ -406,23 +522,37 @@ export function watchDataFile(deps: WatchDataFileDeps, onExternalChange: (data: 
     }
     handling = true;
     try {
-      const outcome = await readAndValidate(deps, dp);
-      if (outcome.kind !== 'valid') return; // missing or invalid: ignore, next event retries
+      const text = await readFileRetrying(deps, dp);
+      if (text === undefined) return; // missing: ignore, next event retries
 
-      const current = deps.getCurrentData();
-      const incoming = outcome.data;
-      if (incoming.meta.lastSavedAt === current.meta.lastSavedAt) return; // our own write, echoed back
+      const hash = hashText(text);
+      if (deps.writeTracker.lastWrittenHash === hash) return; // our own write, echoed back
 
-      if (incoming.meta.lastSavedAt > current.meta.lastSavedAt) {
-        onExternalChange(incoming);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return; // invalid: ignore, next event retries
+      }
+      let incoming: Data;
+      try {
+        incoming = parseData(parsed);
+      } catch {
+        return; // invalid: ignore, next event retries
+      }
+
+      if (deps.hasPendingSave()) {
+        // Conflict: local has unsaved changes. Preserve the external file; the
+        // store's OWN pending/in-flight save writes the correct data.json on its
+        // own — never save() directly here (see doc comment above).
+        const conflictPath = path.join(deps.dir, `data.conflict-${deps.now()}.json`);
+        await fs.copyFile(dp, conflictPath).catch(() => {});
         return;
       }
 
-      // Divergence: in-memory is newer than what just landed on disk. Preserve the
-      // external file, then reassert the in-memory data as data.json.
-      const conflictPath = path.join(deps.dir, `data.conflict-${deps.now()}.json`);
-      await fs.copyFile(dp, conflictPath).catch(() => {});
-      await save(deps, current);
+      // No local unsaved changes: unambiguously a genuine external update.
+      deps.writeTracker.lastWrittenHash = hash;
+      onExternalChange(incoming);
     } catch (err) {
       deps.log?.(`persist: watcher reconciliation failed (${errorCode(err) ?? 'error'})`);
     } finally {

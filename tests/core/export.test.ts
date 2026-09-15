@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { toJson, fromJson, toMarkdown, fromMarkdown, importPlan, ImportTooLargeError } from '../../src/core/export';
+import { toJson, fromJson, toMarkdown, fromMarkdown, importPlan, validateImportActions, ImportTooLargeError } from '../../src/core/export';
 import { DataInvalidError } from '../../src/core/schema';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData } from '../../src/core/defaults';
-import type { Data, Task } from '../../src/core/types';
+import type { Action, Data, Task } from '../../src/core/types';
 
 const APP_VERSION = '2.0.0';
 const t0 = 1_800_000_000_000;
@@ -193,5 +193,90 @@ describe('importPlan', () => {
 
     // Existing data untouched.
     expect(next.tasks.some((t) => t.title === 'Ship the report')).toBe(true);
+  });
+});
+
+describe('fromMarkdown clamps fields that would otherwise fail persistence-time validation', () => {
+  let nextId = 0;
+  const idGen = () => `clamp-${nextId++}`;
+
+  it('truncates an over-long title to 200 characters', () => {
+    const longTitle = 'x'.repeat(500);
+    const md = `# List\n- [ ] ${longTitle}\n`;
+
+    const { tasks } = fromMarkdown(md, t0, idGen);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].title.length).toBe(200);
+    expect(tasks[0].title).toBe('x'.repeat(200));
+  });
+
+  it('drops tags over 40 characters but keeps shorter ones, and keeps at most 20 tags', () => {
+    const overLong = 'y'.repeat(41);
+    const many = Array.from({ length: 25 }, (_, i) => `#tag${i}`).join(' ');
+    const md = `# List\n- [ ] Task #${overLong} #short ${many}\n`;
+
+    const { tasks } = fromMarkdown(md, t0, idGen);
+
+    expect(tasks).toHaveLength(1);
+    const tags = tasks[0].tags;
+    expect(tags).not.toContain(overLong);
+    expect(tags).toContain('short');
+    expect(tags.length).toBeLessThanOrEqual(20);
+    // Every kept tag individually satisfies the same bound schema.ts enforces.
+    expect(tags.every((t) => t.length <= 40)).toBe(true);
+  });
+
+  it('a clamped import passes validateImportActions and importPlan cleanly (no downstream validation failure)', () => {
+    const longTitle = 'z'.repeat(500);
+    const many = Array.from({ length: 30 }, (_, i) => `#t${i}`).join(' ');
+    const md = `# Clamped List\n- [ ] ${longTitle} ${many}\n`;
+    const { tasks, lists } = fromMarkdown(md, t0, idGen);
+
+    const current = createEmptyData(t0, APP_VERSION);
+    const actions = importPlan(current, { tasks, lists }, t0, idGen);
+
+    expect(validateImportActions(actions)).toBeUndefined();
+  });
+});
+
+describe('validateImportActions', () => {
+  it('returns undefined when every action is valid', () => {
+    const actions: Action[] = [
+      { type: 'list/add', id: 'l1', now: t0, name: 'A list' },
+      { type: 'task/add', id: 't1', now: t0, title: 'Valid title', listId: 'l1', tags: ['ok'] },
+      { type: 'task/complete', id: 't1', now: t0, by: 'user' }
+    ];
+    expect(validateImportActions(actions)).toBeUndefined();
+  });
+
+  it('returns a clear error message and stops at the first invalid action (title over 200 chars)', () => {
+    const actions: Action[] = [
+      { type: 'list/add', id: 'l1', now: t0, name: 'A list' },
+      { type: 'task/add', id: 't1', now: t0, title: 'x'.repeat(201), listId: 'l1' }
+    ];
+    const error = validateImportActions(actions);
+    expect(error).toBeDefined();
+    expect(error).toContain('task/add');
+  });
+
+  it('catches an invalid list/add (empty name)', () => {
+    const actions: Action[] = [{ type: 'list/add', id: 'l1', now: t0, name: '' }];
+    const error = validateImportActions(actions);
+    expect(error).toBeDefined();
+    expect(error).toContain('list/add');
+  });
+
+  it('catches too many tags (> 20) even though each individual tag is short', () => {
+    const actions: Action[] = [
+      {
+        type: 'task/add',
+        id: 't1',
+        now: t0,
+        title: 'Valid title',
+        tags: Array.from({ length: 21 }, (_, i) => `t${i}`)
+      }
+    ];
+    expect(validateImportActions(actions)).toBeDefined();
   });
 });

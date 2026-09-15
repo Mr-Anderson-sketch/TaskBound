@@ -8,8 +8,9 @@ import { randomUUID } from 'node:crypto';
 import * as fsp from 'node:fs/promises';
 import { app, session, nativeTheme, ipcMain, shell, dialog, globalShortcut, powerMonitor, Notification, BrowserWindow } from 'electron';
 import type { WebContents } from 'electron';
-import { load, save, listBackups, watchDataFile } from './persist';
+import { load, save, listBackups, watchDataFile, createWriteTracker, hasValidDataFile, prepareDirSwitch, resolveBackupPath } from './persist';
 import type { PersistDeps, DataWatcher } from './persist';
+import { readDataLocationPointer, writeDataLocationPointer } from './dataLocation';
 import { resolveDataDir } from './paths';
 import { Store } from './store';
 import { registerIpc } from './ipc';
@@ -24,7 +25,7 @@ import { Clock, resolveToggleTimerAction } from './clock';
 import { Notifier } from './notify';
 import { loadWin32 } from './win32';
 import { FullscreenWatcher } from './win32/watcher';
-import { toJson, toMarkdown, fromJson, fromMarkdown, importPlan } from '../core/export';
+import { toJson, toMarkdown, fromJson, fromMarkdown, importPlan, validateImportActions } from '../core/export';
 import { ymd } from '../core/dates';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
@@ -95,30 +96,41 @@ if (!gotLock) {
     // Task 5.3: the data dir can move at runtime (data:chooseDir). `currentDataDir`
     // is the one mutable source of truth every persist call below reads fresh via
     // `persistDeps()` — never capture `dataDir` directly again below this point.
+    // `userDataDir` (Electron's own, never redirected) is where the data-location
+    // pointer file itself always lives, regardless of where the DATA currently does.
+    const userDataDir = app.getPath('userData');
+    const writeTracker = createWriteTracker();
     let currentDataDir = dataDir;
-    function persistDeps(): PersistDeps {
-      return { dir: currentDataDir, now: Date.now };
+    function persistDeps(): PersistDeps & { writeTracker: typeof writeTracker } {
+      return { dir: currentDataDir, now: Date.now, writeTracker };
     }
 
-    let result = await load(persistDeps(), app.getVersion(), legacyPath);
-
-    // A previous session's data:chooseDir persisted the new folder into
-    // settings.dataDir. Honor it on the NEXT launch too (unless TIMEBOUND_DATA_DIR
-    // forces a specific dir, e.g. under test) — resolveDataDir already documents this
-    // precedence; this is where it's actually applied. Falls back to the bootstrap
-    // dir (logging, not crashing) if the saved folder is gone or unreadable.
-    if (!process.env.TIMEBOUND_DATA_DIR && result.data.settings.dataDir) {
-      const redirected = path.resolve(result.data.settings.dataDir);
-      if (redirected !== currentDataDir) {
-        try {
-          const redirectedResult = await load({ dir: redirected, now: Date.now }, app.getVersion());
-          currentDataDir = redirected;
-          result = redirectedResult;
-        } catch (err) {
-          console.error(`main: failed to load data from settings.dataDir (${redirected}), staying on ${currentDataDir}`, err);
+    // Fix round 2, items 2+3: a previous session's data:chooseDir writes a pointer
+    // file (data-location.json) into the DEFAULT userData folder — never only into
+    // the new folder, which the NEXT launch (always starting from the default
+    // folder) would otherwise never see. Honored here unless TIMEBOUND_DATA_DIR
+    // forces a specific dir (e.g. under test). The redirected folder is adopted
+    // ONLY if its data.json exists and is currently valid (`hasValidDataFile`, a
+    // pure check with no side effects) — a missing, unmounted, or not-yet-synced
+    // folder must never get files created in it just because the app looked at it;
+    // `dataLocationUnavailable` records that folder's path for the (future) settings
+    // UI to surface, and the app stays on the default folder for this session.
+    let dataLocationUnavailable: string | undefined;
+    if (!process.env.TIMEBOUND_DATA_DIR) {
+      const pointer = await readDataLocationPointer(userDataDir);
+      if (pointer) {
+        const redirected = path.resolve(pointer);
+        if (redirected !== currentDataDir) {
+          if (await hasValidDataFile({ dir: redirected, now: Date.now })) {
+            currentDataDir = redirected;
+          } else {
+            dataLocationUnavailable = redirected;
+          }
         }
       }
     }
+
+    const result = await load(persistDeps(), app.getVersion(), legacyPath);
 
     // Task 7.1: resolve the optional win32 integration (AppBar space reservation +
     // fullscreen detection) BEFORE the Store exists, so `capabilities` — reported
@@ -136,7 +148,8 @@ if (!gotLock) {
       appVersion: app.getVersion(),
       platform: process.platform,
       systemDark: () => nativeTheme.shouldUseDarkColors,
-      capabilities
+      capabilities,
+      dataLocationUnavailable
     });
 
     // --- data folder watcher (Task 5.3): reconciles external changes to data.json
@@ -145,9 +158,10 @@ if (!gotLock) {
     let watcher: DataWatcher | undefined;
     function startWatcher(): void {
       watcher?.stop();
-      watcher = watchDataFile({ ...persistDeps(), getCurrentData: () => store.get().data }, (newData) => {
-        store.replace(newData);
-      });
+      watcher = watchDataFile(
+        { ...persistDeps(), getCurrentData: () => store.get().data, hasPendingSave: () => store.hasPendingSave() },
+        (newData) => store.replace(newData)
+      );
     }
     startWatcher();
 
@@ -171,6 +185,12 @@ if (!gotLock) {
           ? fromMarkdown(text, Date.now(), randomUUID)
           : (({ tasks, lists }) => ({ tasks, lists }))(fromJson(text));
         const actions = importPlan(store.get().data, shape, Date.now(), randomUUID);
+        // Fix round 2, item 5: validate the WHOLE plan before dispatching ANY of it —
+        // a partially-applied import (some actions dispatched, one later rejected)
+        // is worse than none, and an action that fails here would otherwise only be
+        // caught much later, at persistence-time validation, looking like corruption.
+        const validationError = validateImportActions(actions);
+        if (validationError) return { error: validationError };
         for (const action of actions) store.dispatch(action);
         return { imported: actions.filter((a) => a.type === 'task/add').length };
       } catch (err) {
@@ -178,24 +198,34 @@ if (!gotLock) {
       }
     }
 
-    async function switchDataDir(newDirRaw: string): Promise<{ dir?: string }> {
+    async function switchDataDir(newDirRaw: string): Promise<{ dir?: string; error?: string }> {
       const newDir = path.resolve(newDirRaw);
       if (newDir === currentDataDir) return { dir: newDir };
-      // Save the CURRENT data into the new folder first — never deletes anything in
-      // the old one — then flip persistence and the watcher over to it.
-      await save({ dir: newDir, now: Date.now }, store.get().data);
+
+      // Fix round 2, item 4: decide adopt-existing / refuse-invalid / fresh-save —
+      // never blindly overwrite a folder that already holds someone else's data.
+      const outcome = await prepareDirSwitch({ dir: newDir, now: Date.now, writeTracker }, store.get().data);
+      if (outcome.kind === 'refused') return { error: outcome.error };
+
       watcher?.stop();
       currentDataDir = newDir;
+      // Fix round 2, item 2: the pointer always lives in the DEFAULT folder, so the
+      // NEXT launch (which always starts there) can find it.
+      await writeDataLocationPointer(userDataDir, newDir);
+
+      if (outcome.kind === 'adopted') store.replace(outcome.data);
+
       startWatcher();
       store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { dataDir: newDir } });
       return { dir: newDir };
     }
 
     async function restoreBackupFile(backupPath: string): Promise<{ ok: boolean; error?: string }> {
-      const resolved = path.resolve(backupPath);
-      const backupsRoot = path.join(currentDataDir, 'backups');
-      const rel = path.relative(backupsRoot, resolved);
-      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      // Fix round 2, item 6: resolves symlinks/junctions on both sides before
+      // checking containment — a plain path.relative on the unresolved paths can't
+      // catch a link inside backups/ that points outside it.
+      const resolved = await resolveBackupPath(persistDeps(), backupPath);
+      if (!resolved) {
         return { ok: false, error: 'Backup path is outside the backups folder.' };
       }
       try {

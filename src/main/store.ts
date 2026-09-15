@@ -17,6 +17,11 @@ export interface StoreDeps {
   platform: NodeJS.Platform;
   systemDark: () => boolean;
   capabilities?: { appBar: boolean; fullscreenDetect: boolean };
+  /** Task 5.3 fix round 2: set once at boot when a redirected data folder (from the
+   * data-location pointer file) was missing or invalid and the app fell back to the
+   * default folder instead — the absolute path of the folder that couldn't be used,
+   * so the (future) settings UI can surface it. undefined in the normal case. */
+  dataLocationUnavailable?: string;
 }
 
 function normalizePlatform(platform: NodeJS.Platform): 'win32' | 'darwin' | 'linux' {
@@ -27,12 +32,18 @@ function normalizePlatform(platform: NodeJS.Platform): 'win32' | 'darwin' | 'lin
 export class Store {
   private data: Data;
   private rev = 0;
+  // The highest rev fully persisted to disk (Task 5.3 fix round 2, item 1): lets
+  // `hasPendingSave()` tell the data-file watcher whether there are unsaved local
+  // changes it must not silently clobber. Starts equal to `rev` (0): the initial
+  // `Data` handed to the constructor is assumed to already match what's on disk.
+  private savedRev = 0;
   private undoStack = new UndoStack();
   private lastUndo: { label: string; rev: number } | undefined;
   private lastUndone: { label: string; rev: number; kind: 'undo' | 'redo' } | undefined;
   private readonly subscribers = new Set<(s: Snapshot) => void>();
   private readonly capabilities: { appBar: boolean; fullscreenDetect: boolean };
   private readonly platform: 'win32' | 'darwin' | 'linux';
+  private readonly dataLocationUnavailable?: string;
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSave: Promise<void> | undefined;
   // Tail of the serialised save chain: each debounced save runs only after the
@@ -48,6 +59,7 @@ export class Store {
     this.data = initial;
     this.capabilities = deps.capabilities ?? { appBar: false, fullscreenDetect: false };
     this.platform = normalizePlatform(deps.platform);
+    this.dataLocationUnavailable = deps.dataLocationUnavailable;
   }
 
   get(): Snapshot {
@@ -61,8 +73,17 @@ export class Store {
       lastUndone: this.lastUndone,
       platform: this.platform,
       systemDark: this.deps.systemDark(),
-      capabilities: this.capabilities
+      capabilities: this.capabilities,
+      dataLocationUnavailable: this.dataLocationUnavailable
     };
+  }
+
+  /** Whether there are local changes not yet durably saved: a debounced save is
+   * scheduled, or a save is in flight for a rev this hasn't caught up to. Used by
+   * the data-file watcher (persist.ts) to decide whether an external change to
+   * data.json is safe to adopt outright or must be treated as a conflict. */
+  hasPendingSave(): boolean {
+    return this.savedRev !== this.rev;
   }
 
   /** Validated by ipc.ts before this is called. Returns the (possibly unchanged) rev. */
@@ -135,6 +156,10 @@ export class Store {
     this.lastUndo = undefined;
     this.lastUndone = undefined;
     this.rev++;
+    // The replacing data is, by construction, already what's on disk (the watcher's
+    // external-change path) or about to be written by the caller (backup restore) —
+    // either way there is nothing new for a debounced save to catch up on.
+    this.savedRev = this.rev;
     this.notify();
   }
 
@@ -188,6 +213,13 @@ export class Store {
   }
 
   private async doSave(): Promise<void> {
-    await this.deps.save(this.data);
+    // Captured synchronously, before the await: `this.data`/`this.rev` may advance
+    // further while this save is in flight, so `savedRev` must record exactly the
+    // rev this particular call is persisting, not whatever is current once it
+    // resolves.
+    const revBeingSaved = this.rev;
+    const dataBeingSaved = this.data;
+    await this.deps.save(dataBeingSaved);
+    this.savedRev = revBeingSaved;
   }
 }

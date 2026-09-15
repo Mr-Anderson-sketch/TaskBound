@@ -2,7 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { save, load, listBackups, cleanOrphans, watchDataFile } from '../../src/main/persist';
+import {
+  save,
+  load,
+  listBackups,
+  cleanOrphans,
+  watchDataFile,
+  createWriteTracker,
+  hasValidDataFile,
+  prepareDirSwitch,
+  resolveBackupPath
+} from '../../src/main/persist';
 import type { PersistDeps, WatchDataFileDeps } from '../../src/main/persist';
 import { createEmptyData } from '../../src/core/defaults';
 import { ymd } from '../../src/core/dates';
@@ -380,18 +390,19 @@ describe('watchDataFile', () => {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  it('calls onExternalChange with the parsed data when a newer, valid file appears', async () => {
+  it('calls onExternalChange with the parsed data when a genuinely external file appears and nothing is pending', async () => {
     const dir = await mkTmpDir();
     const now = localMs(2026, 5, 1);
     const inMemory = createEmptyData(now, APP_VERSION);
-    await save(makeDeps(dir, () => now), inMemory);
+    const writeTracker = createWriteTracker();
+    await save(makeDeps(dir, () => now, { writeTracker }), inMemory);
 
-    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now, { writeTracker }), getCurrentData: () => inMemory, hasPendingSave: () => false };
     const onExternalChange = vi.fn();
     const watcher = watchDataFile(deps, onExternalChange);
     try {
       const later = now + 60_000;
-      const external = { ...createEmptyData(later, APP_VERSION), meta: { ...createEmptyData(later, APP_VERSION).meta, lastSavedAt: later } };
+      const external = createEmptyData(later, APP_VERSION);
       // Write directly (not via save()) to simulate another process/tool.
       await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
 
@@ -404,38 +415,74 @@ describe('watchDataFile', () => {
     }
   }, 10000);
 
-  it('ignores its own write (same meta.lastSavedAt as in-memory)', async () => {
+  it('ignores its own write, identified by content hash rather than meta.lastSavedAt', async () => {
     const dir = await mkTmpDir();
     const now = localMs(2026, 5, 2);
     const inMemory = createEmptyData(now, APP_VERSION);
-    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+    const writeTracker = createWriteTracker();
+    // hasPendingSave() true here would make a MISSED-echo bug show up as a conflict
+    // file instead of silently doing the wrong thing — a stronger assertion than
+    // hasPendingSave: () => false would give.
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now, { writeTracker }), getCurrentData: () => inMemory, hasPendingSave: () => true };
 
     const onExternalChange = vi.fn();
     const watcher = watchDataFile(deps, onExternalChange);
     try {
-      // Our own save() of the SAME data the store already holds (same lastSavedAt).
+      // Our own save(), using the SAME writeTracker the watcher reads.
       await save(deps, inMemory);
       await sleep(SETTLE_MS);
+
       expect(onExternalChange).not.toHaveBeenCalled();
+      const entries = await realFs.readdir(dir);
+      expect(entries.some((f) => f.startsWith('data.conflict-'))).toBe(false);
     } finally {
       watcher.stop();
     }
   }, 10000);
 
-  it('on divergence (in-memory newer than the file), preserves the external file as a conflict copy and rewrites data.json from memory', async () => {
+  it('a genuinely external change shortly after our own save is still recognised as external, not misread as an echo', async () => {
+    // Regression: comparing meta.lastSavedAt (which changes on every save, our own
+    // included) instead of a content hash used to make an edit landing shortly after
+    // a save indistinguishable from that save's own echo.
+    const dir = await mkTmpDir();
+    const now = localMs(2026, 5, 2, 30);
+    const inMemory = createEmptyData(now, APP_VERSION);
+    const writeTracker = createWriteTracker();
+    await save(makeDeps(dir, () => now, { writeTracker }), inMemory);
+
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now + 1, { writeTracker }), getCurrentData: () => inMemory, hasPendingSave: () => false };
+    const onExternalChange = vi.fn();
+    const watcher = watchDataFile(deps, onExternalChange);
+    try {
+      const external = createEmptyData(now + 1, APP_VERSION); // different content, close in time
+      await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
+
+      await sleep(SETTLE_MS);
+
+      expect(onExternalChange).toHaveBeenCalledTimes(1);
+      expect(onExternalChange.mock.calls[0][0]).toEqual(external);
+    } finally {
+      watcher.stop();
+    }
+  }, 10000);
+
+  it('on conflict (hasPendingSave true, content not ours), preserves the external file as a conflict copy WITHOUT saving directly or calling onExternalChange', async () => {
     const dir = await mkTmpDir();
     const base = localMs(2026, 5, 3);
-    const older = createEmptyData(base, APP_VERSION);
-    await save(makeDeps(dir, () => base), older);
+    const writeTracker = createWriteTracker();
+    const ours = createEmptyData(base, APP_VERSION);
+    await save(makeDeps(dir, () => base, { writeTracker }), ours);
 
-    const newer = { ...createEmptyData(base + 5000, APP_VERSION), meta: { ...older.meta, lastSavedAt: base + 5000 } };
-    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => base + 5000), getCurrentData: () => newer };
+    const deps: WatchDataFileDeps = {
+      ...makeDeps(dir, () => base + 5000, { writeTracker }),
+      getCurrentData: () => ours,
+      hasPendingSave: () => true // local unsaved changes pending
+    };
 
     const onExternalChange = vi.fn();
     const watcher = watchDataFile(deps, onExternalChange);
     try {
-      // An external tool overwrites data.json with something OLDER than in-memory.
-      const external = { ...createEmptyData(base - 1000, APP_VERSION), meta: { ...older.meta, lastSavedAt: base - 1000 } };
+      const external = createEmptyData(base + 1000, APP_VERSION);
       await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
 
       await sleep(SETTLE_MS);
@@ -448,8 +495,11 @@ describe('watchDataFile', () => {
       const conflictContent = JSON.parse(await realFs.readFile(path.join(dir, conflictFiles[0]), 'utf8'));
       expect(conflictContent).toEqual(external);
 
+      // The watcher never saves directly — data.json is left holding the external
+      // content; only the Store's own (already scheduled/in-flight) save may
+      // overwrite it, so a direct watcher save can never race it and land after.
       const onDisk = JSON.parse(await realFs.readFile(path.join(dir, 'data.json'), 'utf8'));
-      expect(onDisk).toEqual(newer);
+      expect(onDisk).toEqual(external);
     } finally {
       watcher.stop();
     }
@@ -459,19 +509,160 @@ describe('watchDataFile', () => {
     const dir = await mkTmpDir();
     const now = localMs(2026, 5, 4);
     const inMemory = createEmptyData(now, APP_VERSION);
-    await save(makeDeps(dir, () => now), inMemory);
+    const writeTracker = createWriteTracker();
+    await save(makeDeps(dir, () => now, { writeTracker }), inMemory);
 
-    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now), getCurrentData: () => inMemory };
+    const deps: WatchDataFileDeps = { ...makeDeps(dir, () => now, { writeTracker }), getCurrentData: () => inMemory, hasPendingSave: () => false };
     const onExternalChange = vi.fn();
     const watcher = watchDataFile(deps, onExternalChange);
     watcher.stop();
 
     const later = now + 60_000;
-    const external = { ...createEmptyData(later, APP_VERSION), meta: { ...createEmptyData(later, APP_VERSION).meta, lastSavedAt: later } };
+    const external = createEmptyData(later, APP_VERSION);
     await realFs.writeFile(path.join(dir, 'data.json'), JSON.stringify(external, null, 2), 'utf8');
 
     await sleep(SETTLE_MS);
 
     expect(onExternalChange).not.toHaveBeenCalled();
   }, 10000);
+});
+
+describe('hasValidDataFile', () => {
+  it('is true when data.json exists and is valid', async () => {
+    const dir = await mkTmpDir();
+    const deps = makeDeps(dir, () => localMs(2026, 6, 1));
+    await save(deps, createEmptyData(deps.now(), APP_VERSION));
+
+    expect(await hasValidDataFile(deps)).toBe(true);
+  });
+
+  it('is false when data.json is missing, and creates nothing', async () => {
+    const dir = await mkTmpDir();
+    const deps = makeDeps(dir, () => localMs(2026, 6, 1));
+
+    expect(await hasValidDataFile(deps)).toBe(false);
+
+    const entries = await realFs.readdir(dir).catch(() => [] as string[]);
+    expect(entries).toEqual([]);
+  });
+
+  it('is false when data.json exists but is invalid, and does not quarantine it', async () => {
+    const dir = await mkTmpDir();
+    await realFs.mkdir(dir, { recursive: true });
+    await realFs.writeFile(path.join(dir, 'data.json'), '{ not valid json', 'utf8');
+    const deps = makeDeps(dir, () => localMs(2026, 6, 1));
+
+    expect(await hasValidDataFile(deps)).toBe(false);
+
+    const entries = await realFs.readdir(dir);
+    expect(entries).toEqual(['data.json']); // untouched: no quarantine, no fallback
+  });
+});
+
+describe('prepareDirSwitch', () => {
+  it("'switched': target has no data.json — saves the current data there", async () => {
+    const dir = await mkTmpDir();
+    const deps = makeDeps(dir, () => localMs(2026, 6, 2));
+    const current = createEmptyData(deps.now(), APP_VERSION);
+
+    const outcome = await prepareDirSwitch(deps, current);
+
+    expect(outcome).toEqual({ kind: 'switched' });
+    const onDisk = JSON.parse(await realFs.readFile(path.join(dir, 'data.json'), 'utf8'));
+    expect(onDisk).toEqual(current);
+  });
+
+  it("'adopted': target already has valid data.json — returns it, and preserves current data as data.previous-<ts>.json", async () => {
+    const dir = await mkTmpDir();
+    const targetData = createEmptyData(localMs(2026, 6, 1), APP_VERSION);
+    const deps = makeDeps(dir, () => localMs(2026, 6, 3));
+    await save(makeDeps(dir, () => localMs(2026, 6, 1)), targetData);
+
+    const current = { ...createEmptyData(localMs(2026, 6, 2), APP_VERSION), tasks: [] };
+    const outcome = await prepareDirSwitch(deps, current);
+
+    expect(outcome).toEqual({ kind: 'adopted', data: targetData });
+
+    const entries = await realFs.readdir(dir);
+    const previousFiles = entries.filter((f) => f.startsWith('data.previous-'));
+    expect(previousFiles.length).toBe(1);
+    const preserved = JSON.parse(await realFs.readFile(path.join(dir, previousFiles[0]), 'utf8'));
+    expect(preserved).toEqual(current);
+
+    // Target's data.json itself is untouched by the adoption.
+    const onDisk = JSON.parse(await realFs.readFile(path.join(dir, 'data.json'), 'utf8'));
+    expect(onDisk).toEqual(targetData);
+  });
+
+  it("'refused': target has an invalid data.json — nothing is written, current data is not saved", async () => {
+    const dir = await mkTmpDir();
+    await realFs.mkdir(dir, { recursive: true });
+    await realFs.writeFile(path.join(dir, 'data.json'), '{ not valid json', 'utf8');
+    const deps = makeDeps(dir, () => localMs(2026, 6, 4));
+    const current = createEmptyData(deps.now(), APP_VERSION);
+
+    const outcome = await prepareDirSwitch(deps, current);
+
+    expect(outcome).toEqual({ kind: 'refused', error: 'That folder has a TimeBound data file that could not be read.' });
+    const entries = await realFs.readdir(dir);
+    expect(entries).toEqual(['data.json']); // untouched — no previous-*, no backups dir created
+  });
+});
+
+describe('resolveBackupPath', () => {
+  async function seedBackup(dir: string, filename: string): Promise<string> {
+    const backupsDirPath = path.join(dir, 'backups');
+    await realFs.mkdir(backupsDirPath, { recursive: true });
+    const p = path.join(backupsDirPath, filename);
+    await realFs.writeFile(p, '{}', 'utf8');
+    return p;
+  }
+
+  it('resolves a real backup file inside the backups folder', async () => {
+    const dir = await mkTmpDir();
+    const backupPath = await seedBackup(dir, 'data-2026-01-01.json');
+    const deps = makeDeps(dir, () => localMs(2026, 1, 5));
+
+    const resolved = await resolveBackupPath(deps, backupPath);
+
+    expect(resolved).toBe(await realFs.realpath(backupPath));
+  });
+
+  it('rejects a path outside the backups folder', async () => {
+    const dir = await mkTmpDir();
+    await seedBackup(dir, 'data-2026-01-01.json');
+    // data.json itself: exists, but is not inside backups/.
+    await realFs.writeFile(path.join(dir, 'data.json'), '{}', 'utf8');
+    const deps = makeDeps(dir, () => localMs(2026, 1, 5));
+
+    expect(await resolveBackupPath(deps, path.join(dir, 'data.json'))).toBeUndefined();
+  });
+
+  it('rejects a traversal attempt out of the backups folder via ".."', async () => {
+    const dir = await mkTmpDir();
+    await seedBackup(dir, 'data-2026-01-01.json');
+    await realFs.writeFile(path.join(dir, 'data.json'), '{}', 'utf8');
+    const deps = makeDeps(dir, () => localMs(2026, 1, 5));
+
+    const traversal = path.join(dir, 'backups', '..', 'data.json');
+    expect(await resolveBackupPath(deps, traversal)).toBeUndefined();
+  });
+
+  it('rejects a file inside the backups folder whose name is not a backup filename', async () => {
+    const dir = await mkTmpDir();
+    const backupsDirPath = path.join(dir, 'backups');
+    await realFs.mkdir(backupsDirPath, { recursive: true });
+    const impostor = path.join(backupsDirPath, 'not-a-backup.json');
+    await realFs.writeFile(impostor, '{}', 'utf8');
+    const deps = makeDeps(dir, () => localMs(2026, 1, 5));
+
+    expect(await resolveBackupPath(deps, impostor)).toBeUndefined();
+  });
+
+  it('rejects a path that does not exist', async () => {
+    const dir = await mkTmpDir();
+    const deps = makeDeps(dir, () => localMs(2026, 1, 5));
+
+    expect(await resolveBackupPath(deps, path.join(dir, 'backups', 'data-2099-01-01.json'))).toBeUndefined();
+  });
 });
