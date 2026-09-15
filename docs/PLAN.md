@@ -577,7 +577,7 @@ Behaviour: input value → `parseCapture` on every change (debounce 0; it is che
 
 ## Slice 3 — Timers, pomodoro, idle and sleep
 
-Deliverable: start/pause/stop on the current task from strip, panel, hotkey, and tray; time in the strip; overtime; pomodoro; native notification at zero; idle pause; sleep gap rule; recurrence engine (needed by completion). e2e: `timer.spec.ts`.
+**Done 2026-09-15.** Deliverable: start/pause/stop on the current task from strip, panel, hotkey, and tray; time in the strip; overtime; pomodoro; native notification at zero; idle pause; sleep gap rule; recurrence engine (needed by completion). e2e: `timer.spec.ts`.
 
 ### Task 3.1: Timer math
 
@@ -593,8 +593,8 @@ export function fmtClock(seconds: number): string;                     // 24:59 
 
 Reducer: `timer/start` (stops any other running timer, folding its elapsed into spent; sets `runningSince = now`), `timer/pause` (`at ?? now`, folds elapsed, clears `runningSince`, records focus into the day), `timer/stop`, `timer/addTime` (planned += seconds; score −1 if `settings.score.enabled`), `task/complete` folds the running timer.
 
-- [ ] Tests: elapsed with clock moved backwards clamps to spent; expiry math; sleep gap over threshold pauses at suspend instant; under threshold keeps running; `fmtClock(-134)` → `'+02:14'`; `fmtClock(3840)` → `'1:04:00'`.
-- [ ] Commit `feat(core): timer math`.
+- [x] Tests: elapsed with clock moved backwards clamps to spent; expiry math; sleep gap over threshold pauses at suspend instant; under threshold keeps running; `fmtClock(-134)` → `'+02:14'`; `fmtClock(3840)` → `'1:04:00'`.
+- [x] Commit `feat(core): timer math`.
 
 ### Task 3.2: Clock in main, notifications, tray/strip controls
 
@@ -602,9 +602,9 @@ Reducer: `timer/start` (stops any other running timer, folding its elapsed into 
 
 `clock.ts`: subscribes to the store; whenever the current running timer changes, clears and re-arms one `setTimeout` for `expiryAt` (cap at 2^31−1 ms, re-arm if beyond); at expiry dispatch nothing to the store but call `notify.timerDone(task)` and, if pomodoro is on, dispatch `timer/pause` and start a break (`settings.timer.breakMinutes`) tracked in memory with its own timeout and a strip "Break · 4:32" state via `strip:state`; `powerMonitor` `suspend|lock-screen` → remember instant; `resume|unlock` → `applySleepGap` through a `timer/pause` with `at`; idle: every 60 s while running, `powerMonitor.getSystemIdleTime() ≥ idlePauseMinutes*60` → pause with `at = now − idle`. `notify.ts`: `new Notification({ title, body, silent: false })` if `settings.notifications`; on Windows requires `setAppUserModelId` (already set in main); clicking the notification opens the planner.
 
-- [ ] Tests (`tests/main/clock.test.ts` with fake timers): arming, re-arming on change, expiry fires once, idle pause dispatch, suspend/resume over threshold.
-- [ ] e2e `timer.spec.ts`: start a 2 s planned timer via dispatch → strip chip counts down → after expiry the dot turns `warn` and chip shows `+00:0x`.
-- [ ] Commit `feat: timers in main with expiry, idle, sleep handling; pomodoro`.
+- [x] Tests (`tests/main/clock.test.ts` with fake timers): arming, re-arming on change, expiry fires once, idle pause dispatch, suspend/resume over threshold.
+- [x] e2e `timer.spec.ts`: start a 2 s planned timer via dispatch → strip chip counts down → after expiry the dot turns `warn` and chip shows `+00:0x`.
+- [x] Commit `feat: timers in main with expiry, idle, sleep handling; pomodoro`.
 
 ### Task 3.3: Recurrence engine
 
@@ -617,8 +617,8 @@ export function describeRule(rule: Rule): string;                // 'Every weekd
 
 Rules: `daily` +1; `weekdays` Fri→Mon, Sat→Mon; `weekly` next listed day; `monthly` uses `dayOfMonth` from the rule clamped to the target month's length (31 Jan → 28 Feb → 31 Mar); `everyN` steps from `anchor` in `n`-unit multiples to the first date after `after`. Spawned task copies title, notes, list, tags, `recurrence`, `plannedSeconds`, sets `due.date = nextOccurrence(rule, completedDate)` keeping `due.time`, `today: false`, new id = `spawnId`.
 
-- [ ] Tests: the month-end chain above; Feb 29 2028 monthly on the 29th → Mar 29; `everyN` anchor arithmetic; DST-crossing dates under both TZ runs; `task/complete` with `spawnId` creates exactly one open task with the new due date and the same recurrence; undo of that completion removes the spawn.
-- [ ] Update `CHANGELOG.md`; commit `feat(core): recurrence engine wired into completion`.
+- [x] Tests: the month-end chain above; Feb 29 2028 monthly on the 29th → Mar 29; `everyN` anchor arithmetic; DST-crossing dates under both TZ runs; `task/complete` with `spawnId` creates exactly one open task with the new due date and the same recurrence; undo of that completion removes the spawn.
+- [x] Update `CHANGELOG.md`; commit `feat(core): recurrence engine wired into completion`.
 
 ---
 
