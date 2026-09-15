@@ -3,7 +3,7 @@ import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
 import { todayView } from '../../src/core/select';
 import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
-import { UNDOABLE } from '../../src/core/undo';
+import { UNDOABLE, UndoStack } from '../../src/core/undo';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -130,19 +130,79 @@ describe('reducer: tasks', () => {
     const a = d.tasks.find(t => t.id === 'a')!;
     expect(a.timer).toEqual({ plannedSeconds: 1500, spentSeconds: 12, runningSince: undefined });
   });
-  it('complete spawns the next daily occurrence via the temporary stub', () => {
-    let d = createEmptyData(t0, '2.0.0');
-    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', today: true, recurrence: { kind: 'daily' }, due: { date: '2026-09-14' } });
-    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 5, by: 'user', spawnId: 'a-2' });
-    const spawned = d.tasks.find(t => t.id === 'a-2')!;
-    expect(spawned).toBeDefined();
-    expect([spawned.status, spawned.today, spawned.due?.date]).toEqual(['open', false, '2026-09-15']);
-  });
-  it('complete does not spawn for non-daily recurrence yet', () => {
-    let d = createEmptyData(t0, '2.0.0');
-    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', recurrence: { kind: 'weekdays' }, due: { date: '2026-09-14' } });
-    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 5, by: 'user', spawnId: 'a-2' });
-    expect(d.tasks.map(t => t.id)).toEqual(['a']);
+  // Task 3.3: recurrence engine wired into task/complete. `now2` is a fixed local
+  // instant (like parse.test.ts's `now`) so `ymd(now2)` is '2026-09-14' regardless
+  // of which time zone `npm test` runs this file under.
+  describe('complete spawns the next occurrence (Task 3.3)', () => {
+    const now2 = new Date(2026, 8, 14, 10, 0).getTime(); // Mon 2026-09-14 local
+
+    it('creates exactly one open spawn with the next due date, same recurrence/list, due time kept, today:false', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, {
+        type: 'task/add', id: 'a', now: now2, title: 'A', today: true, tags: ['x'],
+        recurrence: { kind: 'daily' }, due: { date: '2026-09-14', time: '09:00' }
+      });
+      // task/add has no `notes` field; set it directly to also verify notes are copied.
+      d = { ...d, tasks: d.tasks.map(t => (t.id === 'a' ? { ...t, notes: 'n' } : t)) };
+      const before = d.tasks.length;
+
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+
+      expect(d.tasks.length).toBe(before + 1);
+      const spawned = d.tasks.find(t => t.id === 'a-2')!;
+      expect(spawned).toBeDefined();
+      expect(spawned.status).toBe('open');
+      expect(spawned.today).toBe(false);
+      expect(spawned.due).toEqual({ date: '2026-09-15', time: '09:00' });
+      expect(spawned.recurrence).toEqual({ kind: 'daily' });
+      expect(spawned.listId).toBe(d.tasks.find(t => t.id === 'a')!.listId);
+      expect(spawned.tags).toEqual(['x']);
+      expect(spawned.notes).toBe('n');
+    });
+
+    it('completing early (due in 3 days) spawns after the due date, not from today', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', recurrence: { kind: 'daily' }, due: { date: '2026-09-17' } });
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+      const spawned = d.tasks.find(t => t.id === 'a-2')!;
+      expect(spawned.due?.date).toBe('2026-09-18'); // day after the DUE date, not 2026-09-15 (day after today)
+    });
+
+    it('completing late (due 5 days ago, daily) spawns tomorrow, not the day after the stale due date', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', recurrence: { kind: 'daily' }, due: { date: '2026-09-09' } });
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+      const spawned = d.tasks.find(t => t.id === 'a-2')!;
+      expect(spawned.due?.date).toBe('2026-09-15'); // tomorrow, i.e. day after today (2026-09-14)
+    });
+
+    it('a task with recurrence but no spawnId spawns nothing', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', recurrence: { kind: 'daily' }, due: { date: '2026-09-14' } });
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user' });
+      expect(d.tasks.map(t => t.id)).toEqual(['a']);
+    });
+
+    it('a task with no recurrence spawns nothing even with a spawnId', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', due: { date: '2026-09-14' } });
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+      expect(d.tasks.map(t => t.id)).toEqual(['a']);
+    });
+
+    it('undo via UndoStack removes the spawn (restores the whole prior state)', () => {
+      let d = createEmptyData(now2, '2.0.0');
+      d = reduce(d, { type: 'task/add', id: 'a', now: now2, title: 'A', recurrence: { kind: 'daily' }, due: { date: '2026-09-14' } });
+      const stack = new UndoStack();
+      const before = d;
+      stack.push(before, 'Completed "A"');
+      d = reduce(d, { type: 'task/complete', id: 'a', now: now2, by: 'user', spawnId: 'a-2' });
+      expect(d.tasks.some(t => t.id === 'a-2')).toBe(true);
+
+      const undone = stack.undo(d);
+      expect(undone?.data).toBe(before);
+      expect(undone?.data.tasks.some(t => t.id === 'a-2')).toBe(false);
+    });
   });
   it('complete increments score.value when enabled and completed by the user', () => {
     let d = createEmptyData(t0, '2.0.0');

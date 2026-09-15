@@ -327,7 +327,9 @@ export function StripApp() {
     dispatch({ type: 'task/makeCurrent', id });
   }
   function onComplete(id: string): void {
-    dispatch({ type: 'task/complete', id, by: 'user' });
+    // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the reducer
+    // only spawns a next occurrence when the completed task has `recurrence`.
+    dispatch({ type: 'task/complete', id, by: 'user', spawnId: crypto.randomUUID() });
   }
   function onSkip(id: string): void {
     dispatch({ type: 'task/skip', id });

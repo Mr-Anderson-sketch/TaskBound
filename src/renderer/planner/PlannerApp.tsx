@@ -56,7 +56,9 @@ export function PlannerApp() {
   const toggle = (id: string, done: boolean): void => {
     const action = done
       ? { type: 'task/uncomplete' as const, id, now: Date.now() }
-      : { type: 'task/complete' as const, id, by: 'user' as const, now: Date.now() };
+      // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the
+      // reducer only spawns a next occurrence when the completed task has `recurrence`.
+      : { type: 'task/complete' as const, id, by: 'user' as const, now: Date.now(), spawnId: crypto.randomUUID() };
     void window.tb.invoke('store:dispatch', action).then(({ rev }) => setOwnRev(rev));
   };
 

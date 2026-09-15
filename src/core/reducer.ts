@@ -8,6 +8,7 @@ import { INBOX_ID } from './defaults';
 import { addDays, rolloverCutoffMs, ymd } from './dates';
 import { nextOrder } from './select';
 import { elapsedSeconds } from './timer';
+import { nextOccurrence } from './recur';
 
 const NOTE_MAX_LENGTH = 500;
 const MIN_ADD_TIME_SECONDS = 60;
@@ -137,26 +138,37 @@ export function reduce(data: Data, action: Action): Data {
           draft.settings.score.value += 1;
         }
 
-        // TEMPORARY stub, replaced by nextOccurrence in Task 3.3: only handles
-        // `daily` recurrence on a task with a due date; every other kind spawns nothing yet.
-        if (task.recurrence && action.spawnId && task.recurrence.kind === 'daily' && task.due) {
-          const next: Task = {
+        // Task 3.3: a recurring task with a `spawnId` schedules its next occurrence.
+        // `after` is the later of the completed task's due date and today (string
+        // compare on Ymd) so completing early doesn't spawn a duplicate for the same
+        // date, and completing a task that's days overdue still spawns from today,
+        // not from the stale due date. A task with `recurrence` but no `spawnId`
+        // (e.g. a programmatic completion that opted out) spawns nothing.
+        if (task.recurrence && action.spawnId) {
+          const todayYmd = ymd(action.now);
+          const dueOrToday = task.due?.date ?? todayYmd;
+          const after = dueOrToday > todayYmd ? dueOrToday : todayYmd;
+          const nextDate = nextOccurrence(task.recurrence, after);
+          const parentStillExists = task.parentId !== undefined && draft.tasks.some((t) => t.id === task.parentId);
+          const parentId = parentStillExists ? task.parentId : undefined;
+          const siblings = draft.tasks.filter((t) => t.listId === task.listId && t.parentId === parentId);
+          const spawned: Task = {
             id: action.spawnId,
             title: task.title,
             notes: task.notes,
             listId: task.listId,
-            parentId: task.parentId,
+            parentId,
             tags: [...task.tags],
-            order: task.order,
+            order: nextOrder(siblings),
             today: false,
-            due: { ...task.due, date: addDays(task.due.date, 1) },
+            due: { date: nextDate, time: task.due?.time },
             recurrence: { ...task.recurrence } as Rule,
             timer: task.timer?.plannedSeconds !== undefined ? { plannedSeconds: task.timer.plannedSeconds, spentSeconds: 0 } : undefined,
             status: 'open',
             createdAt: action.now,
             updatedAt: action.now
           };
-          draft.tasks.push(next);
+          draft.tasks.push(spawned);
         }
         break;
       }

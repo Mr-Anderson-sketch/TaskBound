@@ -4,6 +4,7 @@
 // follows; CLAUDE.md ("the store lives in the main process; renderers are views").
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor } from 'electron';
 import type { WebContents } from 'electron';
 import { load, save } from './persist';
@@ -142,7 +143,9 @@ if (!gotLock) {
         completeAdvance: () => {
           const current = store.get().today.current;
           if (!current) return;
-          store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user' });
+          // spawnId is harmless to include unconditionally (Task 3.3 ruling 3): the
+          // reducer only spawns when the completed task actually has `recurrence`.
+          store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user', spawnId: randomUUID() });
         },
         // Reducer support for timer/start and timer/pause lands in Task 3.1; dispatching
         // them now is harmless (a no-op reducer case) and means the hotkey is wired once,
@@ -187,7 +190,7 @@ if (!gotLock) {
       onComplete: () => {
         const current = store.get().today.current;
         if (!current) return;
-        store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user' });
+        store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user', spawnId: randomUUID() });
       },
       onCapture: () => palette.show('capture'),
       onToggleStrip: () => strip.toggle(),

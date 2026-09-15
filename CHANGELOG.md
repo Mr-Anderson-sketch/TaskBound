@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Recurrence (2026-09-15)
+- Repeating tasks: completing one schedules the next occurrence.
+
 ### Undo (2026-09-15)
 - Undo from the strip, the planner, and Ctrl+Alt+Backspace, with a confirmation toast.
 
