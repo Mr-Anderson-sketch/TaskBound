@@ -300,6 +300,12 @@ if (!gotLock) {
       iconPath: app.isPackaged
         ? path.join(process.resourcesPath, 'icons', 'icon-16x16.png')
         : path.join(app.getAppPath(), 'build', 'icon-16x16.png'),
+      // Task 6.1: darwin-only status item template image (`trayTemplate.png` +
+      // `trayTemplate@2x.png` alongside it for Retina) — same packaged/dev split as
+      // iconPath above; harmless on non-darwin (AppTray never reads it there).
+      templateIconPath: app.isPackaged
+        ? path.join(process.resourcesPath, 'icons', 'trayTemplate.png')
+        : path.join(app.getAppPath(), 'build', 'trayTemplate.png'),
       onComplete: () => {
         const current = store.get().today.current;
         if (!current) return;

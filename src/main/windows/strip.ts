@@ -121,6 +121,13 @@ export class StripWindow {
   // still a "shown" window, just clipped to 4px).
   private manuallyHidden = false;
   private fullscreenHidden = false;
+  // Task 6.1 (darwin only, spec Part 5.1 "Zero-pixel mode"/"menu bar mode"): a
+  // FOURTH "wants hidden" reason, composed into `applyVisibility` exactly like
+  // `fullscreenHidden` — true while `settings.strip.menuBarMode` is on, so the
+  // status item's title replaces the strip entirely. Never set on non-darwin
+  // (`applySettings`/`create()` only ever touch it inside a `platform ===
+  // 'darwin'` check) — `menuBarMode` is otherwise ignored there.
+  private menuBarHidden = false;
 
   constructor(private readonly deps: StripWindowDeps) {
     const snapshot = deps.store.get();
@@ -183,6 +190,12 @@ export class StripWindow {
     if (process.platform === 'darwin') {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       win.setAlwaysOnTop(true, 'floating');
+      // Task 6.1 (spec Part 5.1 "Window chrome"): the strip is frameless (no
+      // traffic lights to begin with), but a `type: 'panel'` window can still
+      // surface them if macOS ever decides to draw native window controls for it
+      // (e.g. via Mission Control's window switcher chrome) — this is a defensive,
+      // no-op-when-there's-nothing-there call, not a fix for an observed bug.
+      win.setWindowButtonVisibility(false);
     }
     win.setContentProtection(this.settings.hideFromCapture);
     win.setMenu(null);
@@ -228,6 +241,13 @@ export class StripWindow {
     if (this.settings.clickThrough) {
       this.clickThroughIgnoring = true;
       win.setIgnoreMouseEvents(true, { forward: true });
+    }
+    // Task 6.1: same reasoning as the clickThrough block above — Store.subscribe
+    // never replays, so a strip that starts already configured with menu bar mode
+    // on (loaded from disk) needs this applied once now, before the first
+    // `showInactive()` in the `did-finish-load` handler above runs.
+    if (process.platform === 'darwin' && this.settings.menuBarMode) {
+      this.menuBarHidden = true;
     }
     this.syncPollTimer();
   }
@@ -278,6 +298,7 @@ export class StripWindow {
     this.shapeErrorLogged = false;
     this.manuallyHidden = false;
     this.fullscreenHidden = false;
+    this.menuBarHidden = false;
     this.win = undefined;
   }
 
@@ -325,9 +346,20 @@ export class StripWindow {
     this.applyVisibility();
   }
 
+  /** Task 6.1 (darwin only): composes with the other "wants hidden" reasons exactly
+   * like `setAutoHidden` — called from `applySettings`/`create()` whenever
+   * `settings.strip.menuBarMode` changes on darwin (never called at all on any
+   * other platform, so `menuBarHidden` simply stays false forever there). */
+  private setMenuBarHidden(hidden: boolean): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    if (this.menuBarHidden === hidden) return;
+    this.menuBarHidden = hidden;
+    this.applyVisibility();
+  }
+
   private applyVisibility(): void {
     if (!this.win || this.win.isDestroyed()) return;
-    const shouldShow = this.settings.enabled && !this.manuallyHidden && !this.fullscreenHidden;
+    const shouldShow = this.settings.enabled && !this.manuallyHidden && !this.fullscreenHidden && !this.menuBarHidden;
     if (shouldShow) {
       this.win.showInactive();
     } else {
@@ -386,6 +418,12 @@ export class StripWindow {
       } else {
         this.hide();
       }
+    }
+
+    // Task 6.1 (darwin only): a later toggle of menu bar mode (settings UI, once it
+    // ships) hides/restores the strip the same way `enabled` does above.
+    if (process.platform === 'darwin' && prev.menuBarMode !== s.menuBarMode) {
+      this.setMenuBarHidden(s.menuBarMode);
     }
 
     // Only redock when something that actually affects docking changed — NOT on

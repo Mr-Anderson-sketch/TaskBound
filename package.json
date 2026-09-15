@@ -41,7 +41,9 @@
     ],
     "extraResources": [
       { "from": "build/icon-16x16.png", "to": "icons/icon-16x16.png" },
-      { "from": "build/icon-32x32.png", "to": "icons/icon-32x32.png" }
+      { "from": "build/icon-32x32.png", "to": "icons/icon-32x32.png" },
+      { "from": "build/trayTemplate.png", "to": "icons/trayTemplate.png" },
+      { "from": "build/trayTemplate@2x.png", "to": "icons/trayTemplate@2x.png" }
     ],
     "extraMetadata": {
       "main": "dist/main/main/main.js"
