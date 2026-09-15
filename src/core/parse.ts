@@ -52,6 +52,31 @@ const MONTHS: Record<string, number> = {
 const MONTH_ALT = Object.keys(MONTHS).sort((a, b) => b.length - a.length).join('|');
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Days per month, 0-indexed; Feb is the generous 29 so a leap-year Feb 29 always
+// validates (the exact year isn't known yet at match time for year-less forms).
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+// ---- range validation (invalid literal dates/times/numbers stay unconsumed) ----
+
+function isValidMonthDay(month: number, day: number): boolean {
+  return month >= 0 && month <= 11 && day >= 1 && day <= DAYS_IN_MONTH[month];
+}
+function isValidHour24(h: number): boolean {
+  return h >= 0 && h <= 23;
+}
+function isValidHour12(h: number): boolean {
+  return h >= 1 && h <= 12;
+}
+function isValidMinute(m: number): boolean {
+  return m >= 0 && m <= 59;
+}
+function isValidDayOfMonth(d: number): boolean {
+  return d >= 1 && d <= 31;
+}
+function isValidRepeatN(n: number): boolean {
+  return n >= 1 && n <= 365;
+}
+
 // ---- small pure date/time helpers --------------------------------------------
 
 /** Smallest date > `from` (1..7 days ahead) whose local weekday is in `dows`. */
@@ -194,23 +219,31 @@ function blank(text: string, start: number, end: number): string {
 
 interface RecurrenceMatch { start: number; end: number; rule: Rule }
 
-function matchRecurrence(work: string, todayDow: number): RecurrenceMatch | undefined {
+function matchRecurrence(work: string): RecurrenceMatch | undefined {
   const monthlyOnThe = new RegExp(`\\b(?:every\\s+month\\s+on\\s+the|monthly\\s+on\\s+the)\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`, 'i').exec(work);
   if (monthlyOnThe) {
-    return { start: monthlyOnThe.index, end: monthlyOnThe.index + monthlyOnThe[0].length, rule: { kind: 'monthly', dayOfMonth: Number(monthlyOnThe[1]) } };
+    const dayOfMonth = Number(monthlyOnThe[1]);
+    if (isValidDayOfMonth(dayOfMonth)) {
+      return { start: monthlyOnThe.index, end: monthlyOnThe.index + monthlyOnThe[0].length, rule: { kind: 'monthly', dayOfMonth } };
+    }
+    // Out-of-range day (e.g. "on the 45th"): fall through without consuming anything —
+    // and `monthlyBare` below is guarded so it doesn't scavenge the bare "monthly" word
+    // out of this same invalid phrase.
   }
-  const everyNDays = /\bevery\s+(\d{1,2})\s+days?\b/i.exec(work);
-  if (everyNDays) {
+  const everyNDays = /\bevery\s+(\d{1,3})\s+days?\b/i.exec(work);
+  if (everyNDays && isValidRepeatN(Number(everyNDays[1]))) {
     return { start: everyNDays.index, end: everyNDays.index + everyNDays[0].length, rule: { kind: 'everyN', n: Number(everyNDays[1]), unit: 'day', anchor: '' } };
   }
-  const everyNWeeks = /\bevery\s+(\d{1,2})\s+weeks?\b/i.exec(work);
-  if (everyNWeeks) {
+  const everyNWeeks = /\bevery\s+(\d{1,3})\s+weeks?\b/i.exec(work);
+  if (everyNWeeks && isValidRepeatN(Number(everyNWeeks[1]))) {
     return { start: everyNWeeks.index, end: everyNWeeks.index + everyNWeeks[0].length, rule: { kind: 'everyN', n: Number(everyNWeeks[1]), unit: 'week', anchor: '' } };
   }
-  const monthlyBare = /\bmonthly\b/i.exec(work);
+  // Negative lookahead keeps this from matching the bare word "monthly" inside an
+  // "monthly on the Nth" phrase whose Nth was out of range and therefore unconsumed above.
+  const monthlyBare = /\bmonthly\b(?!\s+on\s+the)/i.exec(work);
   if (monthlyBare) {
-    // Bare `monthly` recurs on today's day-of-month; caller supplies `today` via todayDow's
-    // sibling — computed by the caller when combining, so we defer the value there instead.
+    // Placeholder `dayOfMonth: -1`: the real day is derived by the caller from an
+    // explicit due date when one is present, else today's day-of-month (see parseCapture).
     return { start: monthlyBare.index, end: monthlyBare.index + monthlyBare[0].length, rule: { kind: 'monthly', dayOfMonth: -1 } };
   }
   const daily = /\b(?:every\s+day|daily)\b/i.exec(work);
@@ -228,7 +261,9 @@ function matchRecurrence(work: string, todayDow: number): RecurrenceMatch | unde
   }
   const weeklyBare = /\bweekly\b/i.exec(work);
   if (weeklyBare) {
-    return { start: weeklyBare.index, end: weeklyBare.index + weeklyBare[0].length, rule: { kind: 'weekly', days: [todayDow] } };
+    // Placeholder `days: [-1]`: the real weekday is derived by the caller from an
+    // explicit due date when one is present, else today's weekday (see parseCapture).
+    return { start: weeklyBare.index, end: weeklyBare.index + weeklyBare[0].length, rule: { kind: 'weekly', days: [-1] } };
   }
   return undefined;
 }
@@ -264,23 +299,31 @@ function matchDate(work: string, today: Ymd): DateMatch | undefined {
     return { start: nextMonthWord.index, end: nextMonthWord.index + nextMonthWord[0].length, kind: 'literal', date: ymd(firstOfNext.getTime()) };
   }
 
-  const inNDays = m(/\bin\s+(\d{1,2})\s+days?\b/i);
-  if (inNDays) return { start: inNDays.index, end: inNDays.index + inNDays[0].length, kind: 'literal', date: addDays(today, Number(inNDays[1])) };
+  const inNDays = m(/\bin\s+(\d{1,3})\s+days?\b/i);
+  if (inNDays && isValidRepeatN(Number(inNDays[1]))) return { start: inNDays.index, end: inNDays.index + inNDays[0].length, kind: 'literal', date: addDays(today, Number(inNDays[1])) };
 
-  const inNWeeks = m(/\bin\s+(\d{1,2})\s+weeks?\b/i);
-  if (inNWeeks) return { start: inNWeeks.index, end: inNWeeks.index + inNWeeks[0].length, kind: 'literal', date: addDays(today, Number(inNWeeks[1]) * 7) };
+  const inNWeeks = m(/\bin\s+(\d{1,3})\s+weeks?\b/i);
+  if (inNWeeks && isValidRepeatN(Number(inNWeeks[1]))) return { start: inNWeeks.index, end: inNWeeks.index + inNWeeks[0].length, kind: 'literal', date: addDays(today, Number(inNWeeks[1]) * 7) };
 
   const isoDate = m(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (isoDate) return { start: isoDate.index, end: isoDate.index + isoDate[0].length, kind: 'literal', date: `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}` };
+  if (isoDate && isValidMonthDay(Number(isoDate[2]) - 1, Number(isoDate[3]))) {
+    return { start: isoDate.index, end: isoDate.index + isoDate[0].length, kind: 'literal', date: `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}` };
+  }
 
   const slashDate = m(/\b(\d{1,2})\/(\d{1,2})\b/);
-  if (slashDate) return { start: slashDate.index, end: slashDate.index + slashDate[0].length, kind: 'literal', date: resolveYearlessDate(Number(slashDate[2]) - 1, Number(slashDate[1]), today) };
+  if (slashDate && isValidMonthDay(Number(slashDate[2]) - 1, Number(slashDate[1]))) {
+    return { start: slashDate.index, end: slashDate.index + slashDate[0].length, kind: 'literal', date: resolveYearlessDate(Number(slashDate[2]) - 1, Number(slashDate[1]), today) };
+  }
 
   const monthDay = m(new RegExp(`\\b(${MONTH_ALT})\\s+(\\d{1,2})\\b`, 'i'));
-  if (monthDay) return { start: monthDay.index, end: monthDay.index + monthDay[0].length, kind: 'literal', date: resolveYearlessDate(MONTHS[monthDay[1].toLowerCase()], Number(monthDay[2]), today) };
+  if (monthDay && isValidMonthDay(MONTHS[monthDay[1].toLowerCase()], Number(monthDay[2]))) {
+    return { start: monthDay.index, end: monthDay.index + monthDay[0].length, kind: 'literal', date: resolveYearlessDate(MONTHS[monthDay[1].toLowerCase()], Number(monthDay[2]), today) };
+  }
 
   const dayMonth = m(new RegExp(`\\b(\\d{1,2})\\s+(${MONTH_ALT})\\b`, 'i'));
-  if (dayMonth) return { start: dayMonth.index, end: dayMonth.index + dayMonth[0].length, kind: 'literal', date: resolveYearlessDate(MONTHS[dayMonth[2].toLowerCase()], Number(dayMonth[1]), today) };
+  if (dayMonth && isValidMonthDay(MONTHS[dayMonth[2].toLowerCase()], Number(dayMonth[1]))) {
+    return { start: dayMonth.index, end: dayMonth.index + dayMonth[0].length, kind: 'literal', date: resolveYearlessDate(MONTHS[dayMonth[2].toLowerCase()], Number(dayMonth[1]), today) };
+  }
 
   const weekday = m(new RegExp(`\\b(${DOW_ALT})\\b`, 'i'));
   if (weekday) return { start: weekday.index, end: weekday.index + weekday[0].length, kind: 'weekday', target: DOW[weekday[1].toLowerCase()] };
@@ -294,13 +337,28 @@ interface TimeMatch { start: number; end: number; time: Hm }
 
 function matchTime(work: string): TimeMatch | undefined {
   const colon = /\b(\d{1,2}):(\d{2})\s*([ap]m)?\b/i.exec(work);
-  if (colon) return { start: colon.index, end: colon.index + colon[0].length, time: to24h(Number(colon[1]), Number(colon[2]), colon[3]) };
+  if (colon) {
+    const h = Number(colon[1]);
+    const min = Number(colon[2]);
+    const hourOk = colon[3] ? isValidHour12(h) : isValidHour24(h);
+    if (hourOk && isValidMinute(min)) {
+      return { start: colon.index, end: colon.index + colon[0].length, time: to24h(h, min, colon[3]) };
+    }
+    // Invalid (e.g. "9:75"): fall through, but don't let `atN` below scavenge the hour
+    // back out of this same expression — its `(?!:)` guard keeps it off a trailing colon.
+  }
 
   const ampm = /\b(\d{1,2})\s*([ap]m)\b/i.exec(work);
-  if (ampm) return { start: ampm.index, end: ampm.index + ampm[0].length, time: to24h(Number(ampm[1]), 0, ampm[2]) };
+  if (ampm && isValidHour12(Number(ampm[1]))) {
+    return { start: ampm.index, end: ampm.index + ampm[0].length, time: to24h(Number(ampm[1]), 0, ampm[2]) };
+  }
 
-  const atN = /\bat\s+(\d{1,2})\b/i.exec(work);
-  if (atN) return { start: atN.index, end: atN.index + atN[0].length, time: to24h(Number(atN[1]), 0) };
+  // `(?!:)` keeps this off the hour of a colon-time that failed validation above
+  // (e.g. "at 9:75" must stay fully literal, not partially consumed as "at 9").
+  const atN = /\bat\s+(\d{1,2})(?!:)\b/i.exec(work);
+  if (atN && isValidHour24(Number(atN[1]))) {
+    return { start: atN.index, end: atN.index + atN[0].length, time: to24h(Number(atN[1]), 0) };
+  }
 
   const noon = /\bnoon\b/i.exec(work);
   if (noon) return { start: noon.index, end: noon.index + noon[0].length, time: '12:00' };
@@ -322,6 +380,12 @@ function matchTime(work: string): TimeMatch | undefined {
 interface DurationMatch { start: number; end: number; minutes: number }
 
 function matchDuration(work: string): DurationMatch | undefined {
+  // Space-separated compound form first (`1h 30m`, `1 h 30 min`, `2 hours 15 minutes`):
+  // it must win over the compact/minutes-only matchers below, which would otherwise
+  // claim only the "1h" part and leave a bare trailing number in the title.
+  const compoundHM = /\b(?:for\s+)?(\d{1,3})\s*(?:h|hr|hrs|hour|hours)\s+(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b/i.exec(work);
+  if (compoundHM) return { start: compoundHM.index, end: compoundHM.index + compoundHM[0].length, minutes: Number(compoundHM[1]) * 60 + Number(compoundHM[2]) };
+
   const compact = /\b(\d{1,3})h(\d{1,2})?m?\b/i.exec(work);
   if (compact) return { start: compact.index, end: compact.index + compact[0].length, minutes: Number(compact[1]) * 60 + (compact[2] ? Number(compact[2]) : 0) };
 
@@ -380,15 +444,20 @@ export function parseCapture(input: string, now: number, listNames: string[]): P
     }
   }
 
-  // 3. recurrence (first match by priority)
+  // 3. recurrence (first match by priority). Bare `weekly`/`monthly` carry a sentinel
+  // (`days: [-1]` / `dayOfMonth: -1`) until the combine step below resolves them —
+  // against an explicit due date when one is typed, else today — so the 'repeat' token
+  // (pushed after that resolution) always describes the real, final recurrence.
   let recurrence: Rule | undefined;
+  let recurrenceBare: 'weekly' | 'monthly' | undefined;
+  let recFound: { start: number; end: number } | undefined;
   {
-    const found = matchRecurrence(work, todayDow);
+    const found = matchRecurrence(work);
     if (found) {
-      let rule = found.rule;
-      if (rule.kind === 'monthly' && rule.dayOfMonth === -1) rule = { kind: 'monthly', dayOfMonth: parseYmd(today).getDate() };
-      recurrence = rule;
-      tokens.push({ kind: 'repeat', text: input.slice(found.start, found.end), label: recurrenceLabel(rule), start: found.start });
+      recFound = { start: found.start, end: found.end };
+      recurrence = found.rule;
+      if (recurrence.kind === 'monthly' && recurrence.dayOfMonth === -1) recurrenceBare = 'monthly';
+      if (recurrence.kind === 'weekly' && recurrence.days[0] === -1) recurrenceBare = 'weekly';
       work = blank(work, found.start, found.end);
     }
   }
@@ -408,13 +477,43 @@ export function parseCapture(input: string, now: number, listNames: string[]): P
     work = blank(work, durationFound.start, durationFound.end);
   }
 
-  // ---- combine due + recurrence anchor ----
+  // ---- combine due + recurrence ----
   const dueTime = timeFound?.time;
+
+  // The date the input literally specifies, independent of any recurrence — resolved
+  // exactly as it would be with no recurrence at all (weekday words still get the
+  // today-or-next-occurrence, bumped-past-a-passed-time treatment).
+  const explicitDate: Ymd | undefined = dateFound
+    ? dateFound.kind === 'literal'
+      ? dateFound.date
+      : resolveDateWithTime(today, [dateFound.target], dueTime, nowMinutes)
+    : undefined;
+
+  // Bare recurrence parameters are implicit: derive them from the explicit due date
+  // when one was typed, else from today.
+  if (recurrenceBare === 'monthly') {
+    const dayOfMonth = explicitDate ? parseYmd(explicitDate).getDate() : parseYmd(today).getDate();
+    recurrence = { kind: 'monthly', dayOfMonth };
+  } else if (recurrenceBare === 'weekly') {
+    const dow = explicitDate ? parseYmd(explicitDate).getDay() : todayDow;
+    recurrence = { kind: 'weekly', days: [dow] };
+  }
+
   let dueDate: Ymd | undefined;
 
-  if (dateFound) {
-    dueDate = dateFound.kind === 'literal' ? dateFound.date : resolveDateWithTime(today, [dateFound.target], dueTime, nowMinutes);
-    if (recurrence?.kind === 'everyN') recurrence = { ...recurrence, anchor: dueDate };
+  if (recurrence && explicitDate) {
+    // Explicit recurrence parameters win over a contradicting explicit date: the due
+    // date becomes the first occurrence on/after the typed date, not the typed date
+    // itself (e.g. "every monday sep 16" when the 16th is a Wednesday).
+    if (recurrence.kind === 'everyN') {
+      dueDate = explicitDate;
+      recurrence = { ...recurrence, anchor: explicitDate };
+    } else if (recurrence.kind === 'monthly') {
+      dueDate = firstMonthlyOccurrence(explicitDate, recurrence.dayOfMonth);
+    } else {
+      const allowed = recurrence.kind === 'daily' ? [0, 1, 2, 3, 4, 5, 6] : recurrence.kind === 'weekdays' ? [1, 2, 3, 4, 5] : recurrence.days;
+      dueDate = todayOrNextMatchingDow(explicitDate, allowed);
+    }
   } else if (recurrence) {
     if (recurrence.kind === 'monthly') {
       dueDate = firstMonthlyOccurrence(today, recurrence.dayOfMonth);
@@ -429,11 +528,17 @@ export function parseCapture(input: string, now: number, listNames: string[]): P
       const allowed = recurrence.kind === 'daily' ? 'any' : recurrence.kind === 'weekdays' ? [1, 2, 3, 4, 5] : recurrence.days;
       dueDate = resolveDateWithTime(today, allowed, dueTime, nowMinutes);
     }
+  } else if (explicitDate) {
+    dueDate = explicitDate;
   } else if (timeFound) {
     dueDate = resolveDateWithTime(today, 'any', dueTime, nowMinutes);
   }
 
   const due: Due | undefined = dueDate ? (dueTime ? { date: dueDate, time: dueTime } : { date: dueDate }) : undefined;
+
+  if (recFound && recurrence) {
+    tokens.push({ kind: 'repeat', text: input.slice(recFound.start, recFound.end), label: recurrenceLabel(recurrence), start: recFound.start });
+  }
 
   // ---- 'when' token: only for text actually consumed from the input ----
   if (dateFound && timeFound) {
