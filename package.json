@@ -24,7 +24,7 @@
     "e2e:smoke": "playwright test e2e/smoke.spec.ts",
     "theme:build": "node scripts/build-theme-css.mjs",
     "theme:check": "node scripts/check-contrast.mjs",
-    "package": "npm run build && electron-builder --win",
+    "package": "npm run build && electron-builder --win --publish never",
     "package:mac": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -37,7 +37,11 @@
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.map"
+    ],
+    "asarUnpack": [
+      "**/node_modules/koffi/**"
     ],
     "extraResources": [
       { "from": "build/icon-16x16.png", "to": "icons/icon-16x16.png" },
@@ -51,10 +55,11 @@
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico",
-      "signingHashAlgorithms": [
-        "sha256"
-      ],
-      "signDlls": false
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
     },
     "nsis": {
       "oneClick": true,
