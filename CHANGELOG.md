@@ -4,6 +4,15 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Focus strip (2026-09-15)
+- The app now launches straight into a 32 px focus strip docked to the bottom of your screen — the old sticky-note main window is gone.
+- The strip shows your current task, a running/paused/overtime timer chip, and a hairline progress bar for today; hover it to open a panel with today's next few tasks (complete, skip, or snooze without leaving the strip).
+- `Ctrl+Alt+Space` opens a one-line capture field anywhere; `Enter` adds it to Today, `Shift+Enter` also makes it current.
+- `Ctrl+Alt+Shift+Space` shows/hides the strip, `Ctrl+Alt+Enter` completes the current task, `Ctrl+Alt+Backspace` undoes the last change — all customizable in Settings (Slice 2).
+- A tray icon shows the current task and offers Complete, Quick capture, Show/Hide strip, and Open planner.
+- A placeholder planner window (double-click the strip title, or the tray's "Open planner") lists today's tasks; the full planner arrives in Slice 4.
+- Ledger (light/dark) is the default theme and now follows the OS light/dark setting automatically.
+
 ### Setup (2026-09-14)
 - Captured the pre-rebuild app in `docs/BASELINE.md` with screenshots and a code audit.
 - Wrote the focus-first spec, three independent reviews with every decision recorded, `DESIGN.md`, and `docs/PLAN.md`.

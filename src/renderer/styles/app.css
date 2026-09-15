@@ -88,7 +88,11 @@ body[data-reduced-motion='true'] * {
   align-items: center;
   gap: var(--s-2);
   height: var(--strip-h);
-  width: max-content;
+  /* Fixed width from settings.strip.width (DESIGN.md: "user-resizable 160-1200"),
+     not content-hugging: the title flexes/ellipsizes to fill what's left. The window
+     itself is exactly this wide (main sizes it from settings, or from this element's
+     own ResizeObserver-reported width — see StripApp), so 100% is self-consistent. */
+  width: 100%;
   padding: 0 10px 0 0;
   background: var(--strip-bg);
   color: var(--strip-ink);
@@ -281,7 +285,9 @@ body[data-reduced-motion='true'] * {
 .panel {
   display: flex;
   flex-direction: column;
-  width: max-content;
+  /* Same width as the strip (DESIGN.md "Hover panel") — not content-hugging, for the
+     same self-consistent-measurement reason as `.strip` above. */
+  width: 100%;
   background: var(--strip-bg);
   color: var(--strip-ink);
 }
