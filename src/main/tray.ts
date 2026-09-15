@@ -9,6 +9,7 @@ export interface AppTrayDeps {
   store: Store;
   iconPath: string;
   onComplete: () => void;
+  onToggleTimer: () => void;
   onCapture: () => void;
   onToggleStrip: () => void;
   onOpenPlanner: () => void;
@@ -37,13 +38,16 @@ export class AppTray {
 
   private render(): void {
     const snapshot = this.deps.store.get();
-    const title = snapshot.today.current?.title;
+    const current = snapshot.today.current;
+    const title = current?.title;
     this.tray.setToolTip(title ?? 'TimeBound');
+    const running = current?.timer?.runningSince !== undefined;
 
     const menu = Menu.buildFromTemplate([
       { label: title ?? 'TimeBound', enabled: false },
       { type: 'separator' },
       { label: 'Complete', click: () => this.deps.onComplete() },
+      { label: running ? 'Pause timer' : 'Start timer', enabled: !!current, click: () => this.deps.onToggleTimer() },
       { label: 'Quick capture', click: () => this.deps.onCapture() },
       { label: 'Plan today', click: () => this.deps.onPlanToday() },
       { label: 'Close the day', click: () => this.deps.onCloseDay() },

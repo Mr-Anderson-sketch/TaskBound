@@ -36,6 +36,7 @@ export interface WindowCommands {
   dataImport(): { imported?: number; error?: string } | Promise<{ imported?: number; error?: string }>;
   dataChooseDir(): { dir?: string } | Promise<{ dir?: string }>;
   hotkeysTest(accelerator: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
+  timerToggle(): void | Promise<void>;
 }
 
 export interface RegisterIpcDeps {
@@ -234,5 +235,10 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('hotkeys:test', async (event: IpcMainInvokeEvent, accelerator: unknown) => {
     guard(event);
     return windows.hotkeysTest(parse(AcceleratorSchema, accelerator));
+  });
+
+  ipcMain.handle('timer:toggle', async (event: IpcMainInvokeEvent) => {
+    guard(event);
+    return windows.timerToggle();
   });
 }

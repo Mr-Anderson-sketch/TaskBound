@@ -44,7 +44,8 @@ function makeWindows(): WindowCommands {
     dataExport: vi.fn(async () => ({})),
     dataImport: vi.fn(async () => ({})),
     dataChooseDir: vi.fn(async () => ({})),
-    hotkeysTest: vi.fn(() => ({ ok: true }))
+    hotkeysTest: vi.fn(() => ({ ok: true })),
+    timerToggle: vi.fn()
   };
 }
 
@@ -91,7 +92,8 @@ const VALID_PAYLOADS: Record<string, unknown[]> = {
   'data:export': ['json'],
   'data:import': [],
   'data:chooseDir': [],
-  'hotkeys:test': ['Control+Alt+Space']
+  'hotkeys:test': ['Control+Alt+Space'],
+  'timer:toggle': []
 };
 
 describe('registerIpc', () => {
@@ -119,9 +121,18 @@ describe('registerIpc', () => {
         'data:export',
         'data:import',
         'data:chooseDir',
-        'hotkeys:test'
+        'hotkeys:test',
+        'timer:toggle'
       ].sort()
     );
+  });
+
+  it('forwards timer:toggle to windows', async () => {
+    const { handlers, windows } = setup();
+
+    await handlers.get('timer:toggle')!(eventFrom(ALLOWED_ORIGIN));
+
+    expect(windows.timerToggle).toHaveBeenCalledTimes(1);
   });
 
   it('rejects store:dispatch with a title over 200 chars', async () => {

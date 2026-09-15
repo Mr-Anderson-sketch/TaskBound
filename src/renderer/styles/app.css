@@ -173,6 +173,11 @@ body[data-reduced-motion='true'] * {
 .strip[data-state='saving-failed'] .dot {
   background: var(--danger);
 }
+/* Task 3.2 addendum ruling 7: pomodoro break, dot uses --ok (same family as
+   done-for-today — nothing is wrong, the timer just isn't running). */
+.strip[data-state='break'] .dot {
+  background: var(--ok);
+}
 
 .strip .title {
   flex: 1;
@@ -329,6 +334,21 @@ body[data-reduced-motion='true'] * {
   font-size: 12px;
   color: var(--strip-muted);
   border-bottom: 1px solid var(--line);
+}
+
+/* Task 3.2 addendum ruling 8: groups the timer start/pause button with "Next: …" on
+   the right, keeping `.head`'s space-between a simple two-item split. */
+.panel .head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.panel .head .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
 }
 
 .panel .undo {

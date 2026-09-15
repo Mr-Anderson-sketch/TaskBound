@@ -7,6 +7,21 @@ import type { Edge } from '../../core/types';
 import type { Snapshot } from '../../shared/ipc';
 import { PanelRow } from './PanelRow';
 
+// Minimal geometric glyphs (currentColor, no stroke/gradient) matching the strip's
+// dot/chip aesthetic — DESIGN.md gives no explicit spec for this control (added by
+// task-3.2-addendum ruling 8), so these follow the same flat, functional style.
+const PlayIcon = (
+  <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor" aria-hidden="true">
+    <path d="M0 0 L10 6 L0 12 Z" />
+  </svg>
+);
+const PauseIcon = (
+  <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor" aria-hidden="true">
+    <rect x="0" y="0" width="3" height="12" />
+    <rect x="7" y="0" width="3" height="12" />
+  </svg>
+);
+
 export interface PanelProps {
   snapshot: Snapshot;
   edge: Edge;
@@ -18,6 +33,7 @@ export interface PanelProps {
   onComplete: (id: string) => void;
   onSkip: (id: string) => void;
   onSnooze: (id: string) => void;
+  onToggleTimer: () => void;
 }
 
 export const Panel = forwardRef<HTMLDivElement, PanelProps>(function Panel(
@@ -31,13 +47,16 @@ export const Panel = forwardRef<HTMLDivElement, PanelProps>(function Panel(
     onMakeCurrent,
     onComplete,
     onSkip,
-    onSnooze
+    onSnooze,
+    onToggleTimer
   },
   ref
 ) {
   const { today } = snapshot;
   const rows = [today.current, ...today.next].filter((t): t is NonNullable<typeof t> => t !== undefined).slice(0, 5);
   const nextTitle = today.next[0]?.title;
+  const timerRunning = today.current?.timer?.runningSince !== undefined;
+  const timerLabel = timerRunning ? 'Pause timer' : 'Start timer';
 
   return (
     <div ref={ref} className="panel" data-edge={edge}>
@@ -46,7 +65,19 @@ export const Panel = forwardRef<HTMLDivElement, PanelProps>(function Panel(
         <span>
           Today · {today.done} of {today.total} done
         </span>
-        <span>{nextTitle ? `Next: ${nextTitle}` : ''}</span>
+        <div className="head-right">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={timerLabel}
+            title={timerLabel}
+            disabled={!today.current}
+            onClick={onToggleTimer}
+          >
+            {timerRunning ? PauseIcon : PlayIcon}
+          </button>
+          <span>{nextTitle ? `Next: ${nextTitle}` : ''}</span>
+        </div>
       </div>
       {showUndo && snapshot.lastUndo && (
         <button type="button" className="undo" onClick={onUndo}>

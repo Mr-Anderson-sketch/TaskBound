@@ -5,7 +5,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor } from 'electron';
+import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor, Notification } from 'electron';
 import type { WebContents } from 'electron';
 import { load, save } from './persist';
 import { resolveDataDir } from './paths';
@@ -19,6 +19,7 @@ import { Hotkeys, validateAccelerator } from './hotkeys';
 import type { HotkeyHandlers } from './hotkeys';
 import { AppTray } from './tray';
 import { Clock } from './clock';
+import { Notifier } from './notify';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
 
@@ -83,17 +84,6 @@ if (!gotLock) {
     const plannerWindow = new PlannerWindow({ preloadPath, rendererUrl });
     planner = plannerWindow;
 
-    // --- daily rollover clock (Task 2.3) --------------------------------------------
-
-    const clock = new Clock({
-      store,
-      powerMonitor,
-      now: Date.now,
-      setTimer: (fn, ms) => setTimeout(fn, ms),
-      clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>)
-    });
-    clock.start();
-
     // --- broadcast: store changes and system theme changes reach every live window ---
 
     function liveWebContents(): WebContents[] {
@@ -112,6 +102,53 @@ if (!gotLock) {
     }
 
     store.subscribe(broadcast);
+
+    // Task 3.2 ruling 7: main broadcasts pomodoro break state to every live window.
+    function broadcastBreak(b: { endsAt: number } | null): void {
+      for (const wc of liveWebContents()) wc.send('timer:break', b);
+    }
+
+    // --- notifications (Task 3.2) -----------------------------------------------------
+
+    const notifier = new Notifier({
+      NotificationCtor: Notification,
+      isSupported: () => Notification.isSupported(),
+      getSettings: () => store.get().data.settings,
+      onClick: () => plannerWindow.show()
+    });
+
+    // --- daily rollover + timer clock (Task 2.3, extended Task 3.2) ------------------
+
+    const clock = new Clock({
+      store,
+      powerMonitor,
+      now: Date.now,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+      notify: notifier,
+      broadcastBreak
+    });
+    clock.start();
+
+    // --- timer start/pause: shared by the toggleTimer hotkey, the panel's timer
+    // button (IPC `timer:toggle`), and the tray's Start/Pause timer item -------------
+
+    function toggleTimer(): void {
+      const current = store.get().today.current;
+      if (!current) return;
+      const running = current.timer?.runningSince !== undefined;
+      if (running) {
+        store.dispatch({ type: 'timer/pause', id: current.id, now: Date.now() });
+        return;
+      }
+      // Task 3.2 addendum ruling 3: in pomodoro mode, starting a task with no
+      // plannedSeconds yet first gets one work session's worth of planned time.
+      const settings = store.get().data.settings;
+      if (settings.timer.pomodoro && current.timer?.plannedSeconds === undefined) {
+        store.dispatch({ type: 'timer/addTime', id: current.id, now: Date.now(), seconds: settings.timer.workMinutes * 60 });
+      }
+      store.dispatch({ type: 'timer/start', id: current.id, now: Date.now() });
+    }
 
     // nativeTheme changes are not a dispatch (no Data change), so they don't flow
     // through store.subscribe: broadcast a fresh snapshot (with the new systemDark)
@@ -147,15 +184,7 @@ if (!gotLock) {
           // reducer only spawns when the completed task actually has `recurrence`.
           store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user', spawnId: randomUUID() });
         },
-        // Reducer support for timer/start and timer/pause lands in Task 3.1; dispatching
-        // them now is harmless (a no-op reducer case) and means the hotkey is wired once,
-        // not revisited then.
-        toggleTimer: () => {
-          const current = store.get().today.current;
-          if (!current) return;
-          const running = current.timer?.runningSince !== undefined;
-          store.dispatch({ type: running ? 'timer/pause' : 'timer/start', id: current.id, now: Date.now() });
-        },
+        toggleTimer,
         undo: () => {
           store.undo();
         }
@@ -192,6 +221,7 @@ if (!gotLock) {
         if (!current) return;
         store.dispatch({ type: 'task/complete', id: current.id, now: Date.now(), by: 'user', spawnId: randomUUID() });
       },
+      onToggleTimer: toggleTimer,
       onCapture: () => palette.show('capture'),
       onToggleStrip: () => strip.toggle(),
       onOpenPlanner: () => plannerWindow.show(),
@@ -224,7 +254,8 @@ if (!gotLock) {
         dataExport: () => ({}),
         dataImport: () => ({ error: 'not yet' }),
         dataChooseDir: () => ({}),
-        hotkeysTest: (accelerator) => validateAccelerator(accelerator)
+        hotkeysTest: (accelerator) => validateAccelerator(accelerator),
+        timerToggle: () => toggleTimer()
       }
     });
 
@@ -263,6 +294,17 @@ if (!gotLock) {
     // --- test seam ---------------------------------------------------------------
 
     if (process.env.TIMEBOUND_E2E === '1') {
+      // e2e/timer.spec.ts counts Notifier calls without depending on real OS
+      // notifications: wraps notifier.timerDone so each call also pushes onto
+      // globalThis.__tbEvents, then still runs the real (Notification-gated) path.
+      const events: unknown[] = [];
+      (globalThis as unknown as { __tbEvents: unknown[] }).__tbEvents = events;
+      const realTimerDone = notifier.timerDone.bind(notifier);
+      notifier.timerDone = (task) => {
+        events.push({ type: 'timerDone', taskId: task.id });
+        realTimerDone(task);
+      };
+
       (globalThis as unknown as { __tb: unknown }).__tb = {
         store,
         strip,
@@ -271,7 +313,8 @@ if (!gotLock) {
         hotkeys,
         hotkeyHandlers,
         tray,
-        clock
+        clock,
+        notifier
       };
     }
   });

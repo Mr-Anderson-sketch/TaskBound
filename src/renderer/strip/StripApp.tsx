@@ -101,6 +101,19 @@ function computeView(snapshot: Snapshot, display: ReturnType<typeof useDisplayTi
     };
   }
 
+  // Task 3.2 addendum ruling 8: a planned-but-never-started task (no runningSince,
+  // spentSeconds 0, plannedSeconds set) shows its planned duration in the idle chip
+  // style — the paused outline, but with no `‖` prefix (that's reserved for an
+  // actually-paused-with-progress timer, just above).
+  if (timer.plannedSeconds !== undefined && timer.spentSeconds === 0) {
+    return {
+      state: 'idle',
+      title: today.current.title,
+      chip: { text: fmtClock(display.seconds), variant: 'paused' },
+      progress
+    };
+  }
+
   return { state: 'idle', title: today.current.title, progress };
 }
 
@@ -116,6 +129,11 @@ export function StripApp() {
   const [stripState, setStripState] = useState<{ expanded: boolean; hidden: boolean }>({ expanded: false, hidden: false });
   const [completing, setCompleting] = useState<{ title: string } | undefined>(undefined);
   const [showUndoRow, setShowUndoRow] = useState(false);
+  // Task 3.2 addendum ruling 7: main broadcasts pomodoro break state over
+  // `timer:break`; `breakNow` is a local 1 s tick (only while a break is active) so
+  // the countdown updates without the store ticking (CLAUDE.md: "the store never ticks").
+  const [breakEndsAt, setBreakEndsAt] = useState<number | undefined>(undefined);
+  const [breakNow, setBreakNow] = useState(() => Date.now());
 
   const rootRef = useRef<HTMLDivElement>(null);
   const prevCurrentRef = useRef<Task | undefined>(undefined);
@@ -136,6 +154,18 @@ export function StripApp() {
   useEffect(() => {
     return window.tb.on('strip:state', setStripState);
   }, []);
+
+  // --- timer:break (pomodoro) -----------------------------------------------------
+  useEffect(() => {
+    return window.tb.on('timer:break', (b) => setBreakEndsAt(b?.endsAt));
+  }, []);
+
+  useEffect(() => {
+    if (breakEndsAt === undefined) return;
+    setBreakNow(Date.now());
+    const id = setInterval(() => setBreakNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [breakEndsAt]);
 
   // --- reduced motion: fold prefers-reduced-motion + the in-app setting ----------
   useEffect(() => {
@@ -310,9 +340,19 @@ export function StripApp() {
 
   const edge = snapshot.data.settings.strip.edge;
 
+  // Task 3.2 addendum ruling 7: while a break is active and no task is running, the
+  // strip shows state `break` regardless of what computeView would otherwise render
+  // (completion feedback still takes priority — it's the transient "just finished"
+  // moment, not the day-to-day idle/running state break interrupts).
+  const anyRunning = snapshot.data.tasks.some((t) => t.timer?.runningSince !== undefined);
+  const onBreak = breakEndsAt !== undefined && !anyRunning;
+  const breakRemaining = onBreak ? Math.max(0, Math.round((breakEndsAt! - breakNow) / 1000)) : 0;
+
   const view: StripView = completing
     ? { state: 'done', title: completing.title, strike: true, chip: { text: 'Undo', onClick: () => onUndo() } }
-    : computeView(snapshot, display, captureHint);
+    : onBreak
+      ? { state: 'break', title: 'Break', chip: { text: fmtClock(breakRemaining) } }
+      : computeView(snapshot, display, captureHint);
 
   const titleText = view.titleAllDim ? '' : view.title;
   const dimText = view.titleAllDim ? view.title : view.dim;
@@ -321,6 +361,10 @@ export function StripApp() {
     setCompleting(undefined);
     clearTimeout(completingTimeoutRef.current);
     void window.tb.invoke('store:undo');
+  }
+
+  function onToggleTimer(): void {
+    void window.tb.invoke('timer:toggle');
   }
 
   function onMakeCurrent(id: string): void {
@@ -379,6 +423,7 @@ export function StripApp() {
         onComplete={onComplete}
         onSkip={onSkip}
         onSnooze={onSnooze}
+        onToggleTimer={onToggleTimer}
       />
     );
   }

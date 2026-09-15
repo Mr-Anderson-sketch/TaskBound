@@ -51,12 +51,20 @@ export type InvokeMap = {
   'data:import': () => { imported?: number; error?: string };
   'data:chooseDir': () => { dir?: string };
   'hotkeys:test': (accelerator: string) => { ok: boolean; reason?: string };
+  /** Starts or pauses the current task's timer (main resolves "current"; applies the
+   * pomodoro pre-step from task-3.2-addendum ruling 3 when applicable). Same effect
+   * as the `toggleTimer` hotkey — used by the panel's timer button and the tray's
+   * Start/Pause timer item. */
+  'timer:toggle': () => void;
 };
 
 export type EventMap = {
   'store:changed': Snapshot;
   'palette:mode': PaletteMode;
   'strip:state': { expanded: boolean; hidden: boolean };
+  /** Broadcast by main's Clock while a pomodoro break is active (`{ endsAt }`) and
+   * when it ends or is cancelled (`null`) — see task-3.2-addendum ruling 7. */
+  'timer:break': { endsAt: number } | null;
 };
 
 export interface Bridge {

@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Timers (2026-09-15)
+- Timers: start and pause from the panel, tray, or Ctrl+Alt+Shift+Enter; a notification when time is up; optional pomodoro breaks; timers pause when you step away or the computer sleeps.
+
 ### Recurrence (2026-09-15)
 - Repeating tasks: completing one schedules the next occurrence.
 
