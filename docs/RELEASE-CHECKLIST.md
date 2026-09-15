@@ -15,7 +15,7 @@ Playwright cannot prove that a foreign app keeps keyboard focus, so this matrix 
 | W5 | An elevated app (e.g. Task Manager) | Press the capture hotkey | Hotkey does not fire (documented Windows limitation); nothing crashes | |
 | W6 | Remote Desktop session window | Hover and click the strip | RDP session keeps focus | |
 | W7 | Teams or Zoom screen share of the whole desktop | Enable "Hide from screen sharing" | Viewers do not see the strip; local user does | |
-| W8 | Borderless-fullscreen video (YouTube F11) | With "Hide over fullscreen apps" on/off | On: strip hides within 2 s and returns after; off: strip shows over the video | |
+| W8 | Borderless-fullscreen video (YouTube F11) | With "Hide over fullscreen apps" on/off | On: strip hides within 2 s and returns after; off: strip shows over the video | automated partially by e2e/win32.spec.ts (stubs the watcher's detection and drives its state machine directly — never waits out a real 2 s poll, and never opens a real fullscreen app); manual check still required |
 | W9 | Exclusive-fullscreen game | Alt-Tab in and out | Strip hidden in game (OS behaviour), returns on desktop | |
 | W10 | Taskbar set to auto-hide | Dock bottom, move the mouse to the bottom edge | Taskbar still reveals; strip sits 2 px above the reveal zone | |
 | W11 | Second monitor at a different scale (e.g. 125 %) | Drag the strip across | Strip re-docks at 32 DIP on the new display; position remembered per display | |
@@ -24,7 +24,7 @@ Playwright cannot prove that a foreign app keeps keyboard focus, so this matrix 
 | W14 | Sleep the laptop for 10 minutes with a timer running | Wake | Timer paused at the sleep instant; strip shows "paused while away" | |
 | W15 | Change the system clock backwards 1 hour with a timer running | — | Elapsed does not go negative; timer continues | |
 | W16 | Windows Text size set to 125 % | — | Strip unchanged (in-app text size setting controls it) | |
-| W17 | "Reserve screen space" on, Chrome maximised | — | Chrome stops at the strip edge; off: Chrome extends under it | |
+| W17 | "Reserve screen space" on, Chrome maximised | — | Chrome stops at the strip edge; off: Chrome extends under it | automated partially by e2e/win32.spec.ts (verifies the primary work area shrinks by the strip's height and the strip docks flush to the granted rect, and restores on disable — via the OS's own work-area bookkeeping, not a real maximised Chrome window); manual check still required |
 | W18 | Start on login enabled, sign out and in | — | Strip appears without the planner; no focus taken from the desktop | |
 | W19 | Installer | Run `TimeBound Setup x.y.z.exe` | SmartScreen warning (unsigned; expected until signing); installs per-user; launches; uninstall keeps `%APPDATA%\TimeBound` | |
 

@@ -61,23 +61,51 @@ export function isTaskbarAutoHide(d: DisplayLike, edge: Edge): boolean {
   return workArea.y === bounds.y && workArea.height === bounds.height;
 }
 
+/** Task 7.1 (win32 AppBar) ruling 4 — "which rect to dock against": while an AppBar
+ * reservation is active FOR THIS DISPLAY, the strip must dock against the GRANTED
+ * rect's own edge (`grantedDip`, already converted to DIPs by the caller) instead of
+ * `d.workArea`. Once a reservation is registered, Windows shrinks `workArea` by the
+ * reserved amount — docking against `workArea` on every redock would then push the
+ * strip inward by that same amount again and again (the reservation "chasing" its
+ * own shrinking work area, growing without bound). Bottom edge: the strip's content
+ * bottom sits at the granted rect's bottom; top edge: content top at the granted
+ * rect's top. Falls back to the ordinary `workArea` edge (with the taskbar-auto-hide
+ * 2 px reserve) when there is no active grant. Pure — no Electron, no koffi — so
+ * unit-testable without touching a real display or a real Win32 call. */
+export function dockedEdgeY(
+  d: DisplayLike,
+  edge: Edge,
+  height: number,
+  taskbarAutoHide?: boolean,
+  grantedDip?: Rect
+): number {
+  if (grantedDip) {
+    return edge === 'top' ? grantedDip.y : grantedDip.y + grantedDip.height - height;
+  }
+  const { workArea } = d;
+  const reserve = taskbarAutoHide ? 2 : 0;
+  return edge === 'top' ? workArea.y + reserve : workArea.y + workArea.height - height - reserve;
+}
+
 /** Docks a `size`-shaped window flush to `edge` inside the display's work area.
  * `along` (if given) is the desired x, restored from position memory or the drag
  * cursor; otherwise the strip is horizontally centred. When `taskbarAutoHide` is
  * true, the strip is nudged 2 px further from that edge so it doesn't sit flush
- * against a taskbar that can reveal itself over it. Every field is rounded. */
+ * against a taskbar that can reveal itself over it. `grantedDip` (Task 7.1), when
+ * given, overrides the docked edge's y via `dockedEdgeY` — see its doc comment.
+ * Every field is rounded. */
 export function dockBounds(
   d: DisplayLike,
   edge: Edge,
   size: { width: number; height: number },
   along?: number,
-  taskbarAutoHide?: boolean
+  taskbarAutoHide?: boolean,
+  grantedDip?: Rect
 ): Rect {
   const { workArea } = d;
   const centred = workArea.x + (workArea.width - size.width) / 2;
   const x = clampAlong(d, along ?? centred, size.width);
-  const reserve = taskbarAutoHide ? 2 : 0;
-  const y = edge === 'top' ? workArea.y + reserve : workArea.y + workArea.height - size.height - reserve;
+  const y = dockedEdgeY(d, edge, size.height, taskbarAutoHide, grantedDip);
   return roundRect({ x, y, width: size.width, height: size.height });
 }
 

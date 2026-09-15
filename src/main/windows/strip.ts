@@ -24,6 +24,9 @@ import {
   sliverBounds
 } from './displays';
 import type { DisplayLike, Rect } from './displays';
+import { appBarRect, rectPxToDip } from '../win32/geometry';
+import type { RectPx } from '../win32/geometry';
+import type { Win32 } from '../win32';
 
 const STRIP_HEIGHT_DEFAULT = 32;
 const MAX_COLLAPSED_HEIGHT = 44;
@@ -44,6 +47,12 @@ export interface StripWindowDeps {
   preloadPath: string;
   rendererUrl: (route: 'strip') => string;
   isDev: boolean;
+  /** Task 7.1: the bound win32 API (AppBar reservation + fullscreen detection),
+   * or `undefined` on every other platform, when koffi is unavailable, or when any
+   * binding failed — the strip must dock and show/hide exactly as before in every
+   * one of those cases. `main.ts` resolves this once via `loadWin32()` before the
+   * `Store` (and its `capabilities`) is even created. */
+  win32?: Win32;
 }
 
 type StripState = { expanded: boolean; hidden: boolean };
@@ -90,6 +99,29 @@ export class StripWindow {
   private lastShapeRect: Rect | undefined;
   private shapeErrorLogged = false;
 
+  // Task 7.1: AppBar reservation state. `appBarSignature` is `display id : edge :
+  // content height` for whatever configuration is CURRENTLY reserved (or
+  // `undefined` if nothing is) — `syncAppBar` only re-sends ABM_NEW/QUERYPOS/SETPOS
+  // when this changes, so a redock triggered by an unrelated store notification (or
+  // a 60 Hz drag tick) doesn't hammer `SHAppBarMessage`. `grantedRectDip`/
+  // `grantedDisplayId` are the last GRANTED rect (converted to DIPs) and the display
+  // it was granted for — `dockBounds` only uses it while docking onto that SAME
+  // display (see `redock`'s doc comment on why a stale cross-monitor grant must
+  // never be used).
+  private appBarSignature: string | undefined;
+  private grantedRectDip: Rect | undefined;
+  private grantedDisplayId: number | undefined;
+
+  // Task 7.1: strip visibility composes two independent "wants hidden" reasons —
+  // the user (hotkey/tray toggle, or `settings.strip.enabled` turning off) and the
+  // fullscreen watcher (`setAutoHidden('fullscreen', ...)`), matching the addendum's
+  // "visible iff enabled && !userHidden && !fullscreenHidden" ruling. `hidden`
+  // (declared above) is a THIRD, unrelated concept — the auto-hide-on-idle sliver —
+  // and is intentionally not part of this composition (an auto-hidden sliver is
+  // still a "shown" window, just clipped to 4px).
+  private manuallyHidden = false;
+  private fullscreenHidden = false;
+
   constructor(private readonly deps: StripWindowDeps) {
     const snapshot = deps.store.get();
     this.settings = snapshot.data.settings.strip;
@@ -109,6 +141,14 @@ export class StripWindow {
    * application. Read by the e2e seam to verify C1's flush-to-edge fix. */
   get lastShape(): Rect | undefined {
     return this.lastShapeRect;
+  }
+
+  /** Task 7.1: the AppBar's last GRANTED rect, in DIPs, for whichever display it was
+   * granted on — `undefined` when there is no active reservation (win32 unavailable,
+   * `reserveSpace` off, or the reservation failed). Read by e2e/win32.spec.ts to
+   * assert the strip docks flush against it. */
+  get grantedRect(): Rect | undefined {
+    return this.grantedRectDip;
   }
 
   // --- lifecycle -----------------------------------------------------------------
@@ -205,6 +245,9 @@ export class StripWindow {
    * change — so this must not assume `destroy()` is the only way out). Idempotent:
    * safe to run twice (once from `destroy()`, once more if `closed` then fires). */
   private cleanup(): void {
+    // Task 7.1 ruling 4 ("release on ... strip destroy"): release BEFORE resetting
+    // `this.win` below — `releaseAppBar` needs it to get the native window handle.
+    this.releaseAppBar();
     this.stopDragTimers();
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -233,33 +276,63 @@ export class StripWindow {
     this.lastRequestedRect = undefined;
     this.lastShapeRect = undefined;
     this.shapeErrorLogged = false;
+    this.manuallyHidden = false;
+    this.fullscreenHidden = false;
     this.win = undefined;
   }
 
   // --- visibility ------------------------------------------------------------------
+  // Task 7.1: the window's ACTUAL Electron visibility is now a composition of two
+  // independent "wants it hidden" reasons (`manuallyHidden`/`fullscreenHidden`),
+  // recomputed by `applyVisibility` on every change to either — see the fields'
+  // doc comment above.
 
   showInactive(): void {
     if (!this.win || this.win.isDestroyed()) return;
-    this.win.showInactive();
+    this.manuallyHidden = false;
+    this.applyVisibility();
   }
 
   hide(): void {
     if (!this.win || this.win.isDestroyed()) return;
-    this.win.hide();
+    this.manuallyHidden = true;
+    this.applyVisibility();
   }
 
   toggle(): void {
     if (!this.win || this.win.isDestroyed()) return;
-    if (this.win.isVisible()) {
-      this.hide();
-    } else {
-      this.showInactive();
-    }
+    this.manuallyHidden = !this.manuallyHidden;
+    this.applyVisibility();
   }
 
   isVisible(): boolean {
     if (!this.win || this.win.isDestroyed()) return false;
     return this.win.isVisible();
+  }
+
+  /** Task 7.1 addendum ruling 5: composes with the user's own show/hide — hiding for
+   * a reason (currently only `'fullscreen'`) never overrides a user-driven hide, and
+   * un-hiding for a reason never shows the strip if the user separately hid it (or
+   * `settings.strip.enabled` is off): visible iff `enabled && !manuallyHidden &&
+   * !fullscreenHidden`. Called by the `FullscreenWatcher` main.ts wires up (never
+   * called on non-win32 or when `capabilities.fullscreenDetect` is false — there is
+   * no watcher to call it there, so `fullscreenHidden` simply stays false forever). */
+  setAutoHidden(reason: 'fullscreen', hidden: boolean): void {
+    void reason; // only one reason exists today; kept for a readable call site and future reasons.
+    if (!this.win || this.win.isDestroyed()) return;
+    if (this.fullscreenHidden === hidden) return;
+    this.fullscreenHidden = hidden;
+    this.applyVisibility();
+  }
+
+  private applyVisibility(): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    const shouldShow = this.settings.enabled && !this.manuallyHidden && !this.fullscreenHidden;
+    if (shouldShow) {
+      this.win.showInactive();
+    } else {
+      this.win.hide();
+    }
   }
 
   // --- docking / edge --------------------------------------------------------------
@@ -328,7 +401,13 @@ export class StripWindow {
       prev.collapsed !== s.collapsed ||
       prev.autoHide !== s.autoHide ||
       prev.clickThrough !== s.clickThrough ||
-      prev.hideFromCapture !== s.hideFromCapture;
+      prev.hideFromCapture !== s.hideFromCapture ||
+      // Task 7.1: reserveSpace flipping needs a redock even though nothing else
+      // changed — turning it on must claim the AppBar reservation (and dock against
+      // the granted rect instead of workArea), turning it off must release it (and
+      // fall back to plain workArea docking). `syncAppBar` (called from `redock`)
+      // does the actual reserve/release; this only ensures redock() runs at all.
+      prev.reserveSpace !== s.reserveSpace;
 
     if (dockingRelevantChanged) {
       this.redock();
@@ -421,7 +500,13 @@ export class StripWindow {
     if (!this.dragTimer && !this.dragTimeout) return;
     this.stopDragTimers();
     if (!this.win || this.win.isDestroyed()) return;
-    this.persistDock(this.lastDisplay ?? this.currentDisplay());
+    const d = this.lastDisplay ?? this.currentDisplay();
+    this.persistDock(d);
+    // Task 7.1: a drag can end on a different display than it started on, and drag
+    // ticks themselves never reserve/re-reserve (60 Hz is far too hot a path for
+    // `SHAppBarMessage`) — `redock()` here picks the reservation back up (or moves
+    // it) for wherever the strip actually landed. A no-op when reserveSpace is off.
+    this.redock();
   }
 
   // --- internals: docking ----------------------------------------------------------
@@ -451,10 +536,101 @@ export class StripWindow {
     if (!this.win || this.win.isDestroyed() || this.dragTimer) return;
     const d = this.currentDisplay();
     this.lastDisplay = d;
+    this.syncAppBar(d);
     const auto = isTaskbarAutoHide(d, this.settings.edge);
     const remembered = restorePosition(this.settings.positions, d);
-    this.dockedRect = dockBounds(d, this.settings.edge, this.size, remembered?.x, auto);
+    // Task 7.1: only use the granted rect while docking onto the SAME display it was
+    // granted for — `syncAppBar` releases/re-reserves as soon as the display used to
+    // compute a NEW grant changes, but there is a one-redock window (e.g. right
+    // after `onDisplaysChanged` fires) where `grantedRectDip` could still be a
+    // moment stale; comparing display ids here is what actually prevents ever
+    // docking against another display's granted rect.
+    const grantedDip = this.grantedDisplayId === d.id ? this.grantedRectDip : undefined;
+    this.dockedRect = dockBounds(d, this.settings.edge, this.size, remembered?.x, auto, grantedDip);
     this.applyVisualBounds();
+  }
+
+  /** Task 7.1 ruling 4: claims (or releases) the AppBar reservation for the CURRENT
+   * `settings.reserveSpace`/`settings.enabled`/edge/display/content-height, and
+   * records the granted rect (converted to DIPs) for `redock` to dock against.
+   * Cheap to call on every `redock()` — it only actually talks to
+   * `SHAppBarMessage` when the "reserve for exactly this configuration" signature
+   * changes, so an unrelated redock (a different display's `display-metrics-changed`
+   * event, say) is a no-op. */
+  private syncAppBar(d: DisplayLike): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    const w32 = this.deps.win32;
+    const wantReserve = !!w32 && this.settings.enabled && this.settings.reserveSpace;
+    if (!wantReserve) {
+      this.releaseAppBar();
+      return;
+    }
+    const sig = `${d.id}:${this.settings.edge}:${this.size.height}`;
+    if (this.appBarSignature === sig) return;
+    const rectPx = appBarRect(d, this.settings.edge, this.size.height);
+    let result: { granted: RectPx } | undefined;
+    try {
+      result = w32!.appBar.reserve(this.win.getNativeWindowHandle(), this.settings.edge, rectPx);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('StripWindow: AppBar reserve failed; docking against the plain work area instead', err);
+      result = undefined;
+    }
+    if (result) {
+      // Only remember the signature on SUCCESS: a failed first-time registration
+      // (ABM_NEW) must be retried on the next redock rather than permanently giving
+      // up until something else (edge/display/height) happens to change the
+      // signature. A hwnd that is already registered cannot fail this way — appbar.ts
+      // only ever skips re-registering, never re-fails, once ABM_NEW has succeeded
+      // once — so this only matters for that very first reservation attempt.
+      this.appBarSignature = sig;
+      this.grantedRectDip = rectPxToDip(result.granted, d.scaleFactor);
+      this.grantedDisplayId = d.id;
+    } else {
+      this.grantedRectDip = undefined;
+      this.grantedDisplayId = undefined;
+    }
+  }
+
+  /** Task 7.1: releases any active AppBar reservation (idempotent — safe to call
+   * whether or not one is currently held). Called from `syncAppBar` whenever
+   * reservation is no longer wanted, from `cleanup()` (window destroy), and from
+   * the public `releaseAppBarReservation()` main.ts calls on `before-quit`. */
+  private releaseAppBar(): void {
+    if (this.appBarSignature === undefined) return;
+    const w32 = this.deps.win32;
+    if (w32 && this.win && !this.win.isDestroyed()) {
+      try {
+        w32.appBar.release(this.win.getNativeWindowHandle());
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('StripWindow: AppBar release failed', err);
+      }
+    }
+    this.appBarSignature = undefined;
+    this.grantedRectDip = undefined;
+    this.grantedDisplayId = undefined;
+  }
+
+  /** Task 7.1: the raw native window handle (win32 HWND, as Electron encodes it) —
+   * used by main's `FullscreenWatcher` wiring to exclude the strip from "is some
+   * OTHER app fullscreen" detection. `undefined` before `create()`/after
+   * `destroy()`. Harmless (and never called) on non-win32. */
+  nativeWindowHandle(): Buffer | undefined {
+    if (!this.win || this.win.isDestroyed()) return undefined;
+    return this.win.getNativeWindowHandle();
+  }
+
+  /** Task 7.1 ruling 4 ("release on ... app quit"): releases any active AppBar
+   * reservation WITHOUT touching the rest of the window's lifecycle. `main.ts` calls
+   * this synchronously at the start of its `before-quit` handler, before the
+   * (asynchronous) store flush — `SHAppBarMessage(ABM_REMOVE)` is synchronous, so
+   * the OS's own work-area bookkeeping is restored immediately, even if the process
+   * then takes a moment to actually exit. A reservation left behind would otherwise
+   * shrink the user's desktop work area until their next logout — see the e2e
+   * safety note in e2e/win32.spec.ts. */
+  releaseAppBarReservation(): void {
+    this.releaseAppBar();
   }
 
   private applyVisualBounds(): void {

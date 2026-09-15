@@ -5,7 +5,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor, Notification } from 'electron';
+import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor, Notification, BrowserWindow } from 'electron';
 import type { WebContents } from 'electron';
 import { load, save } from './persist';
 import { resolveDataDir } from './paths';
@@ -20,6 +20,8 @@ import type { HotkeyHandlers } from './hotkeys';
 import { AppTray } from './tray';
 import { Clock, resolveToggleTimerAction } from './clock';
 import { Notifier } from './notify';
+import { loadWin32 } from './win32';
+import { FullscreenWatcher } from './win32/watcher';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
 
@@ -88,15 +90,26 @@ if (!gotLock) {
 
     const result = await load({ dir: dataDir, now: Date.now }, app.getVersion(), legacyPath);
 
+    // Task 7.1: resolve the optional win32 integration (AppBar space reservation +
+    // fullscreen detection) BEFORE the Store exists, so `capabilities` — reported
+    // once in every `Snapshot` and never recomputed — is accurate from the very
+    // first snapshot. `loadWin32()` returns `undefined` on every non-Windows
+    // platform, when koffi (an optional dependency) is missing, or when any Win32
+    // binding fails; every capability then simply stays false and the app runs
+    // exactly as it did before this task.
+    const win32 = await loadWin32();
+    const capabilities = { appBar: !!win32, fullscreenDetect: !!win32 };
+
     const store = new Store(result.data, {
       save: (d) => save({ dir: dataDir, now: Date.now }, d),
       now: Date.now,
       appVersion: app.getVersion(),
       platform: process.platform,
-      systemDark: () => nativeTheme.shouldUseDarkColors
+      systemDark: () => nativeTheme.shouldUseDarkColors,
+      capabilities
     });
 
-    const strip = new StripWindow({ store, preloadPath, rendererUrl, isDev });
+    const strip = new StripWindow({ store, preloadPath, rendererUrl, isDev, win32 });
     strip.create();
 
     const palette = new PaletteWindow({ preloadPath, rendererUrl });
@@ -126,6 +139,61 @@ if (!gotLock) {
     function broadcastBreak(b: { endsAt: number } | null): void {
       for (const wc of liveWebContents()) wc.send('timer:break', b);
     }
+
+    // --- win32: fullscreen watcher (Task 7.1) -----------------------------------------
+
+    // Every one of TimeBound's OWN windows, as raw native handles — the fullscreen
+    // watcher must never mistake, say, the planner briefly covering the screen for
+    // some OTHER app going fullscreen. Recomputed on every poll tick (not cached):
+    // palette/planner are created lazily-shown but constructed up front, so their
+    // `webContents` can start existing (and stop, on close) over the app's lifetime.
+    function ownHwnds(): Buffer[] {
+      const list: Buffer[] = [];
+      for (const wc of liveWebContents()) {
+        const bw = BrowserWindow.fromWebContents(wc);
+        if (!bw || bw.isDestroyed()) continue;
+        try {
+          list.push(bw.getNativeWindowHandle());
+        } catch {
+          // A window mid-teardown can throw here; skip it, it can't be foreground.
+        }
+      }
+      return list;
+    }
+
+    // e2e seam (ruling 7): lets e2e/win32.spec.ts stub `isFullscreen` and drive the
+    // watcher's `tick()` directly instead of waiting out a real 2 s poll or needing a
+    // real other app to actually go fullscreen. `undefined` (the default) means "use
+    // the real win32 detection" — production code never sets this.
+    let fullscreenStub: boolean | undefined;
+
+    const fullscreenWatcher = win32
+      ? new FullscreenWatcher({
+          isFullscreen: () => (fullscreenStub !== undefined ? fullscreenStub : win32.fullscreen.isForegroundFullscreen(ownHwnds())),
+          setInterval: (fn, ms) => setInterval(fn, ms),
+          clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+          onEnter: () => strip.setAutoHidden('fullscreen', true),
+          onExit: () => strip.setAutoHidden('fullscreen', false)
+        })
+      : undefined;
+
+    // Addendum ruling 5: poll only while capabilities.fullscreenDetect (i.e. win32
+    // is available) && settings.strip.hideOverFullscreen && the strip is enabled.
+    function syncFullscreenWatcher(s: Settings): void {
+      if (!fullscreenWatcher) return;
+      if (s.strip.hideOverFullscreen && s.strip.enabled) {
+        fullscreenWatcher.start(2000);
+      } else {
+        fullscreenWatcher.stop();
+        // Stopping is a deliberate "stop caring", not an observed exit from
+        // fullscreen (see watcher.ts's `stop()` doc comment) — un-hide for the
+        // fullscreen reason explicitly so turning the setting off (or disabling the
+        // strip) never leaves the strip stuck hidden.
+        strip.setAutoHidden('fullscreen', false);
+      }
+    }
+    syncFullscreenWatcher(store.get().data.settings);
+    store.subscribe((s) => syncFullscreenWatcher(s.data.settings));
 
     // --- notifications (Task 3.2) -----------------------------------------------------
 
@@ -287,6 +355,13 @@ if (!gotLock) {
       if (quitting) return;
       event.preventDefault();
       quitting = true;
+      // Task 7.1 ruling 4 ("release on ... app quit"): synchronous and first, before
+      // anything async — a reservation left behind would shrink the user's desktop
+      // work area until their next logout. `releaseAppBarReservation()` is a no-op
+      // when there is no active reservation (win32 unavailable, reserveSpace off, or
+      // it was never granted).
+      strip.releaseAppBarReservation();
+      fullscreenWatcher?.stop();
       plannerWindow.setQuitting(true);
       hotkeys.unregisterAll();
       clock.stop();
@@ -331,7 +406,19 @@ if (!gotLock) {
         hotkeyHandlers,
         tray,
         clock,
-        notifier
+        notifier,
+        // Task 7.1 (win32.spec.ts): capabilities are already in every Snapshot, but
+        // the watcher itself needs a direct seam — `setFullscreenStub` overrides
+        // `isForegroundFullscreen`'s result without a real other app going
+        // fullscreen, and `tick()` drives the watcher's state machine synchronously
+        // instead of waiting out a real 2s poll.
+        win32: {
+          capabilities,
+          setFullscreenStub: (value: boolean | undefined) => {
+            fullscreenStub = value;
+          },
+          tick: () => fullscreenWatcher?.tick()
+        }
       };
     }
   });

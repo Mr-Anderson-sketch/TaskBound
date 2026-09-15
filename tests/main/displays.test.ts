@@ -4,6 +4,7 @@ import {
   displaySignature,
   clampAlong,
   dockBounds,
+  dockedEdgeY,
   panelBounds,
   sliverBounds,
   handleRect,
@@ -99,6 +100,53 @@ describe('dockBounds', () => {
     const rect = dockBounds(d, 'bottom', { width: 421, height: 32 }); // odd width -> fractional centring
     expect(rect.x).toBe(Math.round(-1920 + (1920 - 421) / 2));
     expect(Number.isInteger(rect.x)).toBe(true);
+  });
+
+  it('docks against a granted rect (Task 7.1) instead of workArea when one is given', () => {
+    const d = makeDisplay(); // plain workArea would give y = 720 - 32 = 688
+    const granted = { x: 0, y: 700, width: 1366, height: 40 };
+    const rect = dockBounds(d, 'bottom', { width: 420, height: 32 }, undefined, false, granted);
+    expect(rect.y).toBe(700 + 40 - 32);
+    // x-axis clamping is unaffected by the grant — still against the display's own workArea.
+    expect(rect.x).toBe((1366 - 420) / 2);
+  });
+});
+
+// Task 7.1 (win32 AppBar) ruling 4: while a reservation is active, dock against the
+// GRANTED rect's own edge instead of `workArea` — otherwise workArea (already
+// shrunk by our own reservation) would push the strip inward on every redock.
+describe('dockedEdgeY', () => {
+  it('falls back to the plain workArea edge (bottom) when there is no grant', () => {
+    const d = makeDisplay(); // workArea height 720, 48 px taskbar
+    expect(dockedEdgeY(d, 'bottom', 32)).toBe(720 - 32);
+  });
+
+  it('falls back to the plain workArea edge (top) when there is no grant', () => {
+    const d = makeDisplay({ workArea: { x: 0, y: 40, width: 1366, height: 728 } });
+    expect(dockedEdgeY(d, 'top', 32)).toBe(40);
+  });
+
+  it('still applies the 2px taskbar-auto-hide reserve when there is no grant', () => {
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 768 } });
+    expect(dockedEdgeY(d, 'bottom', 32, true)).toBe(768 - 32 - 2);
+  });
+
+  it('bottom edge with a grant: content bottom = granted rect bottom, ignoring workArea entirely', () => {
+    const d = makeDisplay(); // workArea would otherwise put y at 720-32=688
+    const granted = { x: 0, y: 700, width: 1366, height: 40 }; // granted bottom = 740
+    expect(dockedEdgeY(d, 'bottom', 32, false, granted)).toBe(740 - 32);
+  });
+
+  it('top edge with a grant: content top = granted rect top, ignoring workArea entirely', () => {
+    const d = makeDisplay();
+    const granted = { x: 0, y: 12, width: 1366, height: 40 };
+    expect(dockedEdgeY(d, 'top', 32, false, granted)).toBe(12);
+  });
+
+  it('a grant overrides the taskbar-auto-hide reserve too (the grant IS the true reserved edge)', () => {
+    const d = makeDisplay({ workArea: { x: 0, y: 0, width: 1366, height: 768 } });
+    const granted = { x: 0, y: 700, width: 1366, height: 40 };
+    expect(dockedEdgeY(d, 'bottom', 32, true, granted)).toBe(740 - 32);
   });
 });
 
