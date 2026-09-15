@@ -504,7 +504,7 @@ export class Hotkeys { apply(settings: Settings['hotkeys'], handlers: Record<key
 
 ## Slice 2 — Capture and the keyboard sheets
 
-Deliverable: natural-language capture with live token chips, multi-line paste, plan-today and close-day sheets, undo toast, day rollover. e2e: `capture.spec.ts` extended with parsed tokens.
+**Done 2026-09-15.** Deliverable: natural-language capture with live token chips, multi-line paste, plan-today and close-day sheets, undo toast, day rollover. e2e: `capture.spec.ts` extended with parsed tokens.
 
 ### Task 2.1: Natural-language parser
 
@@ -524,7 +524,7 @@ Grammar (v1, English, deterministic; every rule is a regex tried right-to-left o
 - Recurrence: `every day|daily`, `every weekday|weekdays`, `every monday|mon`, `every mon,wed,fri`, `weekly` (same weekday as due or today), `every 2 weeks`, `every 3 days`, `monthly`, `every month on the 15th`.
 - Ambiguity rules: a bare number is never a time or date (`buy 9 apples` keeps 9 in the title; `at 9` is a time); `for` only starts a duration when followed by a number and a unit; `eat at joes` keeps `at joes`.
 
-- [ ] **Step 1: Table test**
+- [x] **Step 1: Table test**
 
 ```ts
 const now = new Date(2026, 8, 14, 10, 0).getTime(); // Mon 14 Sep 2026 10:00
@@ -546,7 +546,7 @@ const rows: Array<[string, Partial<ParsedCapture>]> = [
 it.each(rows)('%s', (input, expected) => expect(parseCapture(input, now, ['Work', 'Home'])).toMatchObject(expected));
 ```
 
-- [ ] Steps 2–5 as usual; commit `feat(core): natural-language capture parser`.
+- [x] Steps 2–5 as usual; commit `feat(core): natural-language capture parser`.
 
 ### Task 2.2: Capture UI with token chips and paste
 
@@ -554,7 +554,7 @@ it.each(rows)('%s', (input, expected) => expect(parseCapture(input, now, ['Work'
 
 Behaviour: input value → `parseCapture` on every change (debounce 0; it is cheap) → chips per DESIGN.md; `Enter` dispatches `task/add` with `today: true` (and `makeCurrent` when `Shift+Enter`); `Escape` once clears tokens by wrapping the raw text in quotes (`"…"` disables parsing), twice closes; pasting text with ≥ 2 lines adds one task per non-empty line through the parser and shows "Added 5 tasks"; unknown `/list` creates the list first (`list/add` then `task/add`).
 
-- [ ] Commit `feat(palette): live-parsed capture with token chips and multi-line paste`.
+- [x] Commit `feat(palette): live-parsed capture with token chips and multi-line paste`.
 
 ### Task 2.3: Day rollover, plan today, close day
 
@@ -562,16 +562,16 @@ Behaviour: input value → `parseCapture` on every change (debounce 0; it is che
 
 `day/rollover`: for every open task with `today: true` created before `date`, increment `days[date−1].rolledOver` and keep `today: true` (tasks stay until the user unplans them); ensure a `DayRecord` for `date`. Plan today lists: rolled-over tasks, tasks due `date` or earlier, then Inbox top 10; space toggles `today`, Enter confirms via one `task/setToday` and closes; footer shows selected count and summed `plannedSeconds`. Close day: `dayStats` (completed, focusSeconds, rolledOver) plus an optional note → `day/close`; strip shows the done-for-today state when `today` total > 0 and done === total.
 
-- [ ] Tests: rollover increments `rolledOver` once per task per day and is idempotent for the same date; `dayStats` sums `spentSeconds` deltas recorded that day (store per-task `focusByDay`? No: record focus into `DayRecord.focusSeconds` at `timer/pause|stop|complete` time in the reducer using `ymd(now)`).
-- [ ] e2e: with two rolled-over tasks, `palette:show('plan')` lists them; Enter keeps the first only; strip shows it.
-- [ ] Commit `feat: day rollover, plan today, close day`.
+- [x] Tests: rollover increments `rolledOver` once per task per day and is idempotent for the same date; `dayStats` sums `spentSeconds` deltas recorded that day (store per-task `focusByDay`? No: record focus into `DayRecord.focusSeconds` at `timer/pause|stop|complete` time in the reducer using `ymd(now)`).
+- [x] e2e: with two rolled-over tasks, `palette:show('plan')` lists them; Enter keeps the first only; strip shows it.
+- [x] Commit `feat: day rollover, plan today, close day`.
 
 ### Task 2.4: Undo everywhere
 
 **Files:** Modify `src/main/ipc.ts`, `src/renderer/strip/Panel.tsx` (undo row), `src/renderer/planner/Toast.tsx` (`role="status"`), hotkeys handler for `undo`.
 
-- [ ] e2e: complete via hotkey handler (call the registered handler through `app.evaluate` on the Hotkeys instance exposed for tests as `globalThis.__tb.hotkeys`), then `store:undo` → previous task current again; toast text "Undid: Completed …".
-- [ ] Update `CHANGELOG.md`; commit `feat: undo from strip, planner, and hotkey`.
+- [x] e2e: complete via hotkey handler (call the registered handler through `app.evaluate` on the Hotkeys instance exposed for tests as `globalThis.__tb.hotkeys`), then `store:undo` → previous task current again; toast text "Undid: Completed …".
+- [x] Update `CHANGELOG.md`; commit `feat: undo from strip, planner, and hotkey`.
 
 ---
 
