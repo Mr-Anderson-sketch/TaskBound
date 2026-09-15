@@ -5,9 +5,9 @@
 // convention as commandsModel.ts.
 import type { Settings } from '../../core/types';
 
-// Task 5.2 will add 'hotkeys', Task 5.3 will add 'data'; this task builds
-// strip/theme/timer/startup/score. Order matches docs/design/settings.png.
-export type SettingsSection = 'strip' | 'timer' | 'theme' | 'startup' | 'score';
+// Task 5.3 will add 'data'; this task builds strip/theme/timer/startup/score (5.1) and
+// hotkeys (5.2). Order matches docs/design/settings.png (with 'data' omitted).
+export type SettingsSection = 'strip' | 'hotkeys' | 'timer' | 'theme' | 'startup' | 'score';
 
 export interface SettingsSectionEntry {
   id: SettingsSection;
@@ -16,6 +16,7 @@ export interface SettingsSectionEntry {
 
 export const SETTINGS_SECTIONS: readonly SettingsSectionEntry[] = [
   { id: 'strip', label: 'Strip' },
+  { id: 'hotkeys', label: 'Hotkeys' },
   { id: 'timer', label: 'Timer & pomodoro' },
   { id: 'theme', label: 'Theme' },
   { id: 'startup', label: 'Startup & notifications' },

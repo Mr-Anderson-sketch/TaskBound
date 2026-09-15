@@ -29,6 +29,7 @@ const ALLOWED_INVOKE = new Set<keyof InvokeMap>([
   'data:import',
   'data:chooseDir',
   'hotkeys:test',
+  'hotkeys:status',
   'timer:toggle'
 ]);
 

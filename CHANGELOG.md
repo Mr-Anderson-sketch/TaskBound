@@ -6,6 +6,7 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ### Settings (2026-09-15)
 - Settings: strip, theme, timer, startup and score, all applied instantly.
+- Hotkeys: a recorder for each of the five global shortcuts, with live validation and a conflict warning when the OS won't grant one.
 
 ### Windows integration (2026-09-15)
 - Windows: optionally reserve screen space for the strip, and hide it over full-screen apps.

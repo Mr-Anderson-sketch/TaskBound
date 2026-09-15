@@ -12,15 +12,15 @@ import {
 } from '../../src/renderer/settings/settingsModel';
 
 describe('SETTINGS_SECTIONS', () => {
-  it('lists strip, timer, theme, startup, score in that order', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['strip', 'timer', 'theme', 'startup', 'score']);
+  it('lists strip, hotkeys, timer, theme, startup, score in that order', () => {
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['strip', 'hotkeys', 'timer', 'theme', 'startup', 'score']);
   });
 });
 
 describe('sectionFromView', () => {
   it('extracts the section from a settings:<section> view id', () => {
     expect(sectionFromView('settings:theme')).toBe('theme');
-    expect(sectionFromView('settings:timer')).toBe('timer');
+    expect(sectionFromView('settings:hotkeys')).toBe('hotkeys');
   });
 
   it('falls back to strip for an unrecognised or non-settings view', () => {

@@ -52,6 +52,13 @@ export type InvokeMap = {
   'data:import': () => { imported?: number; error?: string };
   'data:chooseDir': () => { dir?: string };
   'hotkeys:test': (accelerator: string) => { ok: boolean; reason?: string };
+  /** Task 5.2 binding ruling: the last `Hotkeys.apply` result, keyed by hotkey NAME
+   * (not accelerator string) — `false` means that hotkey is not currently an active
+   * global shortcut (invalid, denylisted, or `globalShortcut.register` itself failed,
+   * e.g. already held by another app). The Hotkeys settings section polls this after
+   * saving a new accelerator to show "In use by another app" when registration didn't
+   * actually take. */
+  'hotkeys:status': () => Record<'capture' | 'toggleStrip' | 'completeAdvance' | 'toggleTimer' | 'undo', boolean>;
   /** Starts or pauses the current task's timer (main resolves "current"; in pomodoro
    * mode, starting dispatches `timer/startSession` instead of `timer/start` — see
    * task-3.2-fix-round-1.md item 1). Same effect as the `toggleTimer` hotkey — used

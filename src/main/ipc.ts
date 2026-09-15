@@ -37,6 +37,9 @@ export interface WindowCommands {
   dataImport(): { imported?: number; error?: string } | Promise<{ imported?: number; error?: string }>;
   dataChooseDir(): { dir?: string } | Promise<{ dir?: string }>;
   hotkeysTest(accelerator: string): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>;
+  hotkeysStatus():
+    | Record<'capture' | 'toggleStrip' | 'completeAdvance' | 'toggleTimer' | 'undo', boolean>
+    | Promise<Record<'capture' | 'toggleStrip' | 'completeAdvance' | 'toggleTimer' | 'undo', boolean>>;
   timerToggle(): void | Promise<void>;
 }
 
@@ -241,6 +244,11 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('hotkeys:test', async (event: IpcMainInvokeEvent, accelerator: unknown) => {
     guard(event);
     return windows.hotkeysTest(parse(AcceleratorSchema, accelerator));
+  });
+
+  ipcMain.handle('hotkeys:status', async (event: IpcMainInvokeEvent) => {
+    guard(event);
+    return windows.hotkeysStatus();
   });
 
   ipcMain.handle('timer:toggle', async (event: IpcMainInvokeEvent) => {
