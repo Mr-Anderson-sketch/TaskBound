@@ -35,6 +35,7 @@ export type InvokeMap = {
   'strip:hover': (inside: boolean) => void;
   'palette:show': (mode: PaletteMode) => void;
   'palette:hide': () => void;
+  'palette:reportSize': (size: { height: number }) => void;
   'planner:show': () => void;
   'planner:hide': () => void;
   'app:openExternal': (url: string) => void;

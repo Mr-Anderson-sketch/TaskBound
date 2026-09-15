@@ -1,6 +1,7 @@
 // core/select — read-only queries over Data. No mutation, no Date.now(): callers pass `now`.
-import type { Data, Task, Id } from './types';
+import type { Data, Task, Id, Ymd } from './types';
 import { INBOX_ID } from './defaults';
+import { dayKeyForRollover, parseYmd } from './dates';
 
 export interface TodayView {
   current?: Task;
@@ -76,4 +77,91 @@ export function orderBetween(a?: number, b?: number): number {
   if (a === undefined) return b! - 1000;
   if (b === undefined) return a + 1000;
   return (a + b) / 2;
+}
+
+// --- day rollover / close (Task 2.3) --------------------------------------------
+
+const INBOX_CANDIDATE_LIMIT = 10;
+const ROLLOVER_CUTOFF_HOUR_MS = 4 * 60 * 60 * 1000;
+
+export interface PlanCandidate {
+  task: Task;
+  reason: 'rolled-over' | 'due' | 'overdue' | 'inbox';
+}
+
+/**
+ * Candidates for the "Plan today" sheet: open, top-level, non-snoozed tasks, in four
+ * groups (rolled over, due today, overdue, then up to 10 Inbox tasks not already
+ * listed), each ordered by `order` then `createdAt`, with no task appearing twice.
+ * "Rolled over" mirrors the reducer's own `day/rollover` cutoff exactly — `today: true`
+ * and `createdAt` before 04:00 local on the day `now` belongs to (so the sheet agrees
+ * with what a rollover dispatched right now would do), not whether rollover has
+ * actually run yet.
+ */
+export function planCandidates(data: Data, now: number): PlanCandidate[] {
+  const todayKey = dayKeyForRollover(now);
+  const cutoff = parseYmd(todayKey).getTime() + ROLLOVER_CUTOFF_HOUR_MS;
+
+  const open = data.tasks.filter((t) => t.status === 'open' && t.parentId === undefined && !isSnoozed(t, now));
+  const seen = new Set<Id>();
+  const result: PlanCandidate[] = [];
+
+  const push = (tasks: Task[], reason: PlanCandidate['reason']): void => {
+    for (const task of tasks) {
+      result.push({ task, reason });
+      seen.add(task.id);
+    }
+  };
+
+  push(
+    open.filter((t) => t.today && t.createdAt < cutoff).sort(byOrderThenCreated),
+    'rolled-over'
+  );
+  push(
+    open.filter((t) => !seen.has(t.id) && t.due?.date === todayKey).sort(byOrderThenCreated),
+    'due'
+  );
+  push(
+    open.filter((t) => !seen.has(t.id) && t.due !== undefined && t.due.date < todayKey).sort(byOrderThenCreated),
+    'overdue'
+  );
+  push(
+    open
+      .filter((t) => !seen.has(t.id) && t.listId === INBOX_ID)
+      .sort(byOrderThenCreated)
+      .slice(0, INBOX_CANDIDATE_LIMIT),
+    'inbox'
+  );
+
+  return result;
+}
+
+export interface DayStats {
+  date: Ymd;
+  completed: number;
+  focusSeconds: number;
+  rolledOver: number;
+  planned: number;
+  done: number;
+  note?: string;
+  closedAt?: number;
+}
+
+/** `days[date]`'s recorded stats (zeros/undefined when no record exists yet) plus
+ * `planned`/`done`, which always describe the LIVE Today set via `todayView` (not a
+ * historical snapshot) — matches the "Close the day" sheet showing today's real
+ * progress even before `day/close` has ever run for `date`. */
+export function dayStats(data: Data, date: Ymd, now: number): DayStats {
+  const rec = data.days.find((d) => d.date === date);
+  const view = todayView(data, now);
+  return {
+    date,
+    completed: rec?.completed ?? 0,
+    focusSeconds: rec?.focusSeconds ?? 0,
+    rolledOver: rec?.rolledOver ?? 0,
+    planned: view.total,
+    done: view.done,
+    note: rec?.note,
+    closedAt: rec?.closedAt
+  };
 }

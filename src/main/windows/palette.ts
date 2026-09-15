@@ -7,6 +7,11 @@ import type { PaletteMode } from '../../shared/ipc';
 const WIDTH = 560;
 const HEIGHT = 132;
 const VERTICAL_FRACTION = 0.28;
+// Task 2.3, addendum ruling 9b: a `blur` that lands within this window of `show()`
+// is treated as the stray tail of a `hide()` that happened earlier in the same tick
+// (Windows can deliver it just after the new `show()`), not a real "user clicked
+// away" — ignoring it stops the freshly-shown palette from hiding itself.
+const BLUR_GRACE_MS = 150;
 
 export interface PaletteWindowDeps {
   preloadPath: string;
@@ -17,6 +22,7 @@ export class PaletteWindow {
   private win: BrowserWindow | undefined;
   private loaded = false;
   private pendingMode: PaletteMode | undefined;
+  private lastShownAt: number | undefined;
 
   constructor(private readonly deps: PaletteWindowDeps) {}
 
@@ -56,7 +62,10 @@ export class PaletteWindow {
         this.pendingMode = undefined;
       }
     });
-    win.on('blur', () => this.hide());
+    win.on('blur', () => {
+      if (this.lastShownAt !== undefined && Date.now() - this.lastShownAt < BLUR_GRACE_MS) return;
+      this.hide();
+    });
     win.on('closed', () => {
       if (this.win === win) {
         this.win = undefined;
@@ -71,6 +80,23 @@ export class PaletteWindow {
     this.create();
     const win = this.win;
     if (!win || win.isDestroyed()) return;
+
+    // Addendum ruling 9b(a): switching modes on an already-visible palette (the tray's
+    // "Plan today"/"Close the day" items, or the strip's plan chip, while the palette
+    // is already open) just re-sends the mode and refocuses — it must NOT re-position
+    // or re-size the window, which would fight the mode's own ResizeObserver-driven
+    // `setContentHeight` and could retrigger the blur-hides-the-window quirk this same
+    // ruling fixes below.
+    if (win.isVisible()) {
+      if (this.loaded) {
+        win.webContents.send('palette:mode', mode);
+      } else {
+        this.pendingMode = mode;
+      }
+      win.focus();
+      this.lastShownAt = Date.now();
+      return;
+    }
 
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
@@ -87,6 +113,7 @@ export class PaletteWindow {
 
     win.show();
     win.focus();
+    this.lastShownAt = Date.now();
   }
 
   hide(): void {
@@ -97,6 +124,18 @@ export class PaletteWindow {
     // including the always-on-top strip — not just the palette. Known gap: focus
     // does not automatically return to the previously-active app on macOS after
     // quick capture (see docs/RELEASE-CHECKLIST.md M15); revisit in Slice 6.
+  }
+
+  /** Task 2.3, addendum ruling 6: resizes the content area to the height the
+   * renderer's ResizeObserver reported for the current mode (132 for capture; up to
+   * 480 for the plan sheet, whose own `.list` scrolls internally beyond that),
+   * keeping `x` and the top `y` fixed — the window grows/shrinks downward from where
+   * it was shown, never re-centring or drifting off the display. */
+  setContentHeight(height: number): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    const { x, y } = this.win.getBounds();
+    this.win.setContentSize(WIDTH, height);
+    this.win.setPosition(x, y);
   }
 
   destroy(): void {

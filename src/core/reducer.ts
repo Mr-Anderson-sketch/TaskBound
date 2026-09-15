@@ -3,10 +3,27 @@
 // not-yet-implemented actions are a no-op and return the same `Data` reference
 // (immer's `produce` does this automatically when the recipe makes no changes).
 import { produce } from 'immer';
-import type { Data, Action, Task, Rule, Settings } from './types';
+import type { Data, Action, Task, Rule, Settings, DayRecord, Ymd } from './types';
 import { INBOX_ID } from './defaults';
-import { addDays } from './dates';
+import { addDays, parseYmd, ymd } from './dates';
 import { nextOrder } from './select';
+
+const ROLLOVER_CUTOFF_HOUR_MS = 4 * 60 * 60 * 1000;
+const NOTE_MAX_LENGTH = 500;
+
+/** Finds `draft.days`' record for `date`, creating (and inserting, keeping `days`
+ * sorted by date) a zeroed one if it doesn't exist yet. Used by `task/complete`,
+ * `task/uncomplete`, `day/rollover`, and `day/close` — the only places a `DayRecord`
+ * is ever created or touched. */
+function upsertDay(draft: Data, date: Ymd): DayRecord {
+  let rec = draft.days.find((d) => d.date === date);
+  if (!rec) {
+    rec = { date, completed: 0, focusSeconds: 0, rolledOver: 0 };
+    draft.days.push(rec);
+    draft.days.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  return rec;
+}
 
 /** Move a task to the front of Today: `today = true`, order below every other open Today task. */
 function applyMakeCurrent(draft: Data, id: string, now: number): void {
@@ -76,8 +93,14 @@ export function reduce(data: Data, action: Action): Data {
         const task = draft.tasks.find((t) => t.id === action.id);
         if (!task) break;
 
+        // Task 2.3, addendum ruling 2: the seconds folded into spentSeconds by THIS
+        // completion (0 if no timer was running) also land in the day's focusSeconds.
+        // Focus recorded outside of a completion (timer/pause, timer/stop) arrives
+        // with the timer reducers in Task 3.1.
+        let foldedSeconds = 0;
         if (task.timer?.runningSince !== undefined) {
           const elapsed = Math.max(0, action.now - task.timer.runningSince) / 1000;
+          foldedSeconds = Math.round(elapsed);
           task.timer.spentSeconds = Math.round(task.timer.spentSeconds + elapsed);
           task.timer.runningSince = undefined;
         }
@@ -86,6 +109,10 @@ export function reduce(data: Data, action: Action): Data {
         task.completedAt = action.now;
         task.completedBy = action.by;
         task.updatedAt = action.now;
+
+        const completionDay = upsertDay(draft, ymd(action.now));
+        completionDay.completed += 1;
+        completionDay.focusSeconds += foldedSeconds;
 
         if (draft.settings.score.enabled && action.by === 'user') {
           draft.settings.score.value += 1;
@@ -118,6 +145,13 @@ export function reduce(data: Data, action: Action): Data {
       case 'task/uncomplete': {
         const task = draft.tasks.find((t) => t.id === action.id);
         if (!task) break;
+        // Addendum ruling 2: decrement the ORIGINAL completion day's `completed`
+        // (floor 0), read BEFORE completedAt is cleared below. Leaves focusSeconds
+        // alone — the focus time was genuinely spent regardless of the reopen.
+        if (task.completedAt !== undefined) {
+          const rec = draft.days.find((d) => d.date === ymd(task.completedAt!));
+          if (rec) rec.completed = Math.max(0, rec.completed - 1);
+        }
         task.status = 'open';
         task.completedAt = undefined;
         task.completedBy = undefined;
@@ -208,9 +242,37 @@ export function reduce(data: Data, action: Action): Data {
       case 'list/delete': // implemented in Task 4.3
         break;
 
-      case 'day/rollover': // implemented in Task 2.3
-      case 'day/close': // implemented in Task 2.3
+      case 'day/rollover': {
+        // Addendum ruling 3: idempotent per `date` — a record already carrying
+        // `rolloverAppliedAt` means this exact date's rollover already ran; leave the
+        // draft untouched so `produce` returns the same `Data` reference.
+        const existing = draft.days.find((d) => d.date === action.date);
+        if (existing?.rolloverAppliedAt !== undefined) break;
+
+        // "Belonged to an earlier day": created before 04:00 local on `date`'s
+        // calendar day (parseYmd gives local midnight; +4h is the rollover cutoff).
+        const cutoff = parseYmd(action.date).getTime() + ROLLOVER_CUTOFF_HOUR_MS;
+        const rolledCount = draft.tasks.filter(
+          (t) => t.status === 'open' && t.parentId === undefined && t.today && t.createdAt < cutoff
+        ).length;
+
+        if (rolledCount > 0) {
+          const prevDay = upsertDay(draft, addDays(action.date, -1));
+          prevDay.rolledOver += rolledCount;
+        }
+
+        const today = upsertDay(draft, action.date);
+        today.rolloverAppliedAt = action.now;
         break;
+      }
+
+      case 'day/close': {
+        const rec = upsertDay(draft, action.date);
+        rec.closedAt = action.now;
+        const trimmed = action.note?.trim();
+        rec.note = trimmed && trimmed.length > 0 ? trimmed.slice(0, NOTE_MAX_LENGTH) : undefined;
+        break;
+      }
 
       default: {
         const _exhaustive: never = action;

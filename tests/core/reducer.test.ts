@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
 import { todayView } from '../../src/core/select';
+import { ymd, dayKeyForRollover, addDays } from '../../src/core/dates';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -86,8 +87,6 @@ describe('reducer: tasks', () => {
     expect(reduce(d, { type: 'timer/addTime', id: 'a', now: t0, seconds: 5 })).toBe(before);
     expect(reduce(d, { type: 'list/rename', id: INBOX_ID, now: t0, name: 'Inbox2' })).toBe(before);
     expect(reduce(d, { type: 'list/delete', id: INBOX_ID, now: t0, moveTasksTo: INBOX_ID })).toBe(before);
-    expect(reduce(d, { type: 'day/rollover', now: t0, date: '2026-09-14' })).toBe(before);
-    expect(reduce(d, { type: 'day/close', now: t0, date: '2026-09-14' })).toBe(before);
   });
   it('uncomplete reopens a task and clears completion fields', () => {
     let d = createEmptyData(t0, '2.0.0');
@@ -211,5 +210,159 @@ describe('reducer: data/replace', () => {
     const d2 = createEmptyData(t0 + 1, '2.0.1');
     const result = reduce(d1, { type: 'data/replace', now: t0, data: d2 });
     expect(result).toBe(d2);
+  });
+});
+
+describe('reducer: task/complete and task/uncomplete record the day (Task 2.3)', () => {
+  it('complete upserts days[ymd(now)]: completed += 1, focusSeconds += 0 with no running timer', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    expect(d.days).toEqual([{ date: ymd(t0), completed: 1, focusSeconds: 0, rolledOver: 0 }]);
+  });
+  it("complete folds a running timer into the day's focusSeconds", () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A' });
+    d = { ...d, tasks: d.tasks.map((t) => (t.id === 'a' ? { ...t, timer: { spentSeconds: 0, runningSince: t0 } } : t)) };
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 12_000, by: 'timer' });
+    const rec = d.days.find((r) => r.date === ymd(t0 + 12_000))!;
+    expect(rec).toMatchObject({ completed: 1, focusSeconds: 12 });
+  });
+  it('two completions on the same day accumulate into one record', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0 + 1000, by: 'user' });
+    expect(d.days).toHaveLength(1);
+    expect(d.days[0].completed).toBe(2);
+  });
+  it('days stays sorted by date as records from different days are added', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    d = reduce(d, { type: 'task/complete', id: 'b', now: t0 + oneDayMs, by: 'user' });
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    expect(d.days.map((r) => r.date)).toEqual([ymd(t0), ymd(t0 + oneDayMs)].sort((a, b) => a.localeCompare(b)));
+  });
+  it('uncomplete decrements completed on the ORIGINAL completion day, floored at 0, and leaves focus alone', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/uncomplete', id: 'a', now: t0 + 1000 });
+    const rec = d.days.find((r) => r.date === ymd(t0))!;
+    expect(rec).toMatchObject({ completed: 0, focusSeconds: 0 });
+  });
+  it('uncomplete never drives completed below 0', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0, by: 'user' });
+    d = reduce(d, { type: 'task/uncomplete', id: 'a', now: t0 + 1 });
+    d = reduce(d, { type: 'task/uncomplete', id: 'a', now: t0 + 2 }); // already open: reducer no-ops (completedAt undefined)
+    const rec = d.days.find((r) => r.date === ymd(t0))!;
+    expect(rec.completed).toBe(0);
+  });
+  it('uncomplete is a no-op on the day record when the task was never completed', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/uncomplete', id: 'a', now: t0 });
+    expect(d.days).toEqual([]);
+  });
+});
+
+describe('reducer: day/rollover (Task 2.3)', () => {
+  it("increments the PREVIOUS day's rolledOver once per open, top-level, today task created before the cutoff", () => {
+    const yesterday = t0 - 24 * 60 * 60 * 1000;
+    let d = createEmptyData(yesterday, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: yesterday, title: 'A', today: true });
+    d = reduce(d, { type: 'task/add', id: 'b', now: yesterday, title: 'B', today: true });
+    const todayKey = dayKeyForRollover(t0);
+    const prevKey = addDays(todayKey, -1);
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const rec = d.days.find((r) => r.date === prevKey);
+    expect(rec?.rolledOver).toBe(2);
+    expect(d.tasks.every((t) => t.today)).toBe(true); // tasks keep today: true
+  });
+
+  it('does not count a task created today (after the cutoff)', () => {
+    const todayKey = dayKeyForRollover(t0);
+    const prevKey = addDays(todayKey, -1);
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', today: true });
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const rec = d.days.find((r) => r.date === prevKey);
+    expect(rec?.rolledOver ?? 0).toBe(0);
+  });
+
+  it('is idempotent for the same date: a second dispatch is a no-op (same reference)', () => {
+    const yesterday = t0 - 24 * 60 * 60 * 1000;
+    const todayKey = dayKeyForRollover(t0);
+    let d = createEmptyData(yesterday, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: yesterday, title: 'A', today: true });
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const after1 = d;
+    d = reduce(d, { type: 'day/rollover', now: t0 + 1, date: todayKey });
+    expect(d).toBe(after1);
+  });
+
+  it('ensures a DayRecord exists for `date` with rolloverAppliedAt set', () => {
+    const todayKey = dayKeyForRollover(t0);
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const rec = d.days.find((r) => r.date === todayKey);
+    expect(rec?.rolloverAppliedAt).toBe(t0);
+  });
+
+  it('days stays sorted after rollover creates records', () => {
+    const todayKey = dayKeyForRollover(t0);
+    const yesterday = t0 - 24 * 60 * 60 * 1000;
+    let d = createEmptyData(yesterday, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: yesterday, title: 'A', today: true });
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const dates = d.days.map((r) => r.date);
+    const sorted = [...dates].sort((a, b) => a.localeCompare(b));
+    expect(dates).toEqual(sorted);
+    expect(dates).toEqual([addDays(todayKey, -1), todayKey].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('ignores done and sub-tasks even if today: true and created before the cutoff', () => {
+    const yesterday = t0 - 24 * 60 * 60 * 1000;
+    const todayKey = dayKeyForRollover(t0);
+    const prevKey = addDays(todayKey, -1);
+    let d = createEmptyData(yesterday, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: yesterday, title: 'A', today: true });
+    d = reduce(d, { type: 'task/add', id: 'a1', now: yesterday, title: 'A1', today: true, parentId: 'a' });
+    d = reduce(d, { type: 'task/complete', id: 'a', now: yesterday, by: 'user' });
+    d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
+    const rec = d.days.find((r) => r.date === prevKey);
+    expect(rec?.rolledOver ?? 0).toBe(0);
+  });
+});
+
+describe('reducer: day/close (Task 2.3)', () => {
+  it('upserts days[date] with closedAt and a trimmed note', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'day/close', now: t0 + 5, date: ymd(t0), note: '  Good day  ' });
+    const rec = d.days.find((r) => r.date === ymd(t0))!;
+    expect(rec).toMatchObject({ closedAt: t0 + 5, note: 'Good day' });
+  });
+  it('an empty/whitespace-only note becomes undefined', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'day/close', now: t0, date: ymd(t0), note: '   ' });
+    expect(d.days.find((r) => r.date === ymd(t0))!.note).toBeUndefined();
+  });
+  it('a note over 500 chars is truncated', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    const long = 'x'.repeat(600);
+    d = reduce(d, { type: 'day/close', now: t0, date: ymd(t0), note: long });
+    expect(d.days.find((r) => r.date === ymd(t0))!.note).toHaveLength(500);
+  });
+  it('no note given leaves note undefined', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'day/close', now: t0, date: ymd(t0) });
+    const rec = d.days.find((r) => r.date === ymd(t0))!;
+    expect(rec.closedAt).toBe(t0);
+    expect(rec.note).toBeUndefined();
   });
 });

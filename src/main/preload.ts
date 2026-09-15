@@ -19,6 +19,7 @@ const ALLOWED_INVOKE = new Set<keyof InvokeMap>([
   'strip:hover',
   'palette:show',
   'palette:hide',
+  'palette:reportSize',
   'planner:show',
   'planner:hide',
   'app:openExternal',

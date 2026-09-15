@@ -448,12 +448,18 @@ body[data-route='palette'] {
 
 .palette {
   width: 560px;
-  height: 132px;
   background: var(--surface);
   color: var(--ink);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* Capture is the one mode with a fixed, content-independent height (Task 2.2's rows
+   are tuned to fit exactly); plan/close size to their own content, reported to main via
+   ResizeObserver -> palette:reportSize -> PaletteWindow.setContentHeight (Task 2.3). */
+.palette.mode-capture {
+  height: 132px;
 }
 
 .palette .in {
@@ -559,6 +565,153 @@ body[data-route='palette'] {
   border-radius: 3px;
   padding: 0 4px;
   background: var(--bg);
+}
+
+.palette .foot .btn {
+  flex: none;
+}
+
+/* ---------------------------------------------------------------------------------
+   Palette — Plan today / Close the day (Task 2.3)
+--------------------------------------------------------------------------------- */
+
+.palette .summary {
+  padding: 0 16px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Plan today's candidate list: its own scroll region (addendum ruling 6) so a long
+   list scrolls inside the sheet rather than growing the window past the 480 px cap. */
+.palette .list {
+  border-top: 1px solid var(--line);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.palette .list::-webkit-scrollbar {
+  width: 8px;
+}
+.palette .list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.palette .list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+.palette .pl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.palette .pl.sel {
+  background: var(--accent-tint);
+}
+
+.palette .pl .cb {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--muted);
+  flex: none;
+  background: transparent;
+}
+
+.palette .pl .cb.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.palette .pl .t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette .pl .why {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.palette .empty {
+  text-align: center;
+  padding: 22px 20px 26px;
+  color: var(--muted);
+}
+
+.palette .empty .e1 {
+  font: 400 18px/22px var(--font-display);
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+.palette .empty p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.palette .empty kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 5px;
+  background: var(--bg);
+}
+
+.palette .stats {
+  display: flex;
+  gap: 24px;
+  padding: 6px 16px 14px;
+}
+
+.palette .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.palette .stat .v {
+  font: 500 20px/24px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.palette .stat .k {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.palette .note {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  flex: none;
+  padding: 0 16px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.palette .note input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: 400 13px/16px var(--font-ui);
+}
+
+.palette .note input::placeholder {
+  color: var(--muted);
 }
 
 /* ---------------------------------------------------------------------------------

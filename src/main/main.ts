@@ -4,7 +4,7 @@
 // follows; CLAUDE.md ("the store lives in the main process; renderers are views").
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, session, nativeTheme, ipcMain, shell, globalShortcut } from 'electron';
+import { app, session, nativeTheme, ipcMain, shell, globalShortcut, powerMonitor } from 'electron';
 import type { WebContents } from 'electron';
 import { load, save } from './persist';
 import { resolveDataDir } from './paths';
@@ -16,6 +16,7 @@ import { PaletteWindow } from './windows/palette';
 import { PlannerWindow } from './windows/planner';
 import { Hotkeys, validateAccelerator } from './hotkeys';
 import { AppTray } from './tray';
+import { Clock } from './clock';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
 
@@ -79,6 +80,17 @@ if (!gotLock) {
     const palette = new PaletteWindow({ preloadPath, rendererUrl });
     const plannerWindow = new PlannerWindow({ preloadPath, rendererUrl });
     planner = plannerWindow;
+
+    // --- daily rollover clock (Task 2.3) --------------------------------------------
+
+    const clock = new Clock({
+      store,
+      powerMonitor,
+      now: Date.now,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>)
+    });
+    clock.start();
 
     // --- broadcast: store changes and system theme changes reach every live window ---
 
@@ -170,6 +182,8 @@ if (!gotLock) {
       onCapture: () => palette.show('capture'),
       onToggleStrip: () => strip.toggle(),
       onOpenPlanner: () => plannerWindow.show(),
+      onPlanToday: () => palette.show('plan'),
+      onCloseDay: () => palette.show('close'),
       onQuit: () => app.quit()
     });
 
@@ -188,6 +202,7 @@ if (!gotLock) {
         stripHover: (inside) => strip.hover(inside),
         paletteShow: (mode) => palette.show(mode),
         paletteHide: () => palette.hide(),
+        paletteReportSize: (size) => palette.setContentHeight(size.height),
         plannerShow: () => plannerWindow.show(),
         plannerHide: () => plannerWindow.hide(),
         openExternal: (url) => shell.openExternal(url),
@@ -213,6 +228,7 @@ if (!gotLock) {
       quitting = true;
       plannerWindow.setQuitting(true);
       hotkeys.unregisterAll();
+      clock.stop();
       // Fix round 1, finding 4: a rejected flush must not leave the app running with
       // an unhandled rejection and no quit — always quit once the flush SETTLES,
       // logging first if it failed. `quitting` (checked above) still guards against
@@ -234,7 +250,7 @@ if (!gotLock) {
     // --- test seam ---------------------------------------------------------------
 
     if (process.env.TIMEBOUND_E2E === '1') {
-      (globalThis as unknown as { __tb: unknown }).__tb = { store, strip, palette, planner: plannerWindow, hotkeys, tray };
+      (globalThis as unknown as { __tb: unknown }).__tb = { store, strip, palette, planner: plannerWindow, hotkeys, tray, clock };
     }
   });
 }

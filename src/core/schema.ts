@@ -109,7 +109,8 @@ const DayRecordSchema = z
     focusSeconds: z.number().nonnegative(),
     rolledOver: z.number().int().nonnegative(),
     note: z.string().optional(),
-    closedAt: z.number().optional()
+    closedAt: z.number().optional(),
+    rolloverAppliedAt: z.number().optional()
   })
   .strict();
 

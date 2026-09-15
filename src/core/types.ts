@@ -56,6 +56,9 @@ export interface DayRecord {
   rolledOver: number;
   note?: string;
   closedAt?: number;
+  /** Set by the `day/rollover` reducer once rollover has been applied for this date
+   * (Task 2.3 addendum ruling 1); makes rollover idempotent for a given date. */
+  rolloverAppliedAt?: number;
 }
 
 export type Edge = 'top' | 'bottom';

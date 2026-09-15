@@ -36,6 +36,7 @@ function makeWindows(): WindowCommands {
     stripHover: vi.fn(),
     paletteShow: vi.fn(),
     paletteHide: vi.fn(),
+    paletteReportSize: vi.fn(),
     plannerShow: vi.fn(),
     plannerHide: vi.fn(),
     openExternal: vi.fn(),
@@ -82,6 +83,7 @@ const VALID_PAYLOADS: Record<string, unknown[]> = {
   'strip:hover': [true],
   'palette:show': ['capture'],
   'palette:hide': [],
+  'palette:reportSize': [{ height: 132 }],
   'planner:show': [],
   'planner:hide': [],
   'app:openExternal': ['https://example.com/'],
@@ -109,6 +111,7 @@ describe('registerIpc', () => {
         'strip:hover',
         'palette:show',
         'palette:hide',
+        'palette:reportSize',
         'planner:show',
         'planner:hide',
         'app:openExternal',
@@ -216,6 +219,22 @@ describe('registerIpc', () => {
       handlers.get('strip:reportSize')!(eventFrom(ALLOWED_ORIGIN), { width: 100.5, height: 32 })
     ).rejects.toThrow(IpcRejected);
     expect(windows.stripReportSize).not.toHaveBeenCalled();
+  });
+
+  it('rejects palette:reportSize with a height outside 60..640', async () => {
+    const { handlers, windows } = setup();
+
+    await expect(handlers.get('palette:reportSize')!(eventFrom(ALLOWED_ORIGIN), { height: 59 })).rejects.toThrow(IpcRejected);
+    await expect(handlers.get('palette:reportSize')!(eventFrom(ALLOWED_ORIGIN), { height: 641 })).rejects.toThrow(IpcRejected);
+    expect(windows.paletteReportSize).not.toHaveBeenCalled();
+  });
+
+  it('accepts a valid palette:reportSize and forwards it to windows', async () => {
+    const { handlers, windows } = setup();
+
+    await handlers.get('palette:reportSize')!(eventFrom(ALLOWED_ORIGIN), { height: 300 });
+
+    expect(windows.paletteReportSize).toHaveBeenCalledWith({ height: 300 });
   });
 
   it('rejects strip:setEdge with a value outside the Edge enum', async () => {

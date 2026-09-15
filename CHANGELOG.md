@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### Daily ritual (2026-09-15)
+- The day now rolls over at 4 AM local (immediately on launch too, and again on system resume/unlock), carrying open tasks still marked Today forward and recording how many rolled over. "Plan today" (tray, or the strip's plan chip) lists what rolled over, what's due or overdue, and up to 10 Inbox tasks — arrow keys/j·k to move, Space to check, Enter to commit. "Close the day" (tray) shows today's completed count, focus time, and rolled-over count, with an optional note.
+
 ### Capture (2026-09-15)
 - Quick capture now parses as you type: dates/times, `#tags`, `/list`, durations (`25m`, `1h30`), and repeats show up as live token chips beneath the input. Escape once keeps whatever you typed as a literal title (wraps it in quotes); Escape again closes. Pasting several lines adds one task per line.
 

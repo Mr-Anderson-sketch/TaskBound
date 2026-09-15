@@ -27,6 +27,7 @@ export interface WindowCommands {
   stripHover(inside: boolean): void | Promise<void>;
   paletteShow(mode: PaletteMode): void | Promise<void>;
   paletteHide(): void | Promise<void>;
+  paletteReportSize(size: { height: number }): void | Promise<void>;
   plannerShow(): void | Promise<void>;
   plannerHide(): void | Promise<void>;
   openExternal(url: string): void | Promise<void>;
@@ -63,6 +64,15 @@ const SizeSchema = z
   .strict();
 const EdgeSchema = z.enum(['top', 'bottom']);
 const PaletteModeSchema = z.enum(['capture', 'plan', 'close', 'commands', 'onboarding']);
+// Task 2.3 addendum ruling 6: the palette's own content height, reported by the
+// renderer's ResizeObserver. 60 is a sane floor (never a collapsed-to-nothing
+// window); 640 is a generous ceiling — the renderer itself caps the plan sheet at
+// 480 (its own `overflow-y: auto` list keeps long lists from ever reporting past it).
+const PaletteReportSizeSchema = z
+  .object({
+    height: z.number().int().min(60).max(640)
+  })
+  .strict();
 const UrlSchema = z
   .string()
   .url()
@@ -179,6 +189,11 @@ export function registerIpc(deps: RegisterIpcDeps): void {
   ipcMain.handle('palette:hide', async (event: IpcMainInvokeEvent) => {
     guard(event);
     return windows.paletteHide();
+  });
+
+  ipcMain.handle('palette:reportSize', async (event: IpcMainInvokeEvent, size: unknown) => {
+    guard(event);
+    return windows.paletteReportSize(parse(PaletteReportSizeSchema, size));
   });
 
   ipcMain.handle('planner:show', async (event: IpcMainInvokeEvent) => {
