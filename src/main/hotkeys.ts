@@ -72,10 +72,12 @@ export const DENYLIST: readonly string[] = [
 
 // Maps a recognised modifier token (lowercased) to its canonical form for denylist
 // comparison. `CommandOrControl`/`CmdOrCtrl` resolve per-platform: `Command` on
-// darwin, `Control` elsewhere. Tokens with no plan-relevant canonical form (Super,
-// Meta, AltGr) map to a distinct label of their own — never equal to any denylist
-// entry's modifiers, which only ever use Control/Alt/Shift/Command, but still
-// correct for the general equality check.
+// darwin, `Control` elsewhere. `Super`/`Meta` likewise resolve to `Command` on
+// darwin (fix round 2, minor b) — Electron itself maps the Windows/Super key token
+// to Cmd on macOS, so `Super+Q` really is the same physical shortcut as `Cmd+Q`
+// there and must be denylisted the same way; elsewhere they stay their own label
+// (`Super`), never equal to any denylist entry's modifiers (which only ever use
+// Control/Alt/Shift/Command). `AltGr` likewise maps to its own label.
 function canonicalModifier(token: string, platform: NodeJS.Platform): string {
   switch (token.toLowerCase()) {
     case 'control':
@@ -94,7 +96,7 @@ function canonicalModifier(token: string, platform: NodeJS.Platform): string {
       return platform === 'darwin' ? 'Command' : 'Control';
     case 'super':
     case 'meta':
-      return 'Super';
+      return platform === 'darwin' ? 'Command' : 'Super';
     case 'altgr':
       return 'AltGr';
     default:
@@ -191,13 +193,17 @@ export class Hotkeys {
    * invalid/denylisted accelerator, one with no handler supplied, a duplicate of an
    * accelerator already bound to an earlier action in this same call (fix round 1,
    * finding 14 — Electron would otherwise silently rebind it, so only one handler
-   * could ever fire), or one `globalShortcut.register` itself reports failing
-   * (e.g. already held by another app); `true` only when register() returns true. */
+   * could ever fire; fix round 2 minor c: duplicates are detected by CANONICAL form,
+   * so e.g. `Ctrl+Alt+Space` and `Control+Alt+Space` — the same physical shortcut,
+   * spelled differently — are correctly treated as one), or one
+   * `globalShortcut.register` itself reports failing (e.g. already held by another
+   * app); `true` only when register() returns true. */
   apply(settings: Settings, handlers: HotkeyHandlers): Record<string, boolean> {
     this.globalShortcut.unregisterAll();
 
+    const platform = process.platform;
     const result: Record<string, boolean> = {};
-    const registeredThisCall = new Set<string>();
+    const registeredCanonical = new Set<string>();
     const entries: Array<[string, (() => void) | undefined]> = [
       [settings.hotkeys.capture, handlers.capture],
       [settings.hotkeys.toggleStrip, handlers.toggleStrip],
@@ -211,16 +217,21 @@ export class Hotkeys {
         result[accelerator] = false;
         continue;
       }
-      const validation = validateAccelerator(accelerator);
+      const validation = validateAccelerator(accelerator, platform);
       if (!validation.ok) {
         result[accelerator] = false;
         continue;
       }
-      if (registeredThisCall.has(accelerator)) {
+      const canonical = canonicalize(accelerator, platform);
+      // canonicalize() only returns undefined for a shape validateAccelerator would
+      // already have rejected above, so this is unreachable in practice — the raw
+      // accelerator is a safe fallback key regardless.
+      const dedupeKey = canonical ? `${canonical.mods.join('+')}|${canonical.key}` : accelerator;
+      if (registeredCanonical.has(dedupeKey)) {
         result[accelerator] = false;
         continue;
       }
-      registeredThisCall.add(accelerator);
+      registeredCanonical.add(dedupeKey);
       result[accelerator] = this.globalShortcut.register(accelerator, handler);
     }
 

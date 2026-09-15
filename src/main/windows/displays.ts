@@ -127,15 +127,22 @@ export function restorePosition(
   return positions[displayKey(d)] ?? positions[displaySignature(d)];
 }
 
-/** The strip's collapsed size after a renderer `strip:reportSize` report (Task
- * 1.8+1.9 fix round 1, finding 9 "strip stuck at pill width after un-collapsing").
- * The reported WIDTH is only ever adopted while collapsed (the pill is genuinely
- * content-driven, capped at 240 by CSS); when not collapsed, width always tracks
- * `settingsWidth` — otherwise a stale pill-mode width, reported once while collapsed,
- * would stick forever (the renderer's `.strip{width:100%}` just reports back
- * whatever the window's current — still pill-sized — client width is, a
- * self-perpetuating loop). Height is always the reported value, capped at
- * `maxHeight`. Pure so it's unit-testable without a real `BrowserWindow`. */
+/** The strip's WIDTH after any `strip:reportSize` report — collapsed (pill, content
+ * -driven, capped at 240 by CSS) or expanded (panel) alike (Task 1.8+1.9 fix round 1
+ * finding 9, closed fully in fix round 2 open item 2: the expanded branch in
+ * `StripWindow.handleReportedSize` still adopted the reported width even when not
+ * collapsed). The reported width is only ever adopted while collapsed; otherwise it
+ * always tracks `settingsWidth` — otherwise a stale pill-mode width, reported once
+ * while collapsed, would stick forever (the renderer's `.strip{width:100%}` just
+ * reports back whatever the window's current — still pill-sized — client width is, a
+ * self-perpetuating loop). Pure so it's unit-testable without a real `BrowserWindow`. */
+export function nextReportedWidth(reportedWidth: number, collapsed: boolean, settingsWidth: number): number {
+  return collapsed ? reportedWidth : settingsWidth;
+}
+
+/** The strip's collapsed size after a renderer `strip:reportSize` report — see
+ * `nextReportedWidth` for the width rule. Height is always the reported value,
+ * capped at `maxHeight`. Pure so it's unit-testable without a real `BrowserWindow`. */
 export function nextCollapsedSize(
   reported: { width: number; height: number },
   collapsed: boolean,
@@ -143,7 +150,27 @@ export function nextCollapsedSize(
   maxHeight: number
 ): { width: number; height: number } {
   return {
-    width: collapsed ? reported.width : settingsWidth,
+    width: nextReportedWidth(reported.width, collapsed, settingsWidth),
     height: Math.min(reported.height, maxHeight)
   };
+}
+
+/** Re-anchors a rect whose ACTUAL applied height differs from what was requested
+ * (Task 1.8+1.9 fix round 1 C1, corrected in fix round 2 open item 3): on Windows a
+ * transparent frameless `BrowserWindow` cannot be shorter than ~39 DIP regardless of
+ * the requested height, so the docked edge must be re-derived from the requested
+ * rect's OWN edge — not the raw work-area edge — or a deliberate offset already
+ * baked into `requestedY` (dockBounds's 2 px "taskbar auto-hide" reserve; also
+ * relevant to the sliver and the expanded panel, whose rects are all derived from
+ * the same docked anchor) gets silently discarded, leaving the strip flush against
+ * the true work-area edge and covering the taskbar's auto-hide reveal row.
+ *
+ * Bottom edge: keeps the ACTUAL rect's bottom edge equal to the REQUESTED rect's
+ * bottom edge (`requestedY + requestedHeight`), so the window only grows upward,
+ * away from the docked edge. Top edge: keeps `y` exactly at `requestedY` (the window
+ * only grows downward). Identical to anchoring against the raw work area when
+ * `requestedY` has no reserve baked in. Pure — no Electron — so it's unit-testable
+ * without a real `BrowserWindow`. */
+export function reanchorY(requestedY: number, requestedHeight: number, actualHeight: number, edge: Edge): number {
+  return edge === 'top' ? requestedY : requestedY + requestedHeight - actualHeight;
 }

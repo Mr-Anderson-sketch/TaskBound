@@ -16,8 +16,10 @@ import {
   handleRect,
   isTaskbarAutoHide,
   nextCollapsedSize,
+  nextReportedWidth,
   panelBounds,
   pointIn,
+  reanchorY,
   restorePosition,
   sliverBounds
 } from './displays';
@@ -344,8 +346,13 @@ export class StripWindow {
     if (this.expanded) {
       // While expanded, the reported height is the WHOLE window height (strip row +
       // panel content); only the width feeds back into the collapsed anchor rect.
-      if (width !== this.size.width) {
-        this.size = { ...this.size, width };
+      // Fix round 2, open item 2: this branch still adopted the raw reported width
+      // even when NOT collapsed — the same nextReportedWidth rule as the collapsed
+      // path below applies here too (the pill's content-driven width must never
+      // leak into the full strip's width, expanded or not).
+      const nextWidth = nextReportedWidth(width, this.settings.collapsed, this.settings.width);
+      if (nextWidth !== this.size.width) {
+        this.size = { ...this.size, width: nextWidth };
         this.redock();
       }
       this.panelHeight = Math.max(0, height - this.dockedRect.height);
@@ -491,22 +498,25 @@ export class StripWindow {
    *
    * Run after every `setBounds` (via `setBoundsIfChanged`, its only caller): reads
    * the ACTUAL resulting bounds; if the actual height differs from what was
-   * requested, re-anchors so the requested content still sits flush against the
-   * docked edge (bottom: `y = workArea.bottom - actualHeight`; top: `y =
-   * workArea.y`) — the window is allowed to extend away from the edge into the
-   * desktop, never past the work area on the docked side. Then (win32 only) clips
-   * hit-testing/paint down to the requested content rect with `setShape`, so the
-   * extra, otherwise-invisible-but-still-click-capturing window area (Electron
-   * transparent windows still capture clicks in transparent pixels) never intercepts
-   * anything. `lastShapeRect` is recorded on every platform (even where `setShape`
-   * is a no-op) so the e2e seam can assert it. */
+   * requested, re-anchors via `reanchorY` so the requested content still sits flush
+   * against the REQUESTED rect's own docked edge (fix round 2, open item 3: anchoring
+   * to the raw work-area edge instead, as the first cut of this fix did, silently
+   * discarded `dockBounds`'s deliberate 2 px "taskbar auto-hide" reserve baked into
+   * `requested.y` — the always-on-top strip then covered the taskbar's reveal row,
+   * off by the same 2 px `handleRect(dockedRect)` uses for hit-testing) — the window
+   * is allowed to extend away from the edge into the desktop, never past the work
+   * area on the docked side. Then (win32 only) clips hit-testing/paint down to the
+   * requested content rect with `setShape`, so the extra, otherwise-invisible-but-
+   * still-click-capturing window area (Electron transparent windows still capture
+   * clicks in transparent pixels) never intercepts anything. `lastShapeRect` is
+   * recorded on every platform (even where `setShape` is a no-op) so the e2e seam
+   * can assert it. */
   private reanchorAndClip(requested: Rect): void {
     if (!this.win || this.win.isDestroyed()) return;
     let actual = this.win.getBounds();
 
     if (actual.height !== requested.height) {
-      const workArea = this.currentWorkArea();
-      const correctedY = this.settings.edge === 'top' ? workArea.y : workArea.y + workArea.height - actual.height;
+      const correctedY = reanchorY(requested.y, requested.height, actual.height, this.settings.edge);
       if (actual.x !== requested.x || actual.y !== correctedY) {
         this.win.setBounds({ x: requested.x, y: correctedY, width: actual.width, height: actual.height }, false);
         actual = this.win.getBounds();

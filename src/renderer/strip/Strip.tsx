@@ -82,6 +82,12 @@ export const Strip = forwardRef<HTMLDivElement, StripProps>(function Strip(
         <div className="dot" />
       </div>
       <div
+        // Fix round 2, minor d: keyed by slidePulse so a NEW pulse always forces a
+        // fresh DOM node, restarting the CSS animation even if the previous one got
+        // stuck (never fired `onAnimationEnd` — e.g. the window was hidden
+        // mid-animation, so `sliding` was still `true` and setSliding(true) again
+        // would otherwise be a no-op React bails out of, since it's the same value).
+        key={slidePulse}
         className={sliding ? 'title slide-in' : 'title'}
         onAnimationEnd={() => setSliding(false)}
         onClick={onTitleClick}

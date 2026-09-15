@@ -10,7 +10,9 @@ import {
   pointIn,
   isTaskbarAutoHide,
   restorePosition,
-  nextCollapsedSize
+  nextCollapsedSize,
+  nextReportedWidth,
+  reanchorY
 } from '../../src/main/windows/displays';
 import type { DisplayLike } from '../../src/main/windows/displays';
 
@@ -251,5 +253,51 @@ describe('nextCollapsedSize', () => {
   it('caps the reported height at maxHeight regardless of collapsed', () => {
     expect(nextCollapsedSize({ width: 420, height: 60 }, false, 420, 44)).toEqual({ width: 420, height: 44 });
     expect(nextCollapsedSize({ width: 180, height: 60 }, true, 420, 44)).toEqual({ width: 180, height: 44 });
+  });
+});
+
+// Fix round 2, open item 2: finding 9 was only fixed for the collapsed (pill) path —
+// StripWindow.handleReportedSize's EXPANDED branch still adopted the raw reported
+// width regardless of settings.strip.collapsed. nextReportedWidth is the single rule
+// both branches now share.
+describe('nextReportedWidth', () => {
+  it('adopts the reported width while collapsed', () => {
+    expect(nextReportedWidth(180, true, 420)).toBe(180);
+  });
+
+  it('ignores the reported width when not collapsed (expanded or not), tracking settingsWidth', () => {
+    expect(nextReportedWidth(180, false, 420)).toBe(420);
+  });
+});
+
+// Fix round 2, open item 3: the first cut of C1 anchored to the raw work-area edge,
+// discarding dockBounds's deliberate 2 px "taskbar auto-hide" reserve baked into
+// requestedY — the strip then covered the taskbar's auto-hide reveal row.
+describe('reanchorY', () => {
+  it('bottom edge, no reserve: keeps the actual rect flush to the requested bottom edge', () => {
+    // requested y=688 (720 workArea - 32 height, no reserve), OS floors height to 39.
+    expect(reanchorY(688, 32, 39, 'bottom')).toBe(688 + 32 - 39); // 681
+  });
+
+  it('bottom edge, with the 2px auto-hide reserve baked into requestedY: reserve survives', () => {
+    // dockBounds' 2px reserve: requested y = 720 - 32 - 2 = 686.
+    const y = reanchorY(686, 32, 39, 'bottom');
+    expect(y).toBe(686 + 32 - 39); // 679
+    // The actual rect's bottom edge is still 2px shy of the true work-area bottom
+    // (720), not flush against it.
+    expect(y + 39).toBe(720 - 2);
+  });
+
+  it('top edge, no reserve: y stays exactly at requestedY regardless of actualHeight', () => {
+    expect(reanchorY(0, 32, 39, 'top')).toBe(0);
+  });
+
+  it('top edge, with the 2px auto-hide reserve baked into requestedY: reserve survives', () => {
+    expect(reanchorY(2, 32, 39, 'top')).toBe(2);
+  });
+
+  it('is a no-op when actualHeight equals the requested height', () => {
+    expect(reanchorY(688, 32, 32, 'bottom')).toBe(688);
+    expect(reanchorY(0, 32, 32, 'top')).toBe(0);
   });
 });

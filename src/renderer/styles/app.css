@@ -57,8 +57,9 @@ body[data-route='strip'] {
   height: 100vh;
   display: flex;
   flex-direction: column;
-}
-body[data-route='strip'][data-edge='bottom'] {
+  /* Default (and no-data-edge-attribute-yet) alignment is bottom — matches
+     defaultSettings().strip.edge (fix round 2, minor a): belt-and-suspenders with
+     the useLayoutEffect that sets data-edge before first paint. */
   justify-content: flex-end;
 }
 body[data-route='strip'][data-edge='top'] {

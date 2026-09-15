@@ -2,7 +2,7 @@
 // the strip:state (expanded/hidden) event, hover/drag gesture detection, the
 // ResizeObserver that reports content size to main, and completion feedback. See
 // .superpowers/sdd/PLAN/task-1.8-1.9-brief.md Part B "Strip".
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEventHandler } from 'react';
 import { INBOX_ID } from '../../core/defaults';
 import { isSnoozed } from '../../core/select';
@@ -146,7 +146,12 @@ export function StripApp() {
   }, [snapshot?.data.settings.reducedMotion]);
 
   // --- edge alignment (C1, fix round 1): body's flex justify-content reads this ---
-  useEffect(() => {
+  // useLayoutEffect (fix round 2, minor a), not useEffect: fires synchronously
+  // before the browser paints, so the very first frame that has real content also
+  // already has the correct data-edge — no one-frame flash at the wrong alignment.
+  // (app.css's default, with no data-edge attribute at all, is bottom — matching
+  // defaultSettings().strip.edge — as a second line of defence.)
+  useLayoutEffect(() => {
     if (!snapshot) return;
     document.body.dataset.edge = snapshot.data.settings.strip.edge;
   }, [snapshot?.data.settings.strip.edge]);

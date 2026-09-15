@@ -47,6 +47,15 @@ describe('validateAccelerator', () => {
   it('does not denylist Cmd+Q on win32 (Cmd never resolves to Control there)', () => {
     expect(validateAccelerator('Cmd+Q', 'win32')).toEqual({ ok: true });
   });
+
+  // Fix round 2, minor b: Electron maps Super/Meta to Cmd on macOS.
+  it('denylists Super+Q on darwin (Electron maps Super to Cmd there)', () => {
+    expect(validateAccelerator('Super+Q', 'darwin')).toEqual({ ok: false, reason: 'denylisted' });
+  });
+
+  it('does not denylist Super+Q on win32 (Super stays the Windows key, not Control)', () => {
+    expect(validateAccelerator('Super+Q', 'win32')).toEqual({ ok: true });
+  });
 });
 
 function fakeGlobalShortcut(registerReturns: (accelerator: string) => boolean = () => true) {
@@ -148,6 +157,29 @@ describe('Hotkeys.apply', () => {
     expect(result[settings.hotkeys.capture]).toBe(false);
     expect(gs.register).toHaveBeenCalledTimes(4); // capture, toggleStrip, completeAdvance, undo — toggleTimer skipped
     expect(gs.register).toHaveBeenCalledWith(settings.hotkeys.capture, expect.any(Function));
+  });
+
+  // Fix round 2, minor c.
+  it('detects a shared accelerator by CANONICAL form, not exact string (Ctrl+Alt+Space === Control+Alt+Space)', () => {
+    const gs = fakeGlobalShortcut();
+    const hotkeys = new Hotkeys(gs);
+    const settings = defaultSettings();
+    settings.hotkeys.capture = 'Ctrl+Alt+Space';
+    settings.hotkeys.toggleTimer = 'Control+Alt+Space'; // same shortcut, different spelling
+
+    hotkeys.apply(settings, {
+      capture: vi.fn(),
+      toggleStrip: vi.fn(),
+      completeAdvance: vi.fn(),
+      toggleTimer: vi.fn(),
+      undo: vi.fn()
+    });
+
+    // Only ONE of the two differently-spelled-but-identical accelerators reaches
+    // Electron's globalShortcut.register.
+    expect(gs.register).toHaveBeenCalledTimes(4); // capture, toggleStrip, completeAdvance, undo
+    expect(gs.register).toHaveBeenCalledWith('Ctrl+Alt+Space', expect.any(Function));
+    expect(gs.register).not.toHaveBeenCalledWith('Control+Alt+Space', expect.any(Function));
   });
 
   it('records globalShortcut.register\'s own return value (e.g. already held by another app)', () => {
