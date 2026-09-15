@@ -4,6 +4,9 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ## [Unreleased]
 
+### macOS (2026-09-15)
+- macOS: the strip floats over full-screen apps and follows you across desktops; optional menu bar mode shows your current task in the menu bar; DMG packaging.
+
 ### Windows integration (2026-09-15)
 - Windows: optionally reserve screen space for the strip, and hide it over full-screen apps.
 

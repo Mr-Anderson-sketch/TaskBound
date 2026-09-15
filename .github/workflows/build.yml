@@ -1,0 +1,32 @@
+# CI build matrix (Task 6.2 / spec Part 5.3): windows-latest + macos-latest, each
+# running `npm ci`, `npm test`, and `npm run build`. This does NOT package a
+# DMG/NSIS installer and does NOT run the Playwright e2e suite (those need a real
+# display / native packaging tools this workflow doesn't set up) — it only proves
+# the app installs, unit-tests, and builds cleanly on both platforms.
+#
+# Trigger: `workflow_dispatch` ONLY. Deliberately not wired to `push`/`pull_request`
+# — this repository is private, GitHub Actions minutes are metered, and the owner
+# has not yet decided whether to spend them on every push (see
+# docs/RELEASE-CHECKLIST.md "Money and security questions still open for the
+# owner" and docs/DECISIONS.md). Flip this on by adding a `push`/`pull_request`
+# trigger once that's decided — nothing else in this file needs to change.
+name: Build
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

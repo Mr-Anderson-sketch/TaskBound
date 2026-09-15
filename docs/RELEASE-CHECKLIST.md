@@ -49,6 +49,8 @@ Run on macOS 14 or newer, Apple silicon and Intel if available.
 | M13 | Click-through on | Clicks pass through; hovering the dot re-enables interaction | |
 | M14 | Data location | `~/Library/Application Support/TimeBound/data.json` with `backups/` | |
 | M15 | After quick capture, focus returns to the previous app | Known gap in v1: user may need to click back; revisit in Slice 6 | |
+| M16 | Template tray icon, menu bar set to light mode, then Dark Mode | Monochrome glyph renders crisp and correctly tinted by macOS in both — no colour fringing, no visible artifacts (`build/trayTemplate.png`/`@2x` are flat black-with-alpha, `setTemplateImage(true)`) | |
+| M17 | Menu bar mode on, timer running | Title's clock advances once per second, never faster, and does not stall between store changes (`TrayTitleUpdater`'s 1 Hz throttle) | |
 
 ## Every platform
 
