@@ -38,7 +38,7 @@ export function TitleBar({ platform, captureAccelerator, lists, defaultListId, t
           </button>
         )}
       </div>
-      <span className="cmdk">{platform === 'darwin' ? '⌘K' : 'Ctrl+K'}</span>
+      <span className="tb-hint">{platform === 'darwin' ? '⌘K' : 'Ctrl+K'}</span>
       {platform !== 'darwin' && (
         <div className="wc">
           <button type="button" aria-label="Minimize" onClick={onMinimize}>
