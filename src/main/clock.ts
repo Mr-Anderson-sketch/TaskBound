@@ -7,7 +7,7 @@
 // Electron, no Node APIs" applies to core/, but this file lives in main/ and still
 // keeps the same no-value-import discipline as hotkeys.ts for testability).
 import type { PowerMonitor } from 'electron';
-import { dayKeyForRollover } from '../core/dates';
+import { addDays, dayKeyForRollover, rolloverCutoffMs, ymd } from '../core/dates';
 import type { Store } from './store';
 
 // setTimeout's delay is a signed 32-bit int internally; anything larger fires
@@ -24,39 +24,52 @@ export interface ClockDeps {
 }
 
 /** Epoch ms of the next local 04:00 strictly after `now` (today's 04:00 if `now` is
- * still before it, otherwise tomorrow's). */
+ * still before it, otherwise tomorrow's). Goes through `rolloverCutoffMs` (built on
+ * the local-component `Date` constructor, like `parseYmd`) rather than a raw
+ * milliseconds offset, so it resolves correctly across a DST transition landing on
+ * `now`'s own calendar day (fix round 1, reviewer point 3/4). */
 function nextFourAm(now: number): number {
-  const d = new Date(now);
-  const candidate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 4, 0, 0, 0);
-  if (candidate.getTime() <= now) {
-    candidate.setDate(candidate.getDate() + 1);
-  }
-  return candidate.getTime();
+  const today = ymd(now);
+  const todayCutoff = rolloverCutoffMs(today);
+  if (todayCutoff > now) return todayCutoff;
+  return rolloverCutoffMs(addDays(today, 1));
 }
 
 export class Clock {
   private timerHandle: unknown;
-  private started = false;
+  // Tracks only whether the powerMonitor listeners are registered — NOT whether
+  // start() has ever run. Fix round 1, reviewer Critical 1: a second start() call
+  // (e.g. tests re-arming, or a future caller) must still re-dispatch rollover for
+  // the current key and re-arm the timer (clearing whatever was pending), just
+  // without registering 'resume'/'unlock-screen' a second time.
+  private listening = false;
 
   constructor(private readonly deps: ClockDeps) {}
 
   start(): void {
-    if (this.started) return;
-    this.started = true;
-    this.dispatchRollover();
-    this.armTimer();
-    this.deps.powerMonitor.on('resume', this.onWake);
-    this.deps.powerMonitor.on('unlock-screen', this.onWake);
-  }
-
-  stop(): void {
-    this.started = false;
     if (this.timerHandle !== undefined) {
       this.deps.clearTimer(this.timerHandle);
       this.timerHandle = undefined;
     }
-    this.deps.powerMonitor.removeListener('resume', this.onWake);
-    this.deps.powerMonitor.removeListener('unlock-screen', this.onWake);
+    this.dispatchRollover();
+    this.armTimer();
+    if (!this.listening) {
+      this.listening = true;
+      this.deps.powerMonitor.on('resume', this.onWake);
+      this.deps.powerMonitor.on('unlock-screen', this.onWake);
+    }
+  }
+
+  stop(): void {
+    if (this.timerHandle !== undefined) {
+      this.deps.clearTimer(this.timerHandle);
+      this.timerHandle = undefined;
+    }
+    if (this.listening) {
+      this.listening = false;
+      this.deps.powerMonitor.removeListener('resume', this.onWake);
+      this.deps.powerMonitor.removeListener('unlock-screen', this.onWake);
+    }
   }
 
   private dispatchRollover(): void {

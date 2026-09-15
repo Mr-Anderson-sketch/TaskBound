@@ -5,10 +5,9 @@
 import { produce } from 'immer';
 import type { Data, Action, Task, Rule, Settings, DayRecord, Ymd } from './types';
 import { INBOX_ID } from './defaults';
-import { addDays, parseYmd, ymd } from './dates';
+import { addDays, rolloverCutoffMs, ymd } from './dates';
 import { nextOrder } from './select';
 
-const ROLLOVER_CUTOFF_HOUR_MS = 4 * 60 * 60 * 1000;
 const NOTE_MAX_LENGTH = 500;
 
 /** Finds `draft.days`' record for `date`, creating (and inserting, keeping `days`
@@ -250,8 +249,8 @@ export function reduce(data: Data, action: Action): Data {
         if (existing?.rolloverAppliedAt !== undefined) break;
 
         // "Belonged to an earlier day": created before 04:00 local on `date`'s
-        // calendar day (parseYmd gives local midnight; +4h is the rollover cutoff).
-        const cutoff = parseYmd(action.date).getTime() + ROLLOVER_CUTOFF_HOUR_MS;
+        // calendar day.
+        const cutoff = rolloverCutoffMs(action.date);
         const rolledCount = draft.tasks.filter(
           (t) => t.status === 'open' && t.parentId === undefined && t.today && t.createdAt < cutoff
         ).length;

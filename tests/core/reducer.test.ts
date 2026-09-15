@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
 import { todayView } from '../../src/core/select';
-import { ymd, dayKeyForRollover, addDays } from '../../src/core/dates';
+import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -228,6 +228,20 @@ describe('reducer: task/complete and task/uncomplete record the day (Task 2.3)',
     const rec = d.days.find((r) => r.date === ymd(t0 + 12_000))!;
     expect(rec).toMatchObject({ completed: 1, focusSeconds: 12 });
   });
+  // Fix round 1, reviewer Important 2: the previous version of this test started
+  // spentSeconds at 0, so it couldn't tell "focusSeconds gets the ELAPSED segment"
+  // apart from "focusSeconds gets the task's TOTAL spentSeconds" — both would have
+  // produced 12. Pin it with a task that already carries prior time.
+  it("complete folds only the RUNNING SEGMENT's elapsed time into focusSeconds, not the task's pre-existing spentSeconds", () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A' });
+    d = { ...d, tasks: d.tasks.map((t) => (t.id === 'a' ? { ...t, timer: { spentSeconds: 300, runningSince: t0 } } : t)) };
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 12_000, by: 'timer' });
+    const task = d.tasks.find((t) => t.id === 'a')!;
+    expect(task.timer?.spentSeconds).toBe(312); // 300 pre-existing + 12 elapsed
+    const rec = d.days.find((r) => r.date === ymd(t0 + 12_000))!;
+    expect(rec.focusSeconds).toBe(12); // NOT 312 — only the elapsed segment
+  });
   it('two completions on the same day accumulate into one record', () => {
     let d = createEmptyData(t0, '2.0.0');
     d = add(d, 'a', 'A');
@@ -337,6 +351,33 @@ describe('reducer: day/rollover (Task 2.3)', () => {
     d = reduce(d, { type: 'day/rollover', now: t0, date: todayKey });
     const rec = d.days.find((r) => r.date === prevKey);
     expect(rec?.rolledOver ?? 0).toBe(0);
+  });
+
+  // Fix round 1: controller ruling on reviewer Minor 1 (no code change) — a task
+  // that stays planned (today: true, still open) across several days counts toward
+  // `rolledOver` on EACH day it carries over from, not just once. Pins three
+  // consecutive rollovers for the SAME still-open task, each landing on a different
+  // day's record.
+  it('a task that stays today:true and open across several days counts toward rolledOver on EACH day it carries over from', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A', today: true });
+
+    const key0 = dayKeyForRollover(t0);
+    const day1 = rolloverCutoffMs(addDays(key0, 1)) + 1000; // safely inside day 1's own period
+    const key1 = dayKeyForRollover(day1);
+    const day2 = rolloverCutoffMs(addDays(key1, 1)) + 1000;
+    const key2 = dayKeyForRollover(day2);
+    const day3 = rolloverCutoffMs(addDays(key2, 1)) + 1000;
+    const key3 = dayKeyForRollover(day3);
+
+    d = reduce(d, { type: 'day/rollover', now: day1, date: key1 });
+    d = reduce(d, { type: 'day/rollover', now: day2, date: key2 });
+    d = reduce(d, { type: 'day/rollover', now: day3, date: key3 });
+
+    expect(d.days.find((r) => r.date === key0)?.rolledOver).toBe(1);
+    expect(d.days.find((r) => r.date === key1)?.rolledOver).toBe(1);
+    expect(d.days.find((r) => r.date === key2)?.rolledOver).toBe(1);
+    expect(d.tasks.find((t) => t.id === 'a')?.today).toBe(true); // still carrying forward
   });
 });
 

@@ -7,6 +7,18 @@ import type { PaletteMode } from '../../shared/ipc';
 const WIDTH = 560;
 const HEIGHT = 132;
 const VERTICAL_FRACTION = 0.28;
+// Fix round 1, reviewer point 5: a per-mode estimate applied to the INITIAL show()
+// bounds, so plan/close no longer paint their first frame at capture's 132 px height
+// and visibly grow — the renderer's ResizeObserver (-> palette:reportSize ->
+// setContentHeight) still refines this down/up to the sheet's real content height
+// once it actually paints.
+const MODE_CONTENT_HEIGHT: Record<PaletteMode, number> = {
+  capture: HEIGHT,
+  plan: 360,
+  close: 260,
+  commands: HEIGHT,
+  onboarding: HEIGHT
+};
 // Task 2.3, addendum ruling 9b: a `blur` that lands within this window of `show()`
 // is treated as the stray tail of a `hide()` that happened earlier in the same tick
 // (Windows can deliver it just after the new `show()`), not a real "user clicked
@@ -103,7 +115,7 @@ export class PaletteWindow {
     const { workArea } = display;
     const x = Math.round(workArea.x + (workArea.width - WIDTH) / 2);
     const y = Math.round(workArea.y + workArea.height * VERTICAL_FRACTION);
-    win.setBounds({ x, y, width: WIDTH, height: HEIGHT });
+    win.setBounds({ x, y, width: WIDTH, height: MODE_CONTENT_HEIGHT[mode] });
 
     if (this.loaded) {
       win.webContents.send('palette:mode', mode);

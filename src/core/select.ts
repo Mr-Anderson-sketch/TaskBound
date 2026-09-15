@@ -1,7 +1,7 @@
 // core/select — read-only queries over Data. No mutation, no Date.now(): callers pass `now`.
 import type { Data, Task, Id, Ymd } from './types';
 import { INBOX_ID } from './defaults';
-import { dayKeyForRollover, parseYmd } from './dates';
+import { dayKeyForRollover, rolloverCutoffMs } from './dates';
 
 export interface TodayView {
   current?: Task;
@@ -82,7 +82,6 @@ export function orderBetween(a?: number, b?: number): number {
 // --- day rollover / close (Task 2.3) --------------------------------------------
 
 const INBOX_CANDIDATE_LIMIT = 10;
-const ROLLOVER_CUTOFF_HOUR_MS = 4 * 60 * 60 * 1000;
 
 export interface PlanCandidate {
   task: Task;
@@ -100,7 +99,7 @@ export interface PlanCandidate {
  */
 export function planCandidates(data: Data, now: number): PlanCandidate[] {
   const todayKey = dayKeyForRollover(now);
-  const cutoff = parseYmd(todayKey).getTime() + ROLLOVER_CUTOFF_HOUR_MS;
+  const cutoff = rolloverCutoffMs(todayKey);
 
   const open = data.tasks.filter((t) => t.status === 'open' && t.parentId === undefined && !isSnoozed(t, now));
   const seen = new Set<Id>();

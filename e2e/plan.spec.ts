@@ -105,17 +105,20 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
     await expect(rows.nth(1).locator('.cb')).toHaveClass(/on/);
     await expect(rows.nth(2).locator('.cb')).not.toHaveClass(/on/);
 
-    // The palette's native window resizes asynchronously (ResizeObserver ->
-    // palette:reportSize IPC -> PaletteWindow.setContentHeight) after the sheet with
-    // its 3 rows + footer first paints at the old (132 px, capture-sized) window
-    // height — wait for it to actually grow before screenshotting, or the shot is
-    // cropped to the stale, too-short window.
+    // Fix round 1, reviewer point 5: `show('plan')` now pre-sizes the window to a
+    // per-mode estimate (360 px) before it's shown at all, so the sheet no longer
+    // first paints at capture's 132 px and visibly grows — but the renderer's
+    // ResizeObserver (-> palette:reportSize -> setContentHeight) still asynchronously
+    // refines that estimate down to this 3-row sheet's real (smaller) content height.
+    // Wait for that refinement to land before screenshotting, or the shot shows the
+    // oversized 360 px estimate with empty space below the footer instead of the
+    // tightly-fitted final sheet.
     await expect
       .poll(async () => {
         const infos = await windowInfo(launched.app);
         return infos.find((w) => w.url.includes('#/palette'))?.bounds.height ?? 0;
       })
-      .toBeGreaterThan(150);
+      .toBeLessThan(300);
     await palette.screenshot({ path: path.join(SCREENSHOT_DIR, 'plan-today.png') });
 
     await palette.keyboard.press('ArrowDown'); // focus row 1 ("Rolled task two")
@@ -153,6 +156,14 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
     await noteInput.click();
     await noteInput.fill('Solid focused day');
 
+    // Same pre-size-then-refine story as Plan today above: close's estimate is
+    // 260 px, refined down to this sheet's real (smaller) content height.
+    await expect
+      .poll(async () => {
+        const infos = await windowInfo(launched.app);
+        return infos.find((w) => w.url.includes('#/palette'))?.bounds.height ?? 0;
+      })
+      .toBeLessThan(250);
     await closePalette.screenshot({ path: path.join(SCREENSHOT_DIR, 'close-day.png') });
 
     await noteInput.press('Enter');

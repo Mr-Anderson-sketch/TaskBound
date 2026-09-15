@@ -37,10 +37,25 @@ export function isSameLocalDay(a: number, b: number): boolean {
   return startOfLocalDay(a) === startOfLocalDay(b);
 }
 
+/** The hour the day "starts" at for rollover purposes (4 AM local, per D17) — shared
+ * by `dayKeyForRollover` and `rolloverCutoffMs` so the two stay in lockstep; every
+ * other rollover cutoff computation (reducer.ts, select.ts, main/clock.ts) goes
+ * through `rolloverCutoffMs` rather than re-deriving this in raw milliseconds. */
+export const ROLLOVER_CUTOFF_HOUR = 4;
+
 /**
  * The "day key" an instant belongs to for rollover purposes: a day starts at
  * `cutoffHour` local (default 4 AM, per D17), not at local midnight.
  */
-export function dayKeyForRollover(ms: number, cutoffHour = 4): Ymd {
+export function dayKeyForRollover(ms: number, cutoffHour = ROLLOVER_CUTOFF_HOUR): Ymd {
   return ymd(ms - cutoffHour * 60 * 60 * 1000);
+}
+
+/** Epoch ms of local `ROLLOVER_CUTOFF_HOUR`:00 (04:00 by default) on the calendar day
+ * named by `date`. Built with the `new Date(y, m-1, d, h, ...)` local-component
+ * constructor (like `parseYmd`), so it resolves to the correct wall-clock instant
+ * across a DST transition on `date` itself, not a fixed offset from UTC midnight. */
+export function rolloverCutoffMs(date: Ymd): number {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, m - 1, d, ROLLOVER_CUTOFF_HOUR, 0, 0, 0).getTime();
 }
