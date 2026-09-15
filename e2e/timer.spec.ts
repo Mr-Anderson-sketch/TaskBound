@@ -13,6 +13,10 @@ test('a running planned timer counts down and notifies once at expiry, entering 
 
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
+      // Fix round 1, item 3 minor: the __tbEvents seam counts a Notifier call before
+      // Notifier's own settings check runs, so turning notifications off here still
+      // lets the test count `timerDone` calls while ensuring no real OS toast appears.
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
       tb.store.dispatch({ type: 'task/add', id: 't1', now: Date.now(), title: 'Timed task', today: true, plannedSeconds: 2 });
       tb.store.dispatch({ type: 'timer/start', id: 't1', now: Date.now() });
     });
@@ -48,6 +52,7 @@ test('pomodoro: timer expiry pauses the task and starts a break shown on the str
 
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
       tb.store.dispatch({
         type: 'settings/patch',
         now: Date.now(),

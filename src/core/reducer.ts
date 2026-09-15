@@ -275,6 +275,32 @@ export function reduce(data: Data, action: Action): Data {
         break;
       }
 
+      case 'timer/startSession': {
+        // Task 3.2 fix round 1 (supersedes addendum ruling 3): a pomodoro work
+        // session always gets a FULL `seconds`-long plan, regardless of any prior
+        // spentSeconds/plannedSeconds — a task that already finished one session
+        // (spentSeconds >= its old plannedSeconds) must not expire at 0 ms on the
+        // next Start. `plannedSeconds = spentSeconds + seconds` makes the REMAINING
+        // time exactly `seconds`, the same invariant `expiryAt` already assumes.
+        const task = draft.tasks.find((t) => t.id === action.id);
+        if (!task || task.status === 'done') break;
+        if (task.timer?.runningSince !== undefined) break; // already running: no-op
+
+        // Any OTHER task with a running timer is paused first, exactly like timer/start.
+        for (const other of draft.tasks) {
+          if (other.id === task.id || other.timer?.runningSince === undefined) continue;
+          foldTimerSegment(draft, other, action.now);
+          other.updatedAt = action.now;
+        }
+
+        if (!task.timer) task.timer = { spentSeconds: 0 };
+        task.timer.plannedSeconds = task.timer.spentSeconds + action.seconds;
+        task.timer.runningSince = action.now;
+        task.timer.pausedAtSuspend = undefined;
+        task.updatedAt = action.now;
+        break;
+      }
+
       case 'timer/pause': {
         const task = draft.tasks.find((t) => t.id === action.id);
         if (!task || task.timer?.runningSince === undefined) break;

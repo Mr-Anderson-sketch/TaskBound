@@ -5,16 +5,23 @@ import { forwardRef } from 'react';
 import { fmtClock } from '../../core/timer';
 import type { DisplayTime } from '../lib/useDisplayTime';
 
-export const Pill = forwardRef<HTMLDivElement, { title: string; display: DisplayTime }>(function Pill(
-  { title, display },
-  ref
-) {
-  const showTimer = display.mode !== 'none';
+export interface PillProps {
+  title: string;
+  display: DisplayTime;
+  /** Fix round 1, item 3 minor: during a pomodoro break, the pill shows the break's
+   * own countdown instead of `display` (which reflects the — paused — current
+   * task's timer, not the break). Already-formatted (`fmtClock`) text; when set, it
+   * replaces the tail regardless of `display.mode`. */
+  chipOverride?: string;
+}
+
+export const Pill = forwardRef<HTMLDivElement, PillProps>(function Pill({ title, display, chipOverride }, ref) {
+  const chipText = chipOverride ?? (display.mode !== 'none' ? fmtClock(display.seconds) : undefined);
   return (
     <div ref={ref} className="pill">
       <span className="dot" />
       <span className="t">{title}</span>
-      {showTimer && <span className="m">{fmtClock(display.seconds)}</span>}
+      {chipText !== undefined && <span className="m">{chipText}</span>}
     </div>
   );
 });

@@ -4,6 +4,7 @@ import { createEmptyData, INBOX_ID } from '../../src/core/defaults';
 import { todayView } from '../../src/core/select';
 import { ymd, dayKeyForRollover, addDays, rolloverCutoffMs } from '../../src/core/dates';
 import { UNDOABLE, UndoStack } from '../../src/core/undo';
+import { remainingSeconds } from '../../src/core/timer';
 const t0 = 1_700_000_000_000;
 const add = (d: any, id: string, title: string, extra = {}) => reduce(d, { type: 'task/add', id, now: t0, title, today: true, ...extra });
 describe('reducer: tasks', () => {
@@ -619,5 +620,85 @@ describe('reducer: timer/* (Task 3.1)', () => {
     expect(UNDOABLE.has('timer/pause')).toBe(false);
     expect(UNDOABLE.has('timer/start')).toBe(false);
     expect(UNDOABLE.has('timer/addTime')).toBe(true);
+  });
+});
+
+describe('reducer: timer/startSession (Task 3.2 fix round 1, supersedes addendum ruling 3)', () => {
+  it('creates a timer with plannedSeconds = seconds and sets runningSince', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 1, seconds: 1500 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 0, plannedSeconds: 1500, runningSince: t0 + 1, pausedAtSuspend: undefined });
+    expect(a.updatedAt).toBe(t0 + 1);
+  });
+
+  it('after a session that ended in overtime, startSession gives a FULL new session (does not expire at 0 ms)', () => {
+    // Session 1: a 60 s plan, run 90 s past it (spentSeconds ends up > plannedSeconds).
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0, seconds: 60 });
+    d = reduce(d, { type: 'timer/pause', id: 'a', now: t0 + 90_000 });
+    const afterSession1 = d.tasks.find((t) => t.id === 'a')!;
+    expect(afterSession1.timer?.spentSeconds).toBe(90);
+    expect(afterSession1.timer!.spentSeconds).toBeGreaterThanOrEqual(afterSession1.timer!.plannedSeconds!);
+
+    // Session 2, dispatched right away: plannedSeconds must be re-based off the
+    // CURRENT spentSeconds so the remaining time is a full new 60 s, not <= 0.
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 90_000, seconds: 60 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer).toEqual({ spentSeconds: 90, plannedSeconds: 150, runningSince: t0 + 90_000, pausedAtSuspend: undefined });
+    expect(remainingSeconds(a.timer!, t0 + 90_000)).toBe(60);
+  });
+
+  it('is a no-op on a done or missing task', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'task/complete', id: 'a', now: t0 + 1, by: 'user' });
+    const before = d;
+    expect(reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 2, seconds: 60 })).toBe(before);
+    expect(reduce(d, { type: 'timer/startSession', id: 'ghost', now: t0 + 2, seconds: 60 })).toBe(before);
+  });
+
+  it('is a no-op on an already-running timer (does not restart it or change its plan)', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 1, seconds: 60 });
+    const before = d;
+    expect(reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 999, seconds: 1500 })).toBe(before);
+  });
+
+  it('pauses another running task first, folding its elapsed into spent and recording focus', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = add(d, 'b', 'B');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    d = reduce(d, { type: 'timer/startSession', id: 'b', now: t0 + 30_000, seconds: 60 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    const b = d.tasks.find((t) => t.id === 'b')!;
+    expect(a.timer).toEqual({ spentSeconds: 30, runningSince: undefined });
+    expect(b.timer).toEqual({ spentSeconds: 0, plannedSeconds: 60, runningSince: t0 + 30_000, pausedAtSuspend: undefined });
+    expect(d.days.find((r) => r.date === ymd(t0 + 30_000))!.focusSeconds).toBe(30);
+  });
+
+  it('clears a stale pausedAtSuspend', () => {
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'timer/start', id: 'a', now: t0 });
+    d = reduce(d, { type: 'timer/pause', id: 'a', now: t0 + 5_000, at: t0 - 1_000 }); // sets no pausedAtSuspend itself, but...
+    d = { ...d, tasks: d.tasks.map((t) => (t.id === 'a' ? { ...t, timer: { ...t.timer!, pausedAtSuspend: t0 + 1 } } : t)) };
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0 + 10_000, seconds: 60 });
+    const a = d.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer?.pausedAtSuspend).toBeUndefined();
+  });
+
+  it('is not undoable and does not change score', () => {
+    expect(UNDOABLE.has('timer/startSession')).toBe(false);
+
+    let d = createEmptyData(t0, '2.0.0');
+    d = add(d, 'a', 'A');
+    d = reduce(d, { type: 'settings/patch', now: t0, patch: { score: { enabled: true, value: 5 } } });
+    d = reduce(d, { type: 'timer/startSession', id: 'a', now: t0, seconds: 60 });
+    expect(d.settings.score.value).toBe(5);
   });
 });

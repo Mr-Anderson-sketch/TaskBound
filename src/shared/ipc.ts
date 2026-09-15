@@ -52,10 +52,10 @@ export type InvokeMap = {
   'data:import': () => { imported?: number; error?: string };
   'data:chooseDir': () => { dir?: string };
   'hotkeys:test': (accelerator: string) => { ok: boolean; reason?: string };
-  /** Starts or pauses the current task's timer (main resolves "current"; applies the
-   * pomodoro pre-step from task-3.2-addendum ruling 3 when applicable). Same effect
-   * as the `toggleTimer` hotkey — used by the panel's timer button and the tray's
-   * Start/Pause timer item. */
+  /** Starts or pauses the current task's timer (main resolves "current"; in pomodoro
+   * mode, starting dispatches `timer/startSession` instead of `timer/start` — see
+   * task-3.2-fix-round-1.md item 1). Same effect as the `toggleTimer` hotkey — used
+   * by the panel's timer button and the tray's Start/Pause timer item. */
   'timer:toggle': () => void;
 };
 

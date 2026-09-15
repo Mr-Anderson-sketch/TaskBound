@@ -122,6 +122,12 @@ export type Action =
   | { type: 'task/snooze'; id: Id; now: number; until: number }
   | { type: 'task/setToday'; ids: Id[]; now: number; today: boolean }
   | { type: 'timer/start'; id: Id; now: number }
+  // Task 3.2 fix round 1: a pomodoro work session. Unlike `timer/start`, this always
+  // gives the task a FULL `seconds`-long session regardless of any prior
+  // `plannedSeconds`/`spentSeconds` (so a second pomodoro session on the same task
+  // doesn't expire instantly) — see reducer.ts. Deliberately not undoable (ruling:
+  // "NOT in UNDOABLE, no score change").
+  | { type: 'timer/startSession'; id: Id; now: number; seconds: number }
   | { type: 'timer/pause'; id: Id; now: number; at?: number }
   | { type: 'timer/stop'; id: Id; now: number }
   | { type: 'timer/addTime'; id: Id; now: number; seconds: number }

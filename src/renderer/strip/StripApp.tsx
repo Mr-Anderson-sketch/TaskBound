@@ -346,7 +346,10 @@ export function StripApp() {
   // moment, not the day-to-day idle/running state break interrupts).
   const anyRunning = snapshot.data.tasks.some((t) => t.timer?.runningSince !== undefined);
   const onBreak = breakEndsAt !== undefined && !anyRunning;
-  const breakRemaining = onBreak ? Math.max(0, Math.round((breakEndsAt! - breakNow) / 1000)) : 0;
+  // Fix round 1, item 3 minor: Math.ceil (not round) so the chip reads e.g. "1:00"
+  // the instant the break starts (0 ms elapsed rounds to 1s remaining, not 0) and
+  // never shows "0:00" a whole second before the break actually ends.
+  const breakRemaining = onBreak ? Math.max(0, Math.ceil((breakEndsAt! - breakNow) / 1000)) : 0;
 
   const view: StripView = completing
     ? { state: 'done', title: completing.title, strike: true, chip: { text: 'Undo', onClick: () => onUndo() } }
@@ -429,7 +432,9 @@ export function StripApp() {
   }
 
   if (snapshot.data.settings.strip.collapsed) {
-    return <Pill ref={rootRef} title={titleText || view.title} display={display} />;
+    return (
+      <Pill ref={rootRef} title={titleText || view.title} display={display} chipOverride={onBreak ? fmtClock(breakRemaining) : undefined} />
+    );
   }
 
   return (

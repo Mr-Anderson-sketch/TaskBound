@@ -18,6 +18,12 @@ export interface NotifierDeps {
  * with the two copies this app ever shows. Sentence case, no exclamation marks (per
  * the addendum's exact wording). */
 export class Notifier {
+  // Task 3.2 fix round 1, item 2: with nothing keeping a strong reference to it,
+  // Electron/the OS can garbage-collect a Notification instance while it is still
+  // showing — the click handler then silently never fires. Kept live from `show`
+  // until the OS reports it `close`d, `click`ed, or `failed`.
+  private readonly live = new Set<Electron.Notification>();
+
   constructor(private readonly deps: NotifierDeps) {}
 
   timerDone(task: Task): void {
@@ -28,11 +34,25 @@ export class Notifier {
     this.notify("Break's over", 'Pick up where you left off');
   }
 
+  /** Test-only visibility into how many notifications are currently kept referenced. */
+  get liveCount(): number {
+    return this.live.size;
+  }
+
   private notify(title: string, body: string): void {
     if (!this.deps.getSettings().notifications) return;
     if (!this.deps.isSupported()) return;
     const n = new this.deps.NotificationCtor({ title, body, silent: false });
-    n.on('click', () => this.deps.onClick());
+    const release = (): void => {
+      this.live.delete(n);
+    };
+    n.on('show', () => this.live.add(n));
+    n.on('click', () => {
+      this.deps.onClick();
+      release();
+    });
+    n.on('close', release);
+    n.on('failed', release);
     n.show();
   }
 }

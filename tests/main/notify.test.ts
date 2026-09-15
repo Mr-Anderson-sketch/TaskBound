@@ -112,6 +112,62 @@ describe('Notifier', () => {
     expect(instances[0].opts).toEqual({ title: "Break's over", body: 'Pick up where you left off', silent: false });
   });
 
+  // Task 3.2 fix round 1, item 2 (Important): Notification objects must be kept
+  // referenced or Electron/the OS can garbage-collect them mid-display, silently
+  // dropping the click handler.
+  it('keeps the Notification instance referenced from `show` until the OS reports it closed', () => {
+    const { FakeNotification, instances } = makeFakeNotificationCtor();
+    const notifier = new Notifier({
+      NotificationCtor: FakeNotification as never,
+      isSupported: () => true,
+      getSettings: () => makeSettings({ notifications: true }),
+      onClick: vi.fn()
+    });
+
+    notifier.timerDone(makeTask());
+    expect(notifier.liveCount).toBe(0); // constructed, but the OS hasn't reported it shown yet
+
+    instances[0].fire('show');
+    expect(notifier.liveCount).toBe(1);
+
+    instances[0].fire('close');
+    expect(notifier.liveCount).toBe(0);
+  });
+
+  it('releases the reference when the notification is clicked', () => {
+    const { FakeNotification, instances } = makeFakeNotificationCtor();
+    const notifier = new Notifier({
+      NotificationCtor: FakeNotification as never,
+      isSupported: () => true,
+      getSettings: () => makeSettings({ notifications: true }),
+      onClick: vi.fn()
+    });
+
+    notifier.timerDone(makeTask());
+    instances[0].fire('show');
+    expect(notifier.liveCount).toBe(1);
+
+    instances[0].fire('click');
+    expect(notifier.liveCount).toBe(0);
+  });
+
+  it('releases the reference when showing the notification fails', () => {
+    const { FakeNotification, instances } = makeFakeNotificationCtor();
+    const notifier = new Notifier({
+      NotificationCtor: FakeNotification as never,
+      isSupported: () => true,
+      getSettings: () => makeSettings({ notifications: true }),
+      onClick: vi.fn()
+    });
+
+    notifier.timerDone(makeTask());
+    instances[0].fire('show');
+    expect(notifier.liveCount).toBe(1);
+
+    instances[0].fire('failed');
+    expect(notifier.liveCount).toBe(0);
+  });
+
   it('clicking the notification calls onClick', () => {
     const { FakeNotification, instances } = makeFakeNotificationCtor();
     const onClick = vi.fn();

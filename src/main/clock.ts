@@ -15,7 +15,7 @@
 import type { PowerMonitor } from 'electron';
 import { addDays, dayKeyForRollover, rolloverCutoffMs, ymd } from '../core/dates';
 import { expiryAt } from '../core/timer';
-import type { Task } from '../core/types';
+import type { Action, Settings, Task } from '../core/types';
 import type { Snapshot } from '../shared/ipc';
 import type { Store } from './store';
 
@@ -23,6 +23,27 @@ import type { Store } from './store';
 // immediately in Node/Chromium instead of waiting. The next-4-AM delay is always
 // well under 24h, so this only matters as a defensive ceiling (per the addendum).
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/** Pure decision logic for the `toggleTimer` hotkey/tray-item/`timer:toggle` IPC
+ * handler in main.ts — extracted (fix round 1, item 3 minor) so
+ * `tests/main/clock.test.ts` can dispatch EXACTLY what main.ts would, without
+ * needing Electron, to cover back-to-back pomodoro sessions. `undefined` when there
+ * is no current task (main no-ops). Fix round 1 item 1 (supersedes addendum ruling
+ * 3): pomodoro mode always starts a full `workMinutes` session via
+ * `timer/startSession`, regardless of any existing `plannedSeconds` — a plain
+ * `timer/start` would expire instantly once `spentSeconds >= plannedSeconds` from an
+ * earlier session. */
+export function resolveToggleTimerAction(current: Task | undefined, settings: Settings, now: number): Action | undefined {
+  if (!current) return undefined;
+  const running = current.timer?.runningSince !== undefined;
+  if (running) {
+    return { type: 'timer/pause', id: current.id, now };
+  }
+  if (settings.timer.pomodoro) {
+    return { type: 'timer/startSession', id: current.id, now, seconds: settings.timer.workMinutes * 60 };
+  }
+  return { type: 'timer/start', id: current.id, now };
+}
 
 // How often, while a task is running, main checks `powerMonitor.getSystemIdleTime()`
 // (addendum ruling 5).
@@ -154,12 +175,13 @@ export class Clock {
       this.timerHandle = undefined;
     }
 
-    // Addendum ruling 4: a suspend/lock that lasted longer than the away threshold
-    // pauses whatever was running, folding the elapsed segment up to the SUSPEND
+    // Addendum ruling 4 (fix round 1 minor: clear `suspendedAt` only AFTER using it,
+    // and use the EARLIEST of possibly-several suspend/lock instants — see
+    // `onSuspend`): a suspend/lock that lasted longer than the away threshold pauses
+    // whatever was running, folding the elapsed segment up to that earliest SUSPEND
     // instant (not "now" — the user wasn't at the keyboard for the gap).
     if (this.suspendedAt !== undefined) {
       const suspendedAt = this.suspendedAt;
-      this.suspendedAt = undefined;
       const snapshot = this.deps.store.get();
       const running = snapshot.data.tasks.find((t) => t.timer?.runningSince !== undefined);
       const thresholdMs = snapshot.data.settings.timer.awayThresholdMinutes * 60_000;
@@ -167,6 +189,7 @@ export class Clock {
       if (running && now - suspendedAt > thresholdMs) {
         this.deps.store.dispatch({ type: 'timer/pause', id: running.id, now, at: suspendedAt });
       }
+      this.suspendedAt = undefined;
     }
 
     this.dispatchRollover();
@@ -174,7 +197,11 @@ export class Clock {
   };
 
   private readonly onSuspend = (): void => {
-    this.suspendedAt = this.deps.now();
+    // Fix round 1 minor: `suspend` and `lock-screen` can BOTH fire around the same
+    // real sleep/lock event; keep the EARLIEST instant rather than overwriting it, so
+    // a `lock-screen` at T followed by a `suspend` at T+10min still folds the away
+    // gap from T, not T+10min.
+    this.suspendedAt ??= this.deps.now();
   };
 
   // --- Task 3.2: react to every store snapshot -------------------------------------
@@ -194,7 +221,14 @@ export class Clock {
     }
 
     const expiry = running ? expiryAt(running.timer!) : undefined;
-    if (!running || expiry === undefined) {
+    // Fix round 1, item 1 last bullet: a task resumed while it was ALREADY past its
+    // plan (spentSeconds >= plannedSeconds when this run started, e.g. a manually
+    // paused-then-resumed overtime task) computes an expiry at or before its own
+    // `runningSince` — arming that would fire at 0 ms and re-send "Time's up" for
+    // overtime the renderer is already showing. Only arm when the timer was NOT
+    // already in overtime at the start of this run.
+    const alreadyOvertimeAtStart = running !== undefined && expiry !== undefined && expiry <= running.timer!.runningSince!;
+    if (!running || expiry === undefined || alreadyOvertimeAtStart) {
       if (this.expiryTimerHandle !== undefined) {
         this.deps.clearTimer(this.expiryTimerHandle);
         this.expiryTimerHandle = undefined;
@@ -239,10 +273,19 @@ export class Clock {
     this.deps.notify.timerDone(task);
 
     if (snapshot.data.settings.timer.pomodoro) {
+      // Fix round 1, item 3 minor: fold at the EXPIRY instant, not `now` — if the
+      // computer slept and this timer only fires on wake (well after the real
+      // expiry), the sleep gap must not count as focus time.
       const now = this.deps.now();
-      this.deps.store.dispatch({ type: 'timer/pause', id: taskId, now });
+      this.deps.store.dispatch({ type: 'timer/pause', id: taskId, now, at: expiry });
       this.startBreak(snapshot.data.settings.timer.breakMinutes);
     }
+  }
+
+  /** The current pomodoro break, if any — for a newly-created or reloaded window to
+   * replay on its own `did-finish-load` (fix round 1, item 3 minor "break replay"). */
+  getCurrentBreak(): { endsAt: number } | null {
+    return this.breakEndsAt !== undefined ? { endsAt: this.breakEndsAt } : null;
   }
 
   // --- Task 3.2: pomodoro break ------------------------------------------------------

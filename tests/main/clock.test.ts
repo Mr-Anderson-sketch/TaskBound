@@ -6,7 +6,7 @@
 // planned/unplanned timer without duplicating core/timer's math.
 import { describe, it, expect, vi } from 'vitest';
 import type { PowerMonitor } from 'electron';
-import { Clock } from '../../src/main/clock';
+import { Clock, resolveToggleTimerAction } from '../../src/main/clock';
 import { Store } from '../../src/main/store';
 import { createEmptyData } from '../../src/core/defaults';
 import { dayKeyForRollover } from '../../src/core/dates';
@@ -309,6 +309,30 @@ describe('Clock (timer expiry — Task 3.2)', () => {
 
     expect(store.get().data.tasks.find((t) => t.id === 'a')?.timer?.runningSince).toBe(now);
   });
+
+  // Fix round 1, item 1 last bullet: resuming a task that was ALREADY in overtime
+  // when this run started (spentSeconds >= plannedSeconds at the new runningSince)
+  // computes an expiry at or before that runningSince — arming it would fire at 0 ms
+  // and re-send "Time's up" for overtime the renderer already shows.
+  it('does not arm (or re-notify) when a task is resumed already in overtime', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, notify, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds: 5 });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+
+    sched.fireDelay(5_000); // genuine expiry — notifies once
+    expect(notify.timerDone).toHaveBeenCalledTimes(1);
+
+    now += 20_000; // run well past the plan, then pause (still overtime: spent > planned)
+    store.dispatch({ type: 'timer/pause', id: 'a', now });
+    now += 1_000;
+    store.dispatch({ type: 'timer/start', id: 'a', now }); // resume: still overtime at the new runningSince
+
+    // No 0 ms (or any) expiry timer armed for this run, and no second notification.
+    expect(sched.delays()).not.toContain(0);
+    expect(notify.timerDone).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Clock (pomodoro break — Task 3.2)', () => {
@@ -330,6 +354,40 @@ describe('Clock (pomodoro break — Task 3.2)', () => {
 
     expect(broadcastBreak).toHaveBeenLastCalledWith(null);
     expect(notify.breakDone).toHaveBeenCalledTimes(1);
+  });
+
+  // Fix round 1, item 3 minor.
+  it('pomodoro expiry pause folds at the EXPIRY instant, not now (sleep across expiry does not count as focus)', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, breakMinutes: 1 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds: 5 });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+
+    now += 50_000; // simulate the computer sleeping well past the real 5 s expiry
+    sched.fireDelay(5_000);
+
+    const task = store.get().data.tasks.find((t) => t.id === 'a');
+    expect(task?.timer?.spentSeconds).toBe(5); // exactly the planned session, not 50 s of "sleep focus"
+  });
+
+  // Fix round 1, item 3 minor "break replay": main.ts reads this to replay the
+  // current break to a window's `did-finish-load`.
+  it('getCurrentBreak() reflects the live break state', () => {
+    const now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, breakMinutes: 1 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds: 5 });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+    expect(clock.getCurrentBreak()).toBeNull();
+
+    sched.fireDelay(5_000);
+    expect(clock.getCurrentBreak()).toEqual({ endsAt: now + 60_000 });
+
+    sched.fireDelay(60_000);
+    expect(clock.getCurrentBreak()).toBeNull();
   });
 
   it('starting a task cancels an in-progress break', () => {
@@ -421,6 +479,28 @@ describe('Clock (suspend/lock -> resume/unlock away threshold — Task 3.2)', ()
     // all) — no timer/pause was possible with no running task.
     expect(store.get().rev).toBe(revBefore);
   });
+
+  // Fix round 1 minor: `suspend` and `lock-screen` can both fire around the same real
+  // sleep/lock event; the EARLIEST instant must win, not whichever fires last.
+  it('keeps the EARLIEST suspend/lock instant when both fire before resume: lock at T, sleep at T+10min, resume at T+20min -> pause at T', () => {
+    const T = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    let now = T;
+    const { store, pm, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { awayThresholdMinutes: 5 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+
+    pm.emit('lock-screen'); // T
+    now = T + 10 * 60_000;
+    pm.emit('suspend'); // T+10min — must NOT overwrite the earlier lock-screen instant
+    now = T + 20 * 60_000;
+    pm.emit('resume');
+
+    const pauseCall = dispatchSpy.mock.calls.find(([a]) => (a as { type: string }).type === 'timer/pause');
+    expect(pauseCall?.[0]).toMatchObject({ type: 'timer/pause', id: 'a', at: T });
+  });
 });
 
 describe('Clock (idle pause — Task 3.2)', () => {
@@ -479,6 +559,124 @@ describe('Clock (idle pause — Task 3.2)', () => {
     clock.start();
 
     expect(sched.size()).toBe(1); // rollover only
+  });
+});
+
+describe('Clock (pomodoro back-to-back sessions — Task 3.2 fix round 1, item 3)', () => {
+  it('session 2, toggled right after session 1 pauses+breaks, runs a FULL workMinutes and does not fire at 0 ms', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, notify, broadcastBreak, clock } = makeClockDeps(() => now);
+    // workMinutes/breakMinutes deliberately != 1 minute so their delays (120_000,
+    // 180_000) never collide with the fixed 60_000 ms idle-check interval.
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { pomodoro: true, workMinutes: 2, breakMinutes: 3 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+    clock.start();
+
+    // toggleTimer #1 (nothing running, pomodoro on) -> a full 120 s session, via the
+    // SAME decision function main.ts's toggleTimer calls.
+    let action = resolveToggleTimerAction(store.get().today.current, store.get().data.settings, now)!;
+    expect(action).toMatchObject({ type: 'timer/startSession', id: 'a', seconds: 120 });
+    store.dispatch(action);
+    expect(sched.delays()).toContain(120_000);
+
+    now += 120_000;
+    sched.fireDelay(120_000); // session 1 expires -> pause + break starts
+    expect(notify.timerDone).toHaveBeenCalledTimes(1);
+    expect(store.get().data.tasks.find((t) => t.id === 'a')?.timer?.spentSeconds).toBe(120);
+    expect(broadcastBreak).toHaveBeenCalledWith({ endsAt: now + 180_000 });
+
+    now += 180_000;
+    sched.fireDelay(180_000); // break ends
+    expect(notify.breakDone).toHaveBeenCalledTimes(1);
+
+    // toggleTimer #2, right away: must be a FULL new 120 s session, not 0 ms — the
+    // defect this fix round supersedes ruling 3 to close.
+    action = resolveToggleTimerAction(store.get().today.current, store.get().data.settings, now)!;
+    expect(action).toMatchObject({ type: 'timer/startSession', id: 'a', seconds: 120 });
+    store.dispatch(action);
+
+    expect(sched.delays()).not.toContain(0);
+    expect(sched.delays()).toContain(120_000);
+    const a = store.get().data.tasks.find((t) => t.id === 'a')!;
+    expect(a.timer?.plannedSeconds).toBe(240); // spentSeconds(120) + a full new 120 s session
+    expect(a.timer?.runningSince).toBe(now);
+
+    now += 120_000;
+    sched.fireDelay(120_000); // a genuine SECOND expiry — proves session 2 was a real full session
+    expect(notify.timerDone).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Clock (test gaps — Task 3.2 fix round 1, item 3)', () => {
+  it('re-arms when runningSince changes (pause then resume) and fires again for the new run', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, notify, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds: 10 });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+    expect(sched.delays()).toContain(10_000);
+
+    now += 4_000;
+    store.dispatch({ type: 'timer/pause', id: 'a', now }); // spentSeconds=4, remaining=6
+    expect(sched.delays()).not.toContain(10_000);
+
+    store.dispatch({ type: 'timer/start', id: 'a', now }); // resume: expiry moves to now+6000
+    expect(sched.delays()).toContain(6_000);
+
+    now += 6_000;
+    sched.fireDelay(6_000);
+    expect(notify.timerDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('an expiry already in the past when arming (start() called well after the real expiry) fires once at 0 ms', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, notify, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds: 10 });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    now += 50_000; // 40 s past the 10 s plan, BEFORE clock.start() ever runs
+
+    clock.start(); // the initial onSnapshot() call arms it fresh, from scratch
+
+    expect(sched.delays()).toContain(0);
+    sched.fireDelay(0);
+    expect(notify.timerDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('an expiry beyond the 2^31-1 ms cap is chunked and re-arms for the remainder', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, sched, clock } = makeClockDeps(() => now);
+    const plannedSeconds = 30 * 24 * 3600; // 30 days — exceeds the ~24.8-day 2^31-1 ms cap
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true, plannedSeconds });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+
+    clock.start();
+
+    const capMs = 2 ** 31 - 1;
+    expect(sched.delays()).toContain(capMs);
+
+    now += capMs; // the first chunk elapses
+    sched.fireDelay(capMs);
+
+    const remaining = plannedSeconds * 1000 - capMs;
+    expect(sched.delays()).toContain(remaining);
+    expect(sched.delays()).not.toContain(capMs * 2);
+  });
+
+  it('idle pause dispatches at = now - idleSeconds*1000 (asserted on the dispatched action itself)', () => {
+    let now = new Date(2026, 8, 15, 10, 0, 0).getTime();
+    const { store, pm, sched, clock } = makeClockDeps(() => now);
+    store.dispatch({ type: 'settings/patch', now, patch: { timer: { idlePauseMinutes: 5 } } });
+    store.dispatch({ type: 'task/add', id: 'a', now, title: 'Task', today: true });
+    store.dispatch({ type: 'timer/start', id: 'a', now });
+    clock.start();
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+
+    pm.setIdleSeconds(400); // >= 5 * 60 = 300
+    now += 60_000;
+    sched.fireDelay(60_000);
+
+    const pauseCall = dispatchSpy.mock.calls.find(([a]) => (a as { type: string }).type === 'timer/pause');
+    expect(pauseCall?.[0]).toMatchObject({ type: 'timer/pause', id: 'a', now, at: now - 400_000 });
   });
 });
 

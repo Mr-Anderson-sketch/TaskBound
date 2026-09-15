@@ -324,6 +324,19 @@ const TimerStartSchema = z
   })
   .strict();
 
+// Task 3.2 fix round 1: strictly bounded (unlike TimerAddTimeSchema below, which the
+// reducer clamps itself) — a pomodoro session's length is never user-typed free text,
+// so rejecting out-of-range values at the IPC boundary is safe and simpler than
+// clamping in the reducer.
+const TimerStartSessionSchema = z
+  .object({
+    type: z.literal('timer/startSession'),
+    id: IdSchema,
+    now: z.number(),
+    seconds: z.number().int().min(60).max(14400)
+  })
+  .strict();
+
 const TimerPauseSchema = z
   .object({
     type: z.literal('timer/pause'),
@@ -422,6 +435,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   TaskSnoozeSchema,
   TaskSetTodaySchema,
   TimerStartSchema,
+  TimerStartSessionSchema,
   TimerPauseSchema,
   TimerStopSchema,
   TimerAddTimeSchema,

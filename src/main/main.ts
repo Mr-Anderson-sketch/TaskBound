@@ -18,7 +18,7 @@ import { PlannerWindow } from './windows/planner';
 import { Hotkeys, validateAccelerator } from './hotkeys';
 import type { HotkeyHandlers } from './hotkeys';
 import { AppTray } from './tray';
-import { Clock } from './clock';
+import { Clock, resolveToggleTimerAction } from './clock';
 import { Notifier } from './notify';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
@@ -66,6 +66,22 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     installCsp(session.defaultSession, isDev);
+
+    // Task 3.2 fix round 1, minor "break replay": every window replays the CURRENT
+    // pomodoro break state (if any) once its content has actually finished loading —
+    // covers a renderer reload and covers a window (palette/planner are created
+    // lazily, on first show) that comes into existence after a break already
+    // started. Registered before ANY BrowserWindow exists (strip.create() below is
+    // the first) so it never misses that window's own webContents. `clock` is
+    // assigned further down, but this listener's body only ever runs later,
+    // asynchronously, once a page actually finishes loading — always after `clock`
+    // is set.
+    let clock!: Clock;
+    app.on('web-contents-created', (_event, contents) => {
+      contents.once('did-finish-load', () => {
+        if (!contents.isDestroyed()) contents.send('timer:break', clock.getCurrentBreak());
+      });
+    });
 
     const result = await load({ dir: dataDir, now: Date.now }, app.getVersion(), legacyPath);
 
@@ -119,7 +135,7 @@ if (!gotLock) {
 
     // --- daily rollover + timer clock (Task 2.3, extended Task 3.2) ------------------
 
-    const clock = new Clock({
+    clock = new Clock({
       store,
       powerMonitor,
       now: Date.now,
@@ -133,21 +149,18 @@ if (!gotLock) {
     // --- timer start/pause: shared by the toggleTimer hotkey, the panel's timer
     // button (IPC `timer:toggle`), and the tray's Start/Pause timer item -------------
 
+    // Task 3.2 fix round 1 (supersedes addendum ruling 3): the actual decision logic
+    // lives in `resolveToggleTimerAction` (main/clock.ts) — a pure function shared
+    // with tests/main/clock.test.ts — so this is just "read the store, dispatch what
+    // it says". In pomodoro mode, starting ALWAYS goes through timer/startSession
+    // regardless of any existing plannedSeconds — a plain timer/start would expire
+    // instantly once spentSeconds >= plannedSeconds from an earlier session, and the
+    // old timer/addTime pre-step was undoable and cost a score point for something
+    // that isn't a user edit.
     function toggleTimer(): void {
-      const current = store.get().today.current;
-      if (!current) return;
-      const running = current.timer?.runningSince !== undefined;
-      if (running) {
-        store.dispatch({ type: 'timer/pause', id: current.id, now: Date.now() });
-        return;
-      }
-      // Task 3.2 addendum ruling 3: in pomodoro mode, starting a task with no
-      // plannedSeconds yet first gets one work session's worth of planned time.
-      const settings = store.get().data.settings;
-      if (settings.timer.pomodoro && current.timer?.plannedSeconds === undefined) {
-        store.dispatch({ type: 'timer/addTime', id: current.id, now: Date.now(), seconds: settings.timer.workMinutes * 60 });
-      }
-      store.dispatch({ type: 'timer/start', id: current.id, now: Date.now() });
+      const snapshot = store.get();
+      const action = resolveToggleTimerAction(snapshot.today.current, snapshot.data.settings, Date.now());
+      if (action) store.dispatch(action);
     }
 
     // nativeTheme changes are not a dispatch (no Data change), so they don't flow
