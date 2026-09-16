@@ -2,7 +2,11 @@
 
 All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow SemVer.
 
-## [Unreleased]
+## [2.0.0-alpha.0] - 2026-09-16
+
+TimeBound is now a focus strip, not a sticky note. The whole app was rebuilt around one idea: the task you are doing stays visible, and everything else waits behind a key. Your 1.x data is imported on first run and never modified.
+
+Highlights: a 32 px always-on-top strip that docks to either edge; global quick capture with a parser; a keyboard-first planner with lists, tags, sub-tasks, repeats, snooze and drag reorder; plan-today and close-the-day rituals; timers with optional pomodoro; four AA-contrast themes in light and dark; export, import, a movable data folder and daily backups; onboarding in three cards; Windows screen-space reservation and macOS menu bar mode.
 
 ### Reliability (2026-09-16)
 - Safer restore and undo: restoring a backup keeps a copy of your current data, and undo no longer rolls back timers or settings.
