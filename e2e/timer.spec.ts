@@ -17,6 +17,11 @@ test('a running planned timer counts down and notifies once at expiry, entering 
       // Notifier's own settings check runs, so turning notifications off here still
       // lets the test count `timerDone` calls while ensuring no real OS toast appears.
       tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
+      // Fix: this spec must not depend on whether something full-screen (including a
+      // Windows shell surface like Start/Search) happens to be in the foreground on
+      // the machine running it — disable the strip's fullscreen auto-hide outright so
+      // the win32 fullscreen watcher never touches this window's visibility here.
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { hideOverFullscreen: false } } });
       tb.store.dispatch({ type: 'task/add', id: 't1', now: Date.now(), title: 'Timed task', today: true, plannedSeconds: 2 });
       tb.store.dispatch({ type: 'timer/start', id: 't1', now: Date.now() });
     });
@@ -53,6 +58,10 @@ test('pomodoro: timer expiry pauses the task and starts a break shown on the str
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
       tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
+      // Fix: see the identical patch in the test above — this spec screenshots the
+      // strip below, so it must not depend on the real desktop's foreground state
+      // (e.g. hang if Start/Search happens to be open when this runs).
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { hideOverFullscreen: false } } });
       tb.store.dispatch({
         type: 'settings/patch',
         now: Date.now(),
@@ -75,7 +84,22 @@ test('pomodoro: timer expiry pauses the task and starts a break shown on the str
     });
     expect(runningSince).toBeUndefined();
 
-    await strip.screenshot({ path: 'docs/screenshots/strip-break.png' });
+    // Fix: assert the strip window is actually visible before screenshotting it — a
+    // hidden BrowserWindow's `page.screenshot` hangs rather than failing fast, which
+    // is exactly what used to happen here whenever a full-screen-sized Windows shell
+    // surface was in the foreground (the bug this spec now rules out above).
+    await expect
+      .poll(
+        () =>
+          launched.app.evaluate(() => {
+            const tb = (globalThis as unknown as { __tb: { strip: { isVisible: () => boolean } } }).__tb;
+            return tb.strip.isVisible();
+          }),
+        { timeout: 5000 }
+      )
+      .toBe(true);
+
+    await strip.screenshot({ path: 'docs/screenshots/strip-break.png', timeout: 10_000 });
 
     expect(launched.errors()).toEqual([]);
   } finally {
@@ -95,6 +119,9 @@ test('a reloaded strip window replays the active pomodoro break', async () => {
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
       tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { notifications: false } });
+      // Fix: same reasoning as the two tests above — keep this spec independent of
+      // the real desktop's foreground state.
+      tb.store.dispatch({ type: 'settings/patch', now: Date.now(), patch: { strip: { hideOverFullscreen: false } } });
       tb.store.dispatch({
         type: 'settings/patch',
         now: Date.now(),

@@ -21,6 +21,7 @@ All notable changes to TimeBound. Format: [Keep a Changelog](https://keepachange
 
 ### Windows integration (2026-09-15)
 - Windows: optionally reserve screen space for the strip, and hide it over full-screen apps.
+- The strip no longer hides itself when you open Start, Search or Task View.
 
 ### Planner (2026-09-15)
 - The planner window is now the real thing: a rail (Today, Upcoming, Inbox, your lists, tags used by open tasks, and the Logbook, each with counts) next to a task list. Today shows Current/Up next/Done; Upcoming groups what's due over the next two weeks by date; the Logbook (done tasks, newest first) virtualises so it stays fast at any size. The title bar's capture field expands inline to the same live-parsed capture as the hotkey, defaulting new tasks to whatever list you're looking at.
