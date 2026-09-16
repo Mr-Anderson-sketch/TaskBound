@@ -92,7 +92,11 @@ test('planner: keyboard model — nav, complete, reorder, today, delete+undo, sn
     // --- x: delete the selected task; toast shows Deleted "..." with Undo; Undo restores it ---
     const selectedTitle = await planner.locator('.task.sel .t').textContent();
     await list.press('x');
-    const toast = planner.locator('[role="status"]');
+    // Scope to the toast's own class: dnd-kit injects its own `role="status"` live
+    // region into the planner once a sortable list has mounted, so the bare role
+    // selector intermittently matches two elements and fails strict mode instead of
+    // retrying (same fix as e2e/undo.spec.ts).
+    const toast = planner.locator('.toast[role="status"]');
     await expect(toast).toContainText(`Deleted "${selectedTitle}"`, { timeout: 3000 });
     await expect(planner.locator('.task .t', { hasText: selectedTitle! })).toHaveCount(0);
     await toast.getByRole('button', { name: 'Undo' }).click();
