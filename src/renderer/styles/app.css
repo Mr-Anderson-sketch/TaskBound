@@ -1305,7 +1305,10 @@ body[data-route='palette'] {
 .planner .task {
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* 8px (base-unit scale), not 10 — also buys the title a bit more of the row's width
+     before the badges after it (progress/tags/due/timer/recurrence) force an ellipsis;
+     see docs/screenshots/planner-detail.png's "Current" row. */
+  gap: 8px;
   height: 34px;
   padding: 0 8px;
   border-radius: var(--r-2);

@@ -17,13 +17,24 @@ test('planner: keyboard model — nav, complete, reorder, today, delete+undo, sn
     await launched.window('strip');
 
     // Seed three plain Today tasks (same list, no parent) — true task/move siblings —
-    // in a known order.
+    // in a known order. All three share one list (`seed-work`) — screenshot polish so
+    // planner-commands.png shows a real list/tag in the rail instead of an empty one —
+    // deliberately the SAME list for all three so they stay true task/move siblings.
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => { rev: number } } } }).__tb;
       const now = Date.now();
-      tb.store.dispatch({ type: 'task/add', id: 'k1', now, title: 'First task', today: true });
-      tb.store.dispatch({ type: 'task/add', id: 'k2', now: now + 1, title: 'Second task', today: true });
-      tb.store.dispatch({ type: 'task/add', id: 'k3', now: now + 2, title: 'Third task', today: true });
+      tb.store.dispatch({ type: 'list/add', id: 'seed-work', now, name: 'Work' });
+      tb.store.dispatch({ type: 'task/add', id: 'k1', now: now + 1, title: 'Draft Q3 roadmap', today: true, listId: 'seed-work', tags: ['planning'] });
+      tb.store.dispatch({
+        type: 'task/add',
+        id: 'k2',
+        now: now + 2,
+        title: 'Reply to Priya about invoices',
+        today: true,
+        listId: 'seed-work',
+        tags: ['finance']
+      });
+      tb.store.dispatch({ type: 'task/add', id: 'k3', now: now + 3, title: 'Review PR #182', today: true, listId: 'seed-work', tags: ['eng'] });
     });
 
     await launched.app.evaluate(() => {
@@ -35,22 +46,22 @@ test('planner: keyboard model — nav, complete, reorder, today, delete+undo, sn
     await list.focus(); // ruling 6: the container is tabIndex=0 and owns the keyboard model
     // The container auto-selects the first row once it has visible rows (ruling 2's
     // "selects the first row when nothing is selected", applied proactively) — so
-    // "First task" is already selected here, before any keypress.
-    await expect(planner.locator('.task.sel .t')).toHaveText('First task', { timeout: 3000 });
+    // "Draft Q3 roadmap" is already selected here, before any keypress.
+    await expect(planner.locator('.task.sel .t')).toHaveText('Draft Q3 roadmap', { timeout: 3000 });
 
     // --- j j Space: First -> Second -> Third, then complete the third task ---
     await list.press('j');
     await list.press('j');
-    await expect(planner.locator('.task.sel .t')).toHaveText('Third task');
+    await expect(planner.locator('.task.sel .t')).toHaveText('Review PR #182');
     await list.press(' ');
     await expect(planner.locator('.sec', { hasText: 'Done' })).toBeVisible({ timeout: 3000 });
-    await expect(planner.locator('.task', { hasText: 'Third task' })).toHaveClass(/done/);
+    await expect(planner.locator('.task', { hasText: 'Review PR #182' })).toHaveClass(/done/);
 
     const platform = await launched.app.evaluate(() => process.platform);
 
     // --- k then Shift+ArrowUp: reorder the second task ahead of the first ---
     await list.press('k'); // Third (still selected, now in "Done") -> Second
-    await expect(planner.locator('.task.sel .t')).toHaveText('Second task');
+    await expect(planner.locator('.task.sel .t')).toHaveText('Reply to Priya about invoices');
     await list.press('Shift+ArrowUp');
 
     const orderAfterReorder = await launched.app.evaluate(() => {
@@ -60,7 +71,7 @@ test('planner: keyboard model — nav, complete, reorder, today, delete+undo, sn
     });
     expect(orderAfterReorder.k2).toBeLessThan(orderAfterReorder.k1);
     // Selection stays on the moved task (ruling 3).
-    await expect(planner.locator('.task.sel .t')).toHaveText('Second task');
+    await expect(planner.locator('.task.sel .t')).toHaveText('Reply to Priya about invoices');
 
     // --- t: toggle today off the selected task ---
     await list.press('t');

@@ -117,6 +117,74 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<Launched> {
   return { app, dataDir, windows, window, errors: () => [...errors], close: () => app.close() };
 }
 
+/**
+ * Seeds a small, realistic Today set — a handful of believable tasks (one with a tag
+ * and a list plus a running-sized plan, one due today, one with a sub-task, one already
+ * done), a user list, and a tag — so rail counts, the Theme/Strip/Hotkeys/Data settings
+ * panes, and similar screenshots show a lived-in day instead of a fresh empty install.
+ * Kept separate from e2e/screens.spec.ts's own inline seed (used for planner-today.png)
+ * because several specs assert exact rail/row counts against their own seeded set and
+ * would break if this ran first; only call it from specs that don't depend on exact
+ * counts (settings.spec.ts, settings-data.spec.ts, the screens.spec.ts settings-timer
+ * capture).
+ */
+export async function seedRealisticToday(app: ElectronApplication): Promise<void> {
+  await app.evaluate(() => {
+    const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => unknown } } }).__tb;
+    const now = Date.now();
+    const d = new Date();
+    const todayYmd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    tb.store.dispatch({ type: 'list/add', id: 'seed-work', now, name: 'Work' });
+
+    tb.store.dispatch({
+      type: 'task/add',
+      id: 'seed-roadmap',
+      now: now + 1,
+      title: 'Draft Q3 roadmap',
+      today: true,
+      listId: 'seed-work',
+      tags: ['planning'],
+      plannedSeconds: 3600
+    });
+    tb.store.dispatch({
+      type: 'task/add',
+      id: 'seed-priya',
+      now: now + 2,
+      title: 'Reply to Priya about invoices',
+      today: true,
+      tags: ['finance'],
+      due: { date: todayYmd }
+    });
+    tb.store.dispatch({
+      type: 'task/add',
+      id: 'seed-pr182',
+      now: now + 3,
+      title: 'Review PR #182',
+      today: true,
+      listId: 'seed-work',
+      tags: ['eng']
+    });
+    tb.store.dispatch({
+      type: 'task/add',
+      id: 'seed-pr182-sub',
+      now: now + 4,
+      title: 'Check the migration script',
+      parentId: 'seed-pr182'
+    });
+    tb.store.dispatch({ type: 'task/add', id: 'seed-notes', now: now + 5, title: 'Write the standup notes', listId: 'seed-work' });
+    tb.store.dispatch({
+      type: 'task/add',
+      id: 'seed-done',
+      now: now + 6,
+      title: 'Set up the shared repo',
+      today: true,
+      listId: 'seed-work'
+    });
+    tb.store.dispatch({ type: 'task/complete', id: 'seed-done', now: now + 7, by: 'user' });
+  });
+}
+
 /** Reads every BrowserWindow's geometry and flags from the main process. */
 export async function windowInfo(app: ElectronApplication) {
   return app.evaluate(({ BrowserWindow, screen }) =>

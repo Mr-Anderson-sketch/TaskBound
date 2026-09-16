@@ -18,13 +18,17 @@ test('undo via the hotkey handler updates the strip; the planner toast confirms 
 
     await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
-      tb.store.dispatch({ type: 'task/add', id: 'a', now: Date.now(), title: 'Task A', today: true });
-      tb.store.dispatch({ type: 'task/add', id: 'b', now: Date.now(), title: 'Task B', today: true });
+      const now = Date.now();
+      // A real list/tag (not just bare titles) so planner-undo-toast.png's rail isn't
+      // all-zero/empty.
+      tb.store.dispatch({ type: 'list/add', id: 'seed-work', now, name: 'Work' });
+      tb.store.dispatch({ type: 'task/add', id: 'a', now: now + 1, title: 'Draft Q3 roadmap', today: true, listId: 'seed-work', tags: ['planning'] });
+      tb.store.dispatch({ type: 'task/add', id: 'b', now: now + 2, title: 'Reply to Priya about invoices', today: true, tags: ['finance'] });
     });
 
-    await expect(strip.locator('.strip .title')).toContainText('Task A', { timeout: 5000 });
+    await expect(strip.locator('.strip .title')).toContainText('Draft Q3 roadmap', { timeout: 5000 });
 
-    // Complete "Task A" through the registered global-hotkey handler, not a direct
+    // Complete "Draft Q3 roadmap" through the registered global-hotkey handler, not a direct
     // dispatch — this is the seam Task 2.4 adds: `hotkeyHandlers` is the exact record
     // passed to `hotkeys.apply()` (the `Hotkeys` instance itself exposes no handlers).
     await launched.app.evaluate(() => {
@@ -32,7 +36,7 @@ test('undo via the hotkey handler updates the strip; the planner toast confirms 
       tb.hotkeyHandlers.completeAdvance();
     });
 
-    await expect(strip.locator('.strip .title')).toContainText('Task B', { timeout: 2500 });
+    await expect(strip.locator('.strip .title')).toContainText('Reply to Priya about invoices', { timeout: 2500 });
 
     // Undo through the same hotkey-handler seam.
     await launched.app.evaluate(() => {
@@ -40,13 +44,13 @@ test('undo via the hotkey handler updates the strip; the planner toast confirms 
       tb.hotkeyHandlers.undo();
     });
 
-    await expect(strip.locator('.strip .title')).toContainText('Task A', { timeout: 2500 });
+    await expect(strip.locator('.strip .title')).toContainText('Draft Q3 roadmap', { timeout: 2500 });
 
     const lastUndoneLabel = await launched.app.evaluate(() => {
       const tb = (globalThis as unknown as { __tb: { store: { get: () => { lastUndone?: { label: string } } } } }).__tb;
       return tb.store.get().lastUndone?.label;
     });
-    expect(lastUndoneLabel).toBe('Completed "Task A"');
+    expect(lastUndoneLabel).toBe('Completed "Draft Q3 roadmap"');
 
     // Open the planner: its toast reads the CURRENT snapshot (fetched fresh via
     // `store:get` on mount), which already carries this `lastUndone`, so the toast
@@ -69,7 +73,7 @@ test('undo via the hotkey handler updates the strip; the planner toast confirms 
     await planner.locator('body').click();
     await planner.keyboard.press('Control+Shift+Z');
 
-    await expect(strip.locator('.strip .title')).toContainText('Task B', { timeout: 2500 });
+    await expect(strip.locator('.strip .title')).toContainText('Reply to Priya about invoices', { timeout: 2500 });
     await expect(toast).toContainText('Redid: Completed', { timeout: 2500 });
 
     expect(launched.errors()).toEqual([]);

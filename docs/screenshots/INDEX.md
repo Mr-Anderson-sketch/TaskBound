@@ -29,8 +29,8 @@ hairline, `running` has its timer going, `collapsed` is the same task as the 24 
 | file | shows |
 | --- | --- |
 | capture-chips.png | Capture palette mid-type, live-parsed into title/when/tag chips |
-| plan-today.png | "Plan today" sheet — rolled-over tasks and an inbox candidate |
-| close-day.png | "Close the day" sheet with a note filled in |
+| plan-today.png | "Plan today" sheet — two rolled-over tasks and an inbox candidate, realistic titles |
+| close-day.png | "Close the day" sheet — a real completed/focused count and a note filled in |
 | onboarding-1.png | First-run onboarding, card 1/3 — add your first task |
 | onboarding-2.png | Onboarding card 2/3 — pick a strip edge |
 | onboarding-3.png | Onboarding card 3/3 — five keys to remember |
@@ -41,15 +41,20 @@ hairline, `running` has its timer going, `collapsed` is the same task as the 24 
 | --- | --- |
 | planner-today.png | Today view, realistic seed data (roadmap doc with tag/due/running timer, a reply task, a PR review with a sub-task) |
 | planner-detail.png | Detail pane — title, tags, due date, recurrence, planned time, sub-task |
-| planner-commands.png | Command palette (Ctrl+K) inside the planner |
-| planner-undo-toast.png | Undo toast after a delete |
+| planner-commands.png | Command palette (Ctrl+K) inside the planner, realistic Today tasks (one list, tags) behind it |
+| planner-undo-toast.png | Undo toast after a delete, realistic tasks (one list, tags) in the rail |
 
 ## Settings
+
+All Settings screenshots share one realistic seed (a "Work" list, `#planning`/`#finance`/
+`#eng` tags, a running task, a due-today task, a sub-tasked task, and one already-done
+task) so the rail shows real counts instead of all zeros, and text size M (the default)
+selected rather than a leftover L.
 
 | file | shows |
 | --- | --- |
 | settings-strip.png | Strip section — dock edge, width, opacity, etc. |
-| settings-theme.png | Theme section — 4 palette cards, appearance, text size |
+| settings-theme.png | Theme section — 4 palette cards, appearance, text size (M selected) |
 | settings-timer.png | Timer & pomodoro section |
 | settings-hotkeys.png | Hotkeys section |
 | settings-data.png | Data section — location, export/import, backups |
@@ -68,14 +73,13 @@ content. A desktop-level capture (e.g. PowerShell's `CopyFromScreen`) was **not*
 anywhere in this task — in this environment it only returns the desktop wallpaper, not
 real window contents, so including it would be misleading.
 
-## Visual defects observed while capturing (not fixed — renderer code untouched)
+## Visual defects fixed for ship-polish (wip/ship-polish)
 
-1. **capture-chips.png** — the palette's footer hint text truncates mid-word with a bare
-   `t...` ("Esc once to keep text literal, t..."), cutting off before "type again to
-   restore parsing" (or similar). Should either wrap, shorten, or truncate with an
-   ellipsis after a whole word.
-2. **planner-detail.png** — the "Current" row's task title truncates ("Write the
-   baselin…") even though the identical, longer title ("Write the baseline document")
-   renders in full elsewhere on the same screen (the detail pane header, the toast).
-   The row's available width looks wide enough for a couple more characters; worth a
-   second look at the truncation threshold.
+1. **capture-chips.png** — the palette's footer hint text used to truncate mid-word
+   (`"Esc once to keep text literal, t..."`). Fixed by shortening `DEFAULT_HINT` in
+   `src/renderer/palette/Capture.tsx` so it fits the 560 px palette's footer on one line.
+2. **planner-detail.png** — the "Current" row's task title used to truncate ("Write the
+   baselin…") more aggressively than its available width justified. Fixed by tightening
+   `.planner .task`'s flex `gap` from 10px to 8px (also now on the 4px spacing scale) in
+   `src/renderer/styles/app.css`, buying the title back a bit more room before the
+   row's badges (progress/tags/due/timer/recurrence) force an ellipsis.

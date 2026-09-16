@@ -12,7 +12,10 @@ import { actionsFor, actionsForLines, chipsFor, isQuoted, quoteInput, splitPaste
 import type { CaptureContext } from './captureModel';
 import { TokenChips } from './TokenChips';
 
-const DEFAULT_HINT = 'Enter add · Shift+Enter add and make current · Esc once to keep text literal, twice to close';
+// Kept short enough to fit the 560 px palette's footer on one line next to "paste lines
+// to add several" without truncating mid-word (docs/screenshots/capture-chips.png
+// showed a bare "t..." cutoff at the old, longer wording).
+const DEFAULT_HINT = 'Enter add · Shift+Enter add & make current · Esc: literal once, twice close';
 const ADDED_MESSAGE_MS = 1500;
 
 interface CaptureProps {

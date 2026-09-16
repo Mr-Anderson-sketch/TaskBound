@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
-import { launchApp, windowInfo } from './launch';
+import { launchApp, windowInfo, seedRealisticToday } from './launch';
 
 test.setTimeout(90_000);
 
@@ -23,6 +23,10 @@ test('settings: Strip/Timer/Startup/Score controls apply instantly; Ctrl+, and t
   const launched = await launchApp();
   try {
     const strip = await launched.window('strip');
+
+    // Realistic seed data (tasks, a list, a tag) so the rail and settings screenshots
+    // show a lived-in day instead of an all-zero fresh install.
+    await seedRealisticToday(launched.app);
 
     await launched.app.evaluate(() => {
       (globalThis as unknown as { __tb: { planner: { show: () => void } } }).__tb.planner.show();
@@ -55,8 +59,17 @@ test('settings: Strip/Timer/Startup/Score controls apply instantly; Ctrl+, and t
       })
       .toBe(600);
 
-    // --- Theme section: Text size L -> strip title 14px, strip height <= 44 ----------
+    // --- Theme section: screenshot at the default M text size first (fix: this used to
+    // fire after Text size was switched to L below, so settings-theme.png shipped with a
+    // leftover "L" selected instead of the actual default) ---------------------------
     await planner.locator('.settings-nav .i', { hasText: 'Theme' }).click();
+    await expect(planner.locator('.setting-row', { hasText: 'Text size' }).getByRole('radio', { name: 'M' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await planner.screenshot({ path: path.join(SCREENSHOT_DIR, 'settings-theme.png') });
+
+    // --- Theme section: Text size L -> strip title 14px, strip height <= 44 ----------
     await planner.locator('.setting-row', { hasText: 'Text size' }).getByRole('radio', { name: 'L' }).click();
     await expect
       .poll(() => strip.locator('.strip .title').evaluate((el) => getComputedStyle(el).fontSize))
@@ -67,8 +80,6 @@ test('settings: Strip/Timer/Startup/Score controls apply instantly; Ctrl+, and t
         return infos.find((w) => w.url.includes('#/strip'))?.bounds.height;
       })
       .toBeLessThanOrEqual(44);
-
-    await planner.screenshot({ path: path.join(SCREENSHOT_DIR, 'settings-theme.png') });
 
     // --- Timer: Pomodoro on + Work 30 --------------------------------------------------
     await planner.locator('.settings-nav .i', { hasText: 'Timer' }).click();

@@ -6,7 +6,7 @@
 // docs brief — run this AFTER the normal suite so this version wins.
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
-import { launchApp, windowInfo } from './launch';
+import { launchApp, windowInfo, seedRealisticToday } from './launch';
 
 const SCREENSHOT_DIR = path.resolve(__dirname, '..', 'docs', 'screenshots');
 
@@ -68,6 +68,26 @@ test.describe('screens: theme/state grid + realistic planner seed data', () => {
                 }))
               )
               .toEqual({ theme, mode });
+            // Fix attempt for a capture artifact seen in the collapsed-pill grid: the
+            // pill's real width is reported to main asynchronously (ResizeObserver ->
+            // IPC -> setBounds, see main/windows/strip.ts), so a screenshot taken right
+            // after toggling collapsed (or right after a rapid-fire theme switch, as
+            // here) can race that resize and capture a stale/mismatched compositor
+            // buffer — tiling the pill's content 2-3x across the window's old, wider
+            // bounds instead of showing one pill. Wait for the native window to actually
+            // be pill-narrow before capturing a collapsed shot, plus two animation
+            // frames for every state so the compositor has settled post-paint.
+            if (state === 'collapsed') {
+              await expect
+                .poll(async () => {
+                  const infos = await windowInfo(launched.app);
+                  return infos.find((w) => w.url.includes('#/strip'))?.bounds.width;
+                }, { timeout: 3000 })
+                .toBeLessThan(300);
+            }
+            await strip.evaluate(
+              () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined))))
+            );
             const file = path.join(SCREENSHOT_DIR, `strip-${theme}-${mode}-${state}.png`);
             await strip.screenshot({ path: file, timeout: 15_000, animations: 'disabled' });
           }
@@ -150,6 +170,7 @@ test.describe('screens: theme/state grid + realistic planner seed data', () => {
     const launched = await launchApp();
     try {
       await launched.window('strip');
+      await seedRealisticToday(launched.app);
       await launched.app.evaluate(() => (globalThis as unknown as Evaluable).__tb.planner.show());
       const planner = await launched.window('planner', 5000);
 

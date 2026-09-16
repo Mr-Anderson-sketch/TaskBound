@@ -64,9 +64,9 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
     await launched.app.evaluate(
       (_electron, { createdAt }) => {
         const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
-        tb.store.dispatch({ type: 'task/add', id: 'rolled-1', now: createdAt, title: 'Rolled task one', today: true });
-        tb.store.dispatch({ type: 'task/add', id: 'rolled-2', now: createdAt, title: 'Rolled task two', today: true });
-        tb.store.dispatch({ type: 'task/add', id: 'inbox-1', now: createdAt, title: 'Inbox task' });
+        tb.store.dispatch({ type: 'task/add', id: 'rolled-1', now: createdAt, title: 'Finish the Q2 retro notes', today: true });
+        tb.store.dispatch({ type: 'task/add', id: 'rolled-2', now: createdAt, title: 'Email the vendor invoice', today: true });
+        tb.store.dispatch({ type: 'task/add', id: 'inbox-1', now: createdAt, title: 'Sketch the onboarding flow' });
       },
       { createdAt }
     );
@@ -95,10 +95,10 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
 
     const rows = palette.locator('.palette .pl');
     await expect(rows).toHaveCount(3, { timeout: 2000 }); // 2 rolled-over + 1 inbox
-    await expect(rows.nth(0)).toContainText('Rolled task one');
+    await expect(rows.nth(0)).toContainText('Finish the Q2 retro notes');
     await expect(rows.nth(0)).toContainText('rolled over');
-    await expect(rows.nth(1)).toContainText('Rolled task two');
-    await expect(rows.nth(2)).toContainText('Inbox task');
+    await expect(rows.nth(1)).toContainText('Email the vendor invoice');
+    await expect(rows.nth(2)).toContainText('Sketch the onboarding flow');
     await expect(rows.nth(2)).toContainText('inbox');
     // Initial selection: rolled-over checked, inbox unchecked.
     await expect(rows.nth(0).locator('.cb')).toHaveClass(/on/);
@@ -121,7 +121,7 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
       .toBeLessThan(300);
     await palette.screenshot({ path: path.join(SCREENSHOT_DIR, 'plan-today.png') });
 
-    await palette.keyboard.press('ArrowDown'); // focus row 1 ("Rolled task two")
+    await palette.keyboard.press('ArrowDown'); // focus row 1 ("Email the vendor invoice")
     await palette.keyboard.press(' '); // uncheck it
     await expect(rows.nth(1).locator('.cb')).not.toHaveClass(/on/);
 
@@ -142,7 +142,25 @@ test('day/rollover marks yesterday, Plan today lists rolled-over/inbox candidate
     expect(byId.get('rolled-2')).toBe(false);
 
     const strip = await launched.window('strip');
-    await expect(strip.locator('.strip .title')).toContainText('Rolled task one', { timeout: 2000 });
+    await expect(strip.locator('.strip .title')).toContainText('Finish the Q2 retro notes', { timeout: 2000 });
+
+    // Give Close the day something real to report instead of an all-zero fresh-install
+    // look: fold a 25-minute focus segment into today and complete the task (`now`
+    // values 25 minutes apart, not a real wait — see foldTimerSegment in reducer.ts).
+    // "Rolled over" for the real day genuinely is 0 here — this test's own simulated
+    // rollover above deliberately targets a day before real today (see the comment at
+    // the top of this test) precisely so it doesn't collide with the idempotency guard
+    // on real today's own boot-time rollover, so there's no way to also fake a nonzero
+    // rolled-over count for real today without touching core — left as a real 0.
+    const completeNow = Date.now();
+    await launched.app.evaluate(
+      (_electron, { completeNow }) => {
+        const tb = (globalThis as unknown as { __tb: { store: { dispatch: (a: unknown) => number } } }).__tb;
+        tb.store.dispatch({ type: 'timer/start', id: 'rolled-1', now: completeNow - 25 * 60_000 });
+        tb.store.dispatch({ type: 'task/complete', id: 'rolled-1', now: completeNow, by: 'user' });
+      },
+      { completeNow }
+    );
 
     // --- Close the day ----------------------------------------------------------------
 
