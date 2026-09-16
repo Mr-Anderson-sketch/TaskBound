@@ -51,7 +51,10 @@ test('planner: Today sections, Upcoming grouping, rail navigation, inline captur
     await expect(planner.locator('.sec')).toContainText(['Current', 'Up next']);
     await expect(planner.locator('.task.cur .t')).toContainText('Open task 0');
 
-    await planner.screenshot({ path: path.join(SCREENSHOT_DIR, 'planner-today.png') });
+    // This spec seeds bulk placeholder tasks to exercise sections and virtualisation,
+    // so its capture goes to its own filename. The documentation screenshot of Today
+    // (realistic data, used by the README) is written by e2e/screens.spec.ts.
+    await planner.screenshot({ path: path.join(SCREENSHOT_DIR, 'planner-sections.png') });
 
     // --- Upcoming: groups a task due tomorrow under "Tomorrow" -----------------------
     await planner.locator('.rail button', { hasText: 'Upcoming' }).click();
