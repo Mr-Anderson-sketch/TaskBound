@@ -6,7 +6,8 @@ import { watch as fsWatch } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Data } from '../core/types';
-import { parseData } from '../core/schema';
+import { parseDataForLoad } from '../core/schema';
+import { fromJson } from '../core/export';
 import { migrateLegacy } from '../core/migrate';
 import { createEmptyData } from '../core/defaults';
 import { ymd } from '../core/dates';
@@ -225,7 +226,23 @@ export async function save(deps: PersistDeps, data: Data): Promise<void> {
   }
 }
 
-/** Absolute paths of backups/data-*.json, sorted newest first (by filename). */
+const DAILY_BACKUP_RE = /^data-(\d{4})-(\d{2})-(\d{2})\.json$/;
+const PRE_RESTORE_RE = /^data\.pre-restore-(\d{8}-\d{6}(?:-\d+)?)\.json$/;
+
+/** Sort key making daily backups (`data-YYYY-MM-DD.json`, taken at the day's first
+ * save) and pre-restore snapshots (`data.pre-restore-YYYYMMDD-HHmmss[-n].json`)
+ * comparable as one timeline: a daily backup sorts as that day's 00:00:00. Any other
+ * `data-*.json` keeps its own filename as the key (the previous plain-name ordering). */
+function backupSortKey(f: string): string {
+  const daily = DAILY_BACKUP_RE.exec(f);
+  if (daily) return `${daily[1]}${daily[2]}${daily[3]}-000000`;
+  const pre = PRE_RESTORE_RE.exec(f);
+  if (pre) return pre[1];
+  return f;
+}
+
+/** Absolute paths of backups/data-*.json and backups/data.pre-restore-*.json, sorted
+ * newest first. */
 export async function listBackups(deps: PersistDeps): Promise<string[]> {
   const fs = fsOf(deps);
   const dir = backupsDir(deps);
@@ -236,10 +253,96 @@ export async function listBackups(deps: PersistDeps): Promise<string[]> {
     return [];
   }
   return entries
-    .filter((f) => f.startsWith('data-') && f.endsWith('.json'))
-    .sort()
-    .reverse()
-    .map((f) => path.join(dir, f));
+    .filter((f) => (f.startsWith('data-') && f.endsWith('.json')) || PRE_RESTORE_RE.test(f))
+    .map((f) => ({ f, key: backupSortKey(f) }))
+    .sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0))
+    .map(({ f }) => path.join(dir, f));
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+
+/** Local wall-clock `YYYYMMDD-HHmmss` for `ms`. */
+function compactTimestamp(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+}
+
+/**
+ * Final-review fix 1: keeps a copy of the CURRENT on-disk data.json in the backups
+ * folder as `data.pre-restore-<YYYYMMDD-HHmmss>.json` right before a backup restore
+ * replaces it — regardless of the once-per-day rule, so it shows up in the backups
+ * list and can itself be restored. Written atomically (temp file in backups/, then
+ * rename); a second snapshot in the same second gets a `-2`, `-3`, … suffix rather
+ * than overwriting the first. Never pruned by `pruneBackups` (daily files only).
+ * Rejects on any failure (temp file removed first) — the caller must then abort the
+ * restore. Returns the snapshot's absolute path.
+ */
+export async function snapshotBeforeRestore(deps: PersistDeps): Promise<string> {
+  const fs = fsOf(deps);
+  await ensureDirs(deps);
+  const text = await fs.readFile(dataPath(deps), 'utf8');
+  const stamp = compactTimestamp(deps.now());
+  let target = path.join(backupsDir(deps), `data.pre-restore-${stamp}.json`);
+  for (let n = 2; await pathExists(fs, target); n++) {
+    target = path.join(backupsDir(deps), `data.pre-restore-${stamp}-${n}.json`);
+  }
+  const tmp = path.join(backupsDir(deps), `pre-restore.tmp-${process.pid}-${deps.now()}.json`);
+  try {
+    await fs.writeFile(tmp, text, 'utf8');
+    await withRetry(deps, 'pre-restore snapshot rename', () => fs.rename(tmp, target));
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+  return target;
+}
+
+/** The slice of the Store a backup restore drives (see `restoreBackup`). */
+export interface RestoreTarget {
+  /** Lands any pending/in-flight save, so data.json is current before it's copied. */
+  flush: () => Promise<void>;
+  replace: (data: Data) => void;
+  saveNow: () => Promise<void>;
+}
+
+/**
+ * Restores `backupPath` into `target` (the Store): validates the path is a real
+ * backup and its contents parse; flushes pending saves; snapshots the current
+ * data.json via `snapshotBeforeRestore` — aborting, with nothing replaced, if that
+ * fails; then `replace()` + `saveNow()` (through the Store's own serialised save
+ * chain, never a direct `save()`, so an earlier in-flight save can't land after it).
+ * Never throws: every failure comes back as `{ ok: false, error }`.
+ */
+export async function restoreBackup(deps: PersistDeps, backupPath: string, target: RestoreTarget): Promise<{ ok: boolean; error?: string }> {
+  // Fix round 2, item 6: resolves symlinks/junctions on both sides before checking
+  // containment.
+  const resolved = await resolveBackupPath(deps, backupPath);
+  if (!resolved) {
+    return { ok: false, error: 'Backup path is outside the backups folder.' };
+  }
+  let data: Data;
+  try {
+    data = fromJson(await fsOf(deps).readFile(resolved, 'utf8'));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Restore failed' };
+  }
+  try {
+    await target.flush();
+    await snapshotBeforeRestore(deps);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.log?.(`persist: pre-restore snapshot failed, restore aborted (${detail})`);
+    return { ok: false, error: `Couldn't keep a copy of your current data, so nothing was restored (${detail}).` };
+  }
+  try {
+    target.replace(data);
+    await target.saveNow();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Restore failed' };
+  }
 }
 
 /** Removes data.tmp-*.json files older than 60s — leftovers from a crash mid-save. */
@@ -288,7 +391,7 @@ type ReadOutcome = { kind: 'missing' } | { kind: 'invalid' } | { kind: 'valid'; 
 /**
  * Reads and validates `file`. Distinguishes three outcomes: the file doesn't
  * exist ('missing'); it was read successfully but isn't valid JSON or doesn't
- * pass parseData ('invalid' — this, and only this, is "corrupt"); or it read
+ * pass parseDataForLoad ('invalid' — this, and only this, is "corrupt"); or it read
  * and parsed fine ('valid'). A persistent read error (see readFileRetrying)
  * propagates out of this function rather than resolving to any of the three.
  */
@@ -302,7 +405,7 @@ async function readAndValidate(deps: PersistDeps, file: string): Promise<ReadOut
     return { kind: 'invalid' };
   }
   try {
-    return { kind: 'valid', data: parseData(parsed) };
+    return { kind: 'valid', data: parseDataForLoad(parsed) };
   } catch {
     return { kind: 'invalid' };
   }
@@ -323,7 +426,7 @@ async function readValidDataLoose(fs: FsModule, file: string): Promise<Data | un
     return undefined;
   }
   try {
-    return parseData(parsed);
+    return parseDataForLoad(parsed);
   } catch {
     return undefined;
   }
@@ -456,7 +559,7 @@ export async function prepareDirSwitch(deps: PersistDeps, currentData: Data): Pr
 
 // --- backup restore path safety (Task 5.3 fix round 2, item 6) --------------------
 
-const BACKUP_FILENAME_RE = /^data-\d{4}-\d{2}-\d{2}\.json$/;
+const BACKUP_FILENAME_RE = /^data-\d{4}-\d{2}-\d{2}\.json$|^data\.pre-restore-\d{8}-\d{6}(?:-\d+)?\.json$/;
 
 /**
  * Resolves `requestedPath` to a real, absolute path strictly INSIDE `dir`'s backups
@@ -464,7 +567,8 @@ const BACKUP_FILENAME_RE = /^data-\d{4}-\d{2}-\d{2}\.json$/;
  * `fs.realpath` before comparing, so a link inside the backups folder that points
  * outside it can't be used to escape it (a plain string-prefix/`path.relative` check
  * on the un-resolved paths cannot catch this). Also requires the filename to match a
- * real backup's `data-YYYY-MM-DD.json` shape, so nothing else that happens to live in
+ * real backup's `data-YYYY-MM-DD.json` (or `data.pre-restore-YYYYMMDD-HHmmss[-n].json`)
+ * shape, so nothing else that happens to live in
  * the backups folder can be "restored". Returns `undefined` (never throws) for a
  * path that doesn't exist, isn't inside the real backups folder, or has the wrong
  * filename shape.
@@ -562,7 +666,7 @@ export function watchDataFile(deps: WatchDataFileDeps, onExternalChange: (data: 
       }
       let incoming: Data;
       try {
-        incoming = parseData(parsed);
+        incoming = parseDataForLoad(parsed);
       } catch {
         return; // invalid: ignore, next event retries
       }

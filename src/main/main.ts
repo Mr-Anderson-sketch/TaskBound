@@ -8,11 +8,12 @@ import { randomUUID } from 'node:crypto';
 import * as fsp from 'node:fs/promises';
 import { app, session, nativeTheme, ipcMain, shell, dialog, globalShortcut, powerMonitor, Notification, BrowserWindow } from 'electron';
 import type { WebContents } from 'electron';
-import { load, save, listBackups, watchDataFile, createWriteTracker, hasValidDataFile, prepareDirSwitch, resolveBackupPath } from './persist';
+import { load, save, listBackups, watchDataFile, createWriteTracker, hasValidDataFile, prepareDirSwitch, restoreBackup } from './persist';
 import type { PersistDeps, DataWatcher } from './persist';
 import { readDataLocationPointer, writeDataLocationPointer } from './dataLocation';
 import { resolveDataDir } from './paths';
 import { Store } from './store';
+import { handleBootFailure, shouldRegisterLoginItem, createLoginItemSync } from './boot';
 import { registerIpc } from './ipc';
 import { installCsp } from './windows/csp';
 import { StripWindow } from './windows/strip';
@@ -25,7 +26,7 @@ import { Clock, resolveToggleTimerAction } from './clock';
 import { Notifier } from './notify';
 import { loadWin32 } from './win32';
 import { FullscreenWatcher } from './win32/watcher';
-import { toJson, toMarkdown, fromJson, fromMarkdown, importPlan, validateImportActions } from '../core/export';
+import { toJson, toMarkdown, fromJson, fromMarkdown, importPlan, validateImportActions, validateImportCapacity } from '../core/export';
 import { ymd } from '../core/dates';
 import type { Snapshot } from '../shared/ipc';
 import type { Settings } from '../core/types';
@@ -74,16 +75,26 @@ const preloadPath = path.join(__dirname, '../../preload/main/preload.js');
 // --- single instance --------------------------------------------------------------
 
 let planner: PlannerWindow | undefined;
+// The data folder named in the boot-failure error box: the resolved default until
+// boot adopts a redirected folder (data-location pointer), then that one.
+let bootDataDir = dataDir;
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    planner?.show();
+    // Final-review fix 3: a second launch while boot is still running (or after it
+    // failed) has no planner to show yet — do nothing rather than throw.
+    if (!planner) return;
+    planner.show();
   });
 
-  app.whenReady().then(async () => {
+  // Final-review fix 3: the whole boot is one async function whose rejection is
+  // handled below — any throw (unreadable data folder, a window failing to create,
+  // …) shows an error box and exits instead of leaving a headless, lock-holding
+  // process behind.
+  const boot = async (): Promise<void> => {
     installCsp(session.defaultSession, isDev);
 
     // Task 3.2 fix round 1, minor "break replay" (fix round 2, item 2: `.once` ->
@@ -135,6 +146,7 @@ if (!gotLock) {
         if (redirected !== currentDataDir) {
           if (await hasValidDataFile({ dir: redirected, now: Date.now })) {
             currentDataDir = redirected;
+            bootDataDir = redirected;
           } else {
             dataLocationUnavailable = redirected;
           }
@@ -163,6 +175,16 @@ if (!gotLock) {
       capabilities,
       dataLocationUnavailable
     });
+
+    // --- start on login (final-review fix 5): registered only for a packaged build
+    // outside tests/data-folder overrides; applied now and whenever the setting changes.
+    const syncLoginItem = createLoginItemSync({
+      shouldRegister: shouldRegisterLoginItem({ isPackaged: app.isPackaged, env: process.env }),
+      setLoginItemSettings: (openAtLogin) => app.setLoginItemSettings({ openAtLogin }),
+      log: (message) => console.log(message)
+    });
+    syncLoginItem(store.get().data.settings.startOnLogin);
+    store.subscribe((s) => syncLoginItem(s.data.settings.startOnLogin));
 
     // --- data folder watcher (Task 5.3): reconciles external changes to data.json
     // (another instance, a synced folder, manual editing) against the live store. ---
@@ -203,6 +225,10 @@ if (!gotLock) {
         // caught much later, at persistence-time validation, looking like corruption.
         const validationError = validateImportActions(actions);
         if (validationError) return { error: validationError };
+        // Final-review fix 2: the reducer drops task/adds past MAX_TASKS, so an import
+        // that doesn't fit is refused whole, up front, rather than applied partially.
+        const capacityError = validateImportCapacity(store.get().data, actions);
+        if (capacityError) return { error: capacityError };
         for (const action of actions) store.dispatch(action);
         return { imported: actions.filter((a) => a.type === 'task/add').length };
       } catch (err) {
@@ -233,28 +259,12 @@ if (!gotLock) {
     }
 
     async function restoreBackupFile(backupPath: string): Promise<{ ok: boolean; error?: string }> {
-      // Fix round 2, item 6: resolves symlinks/junctions on both sides before
-      // checking containment — a plain path.relative on the unresolved paths can't
-      // catch a link inside backups/ that points outside it.
-      const resolved = await resolveBackupPath(persistDeps(), backupPath);
-      if (!resolved) {
-        return { ok: false, error: 'Backup path is outside the backups folder.' };
-      }
-      try {
-        const text = await fsp.readFile(resolved, 'utf8');
-        const data = fromJson(text); // same validation load() applies (parseData)
-        store.replace(data);
-        // Fix round 3, item 2: through the Store's own save queue, never a direct
-        // save() — an earlier in-flight debounced save (from an edit made just
-        // before the restore) is otherwise not guaranteed to land BEFORE this one,
-        // and could overwrite the restored data with stale data right after.
-        // saveNow() shares the same serialised chain as every debounced save, so
-        // this one is guaranteed to run, and land, last.
-        await store.saveNow();
-        return { ok: true };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : 'Restore failed' };
-      }
+      // Final-review fix 1: persist.restoreBackup validates the path and contents,
+      // flushes pending saves, keeps a `data.pre-restore-*.json` copy of the current
+      // data.json in backups/ (aborting the restore if that copy fails), then
+      // store.replace() + store.saveNow() — through the Store's own serialised save
+      // chain, so an earlier in-flight save can never land after the restored data.
+      return restoreBackup(persistDeps(), backupPath, store);
     }
 
     const strip = new StripWindow({ store, preloadPath, rendererUrl, isDev, win32 });
@@ -667,5 +677,17 @@ if (!gotLock) {
         }
       };
     }
-  });
+  };
+
+  app
+    .whenReady()
+    .then(boot)
+    .catch((err: unknown) =>
+      handleBootFailure(err, bootDataDir, {
+        log: (message, e) => console.error(message, e),
+        showErrorBox: (title, content) => dialog.showErrorBox(title, content),
+        releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
+        exit: (code) => app.exit(code)
+      })
+    );
 }

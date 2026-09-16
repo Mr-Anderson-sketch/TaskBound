@@ -113,7 +113,7 @@ export interface Data {
 export type Action =
   | { type: 'task/add'; id: Id; now: number; title: string; listId?: Id; parentId?: Id; tags?: string[]; due?: Due; recurrence?: Rule; plannedSeconds?: number; today?: boolean; makeCurrent?: boolean }
   | { type: 'task/edit'; id: Id; now: number; patch: Partial<Pick<Task, 'title' | 'notes' | 'listId' | 'tags' | 'due' | 'recurrence' | 'today'>> & { plannedSeconds?: number | null } }
-  | { type: 'task/complete'; id: Id; now: number; by: 'user' | 'timer'; spawnId?: Id }
+  | { type: 'task/complete'; id: Id; now: number; by: 'user' | 'timer' | 'import'; spawnId?: Id }
   | { type: 'task/uncomplete'; id: Id; now: number }
   | { type: 'task/delete'; id: Id; now: number }
   | { type: 'task/move'; id: Id; now: number; listId?: Id; parentId?: Id | null; afterId?: Id | null }

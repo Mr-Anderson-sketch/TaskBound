@@ -1,45 +1,90 @@
-// core/undo — an undo/redo ring of whole `Data` snapshots (immer structural
-// sharing makes this cheap). The store calls `push(prev, label)` BEFORE
-// applying an undoable action, then applies it. Pure: no Electron, no Node.
+// core/undo — undo/redo by REPLAY (final-review fix 4). Each undo entry keeps the
+// `Data` from just before an undoable action, the action itself, and every
+// NON-undoable data-changing action dispatched after it (timers, settings, rollover…).
+// Undoing the newest entry rebuilds `before` + those later actions — skipping only the
+// undone one — so undo never rolls back a timer session or a settings change that
+// happened afterwards. Reducers are pure and every action carries `now` and its ids,
+// so replay is deterministic. Redo re-applies the undone action to the CURRENT data.
+// Immer's structural sharing keeps the `before` snapshots cheap. Pure: no Electron, no Node.
 import type { Action, Data } from './types';
+import { reduce } from './reducer';
 
-interface Entry {
-  data: Data;
+interface UndoEntry {
+  before: Data;
+  action: Action;
+  label: string;
+  /** Non-undoable data-changing actions dispatched after `action`, in order. */
+  after: Action[];
+}
+
+interface RedoEntry {
+  action: Action;
   label: string;
 }
 
+/** Most non-undoable actions one undo entry replays. Past this the whole undo/redo
+ * history is cleared rather than grown without bound (e.g. hours of timer ticks and
+ * settings drags since the last undoable action). */
+export const UNDO_AFTER_LIMIT = 1000;
+
 export class UndoStack {
-  private undoEntries: Entry[] = [];
-  private redoEntries: Entry[] = [];
+  private undoEntries: UndoEntry[] = [];
+  private redoEntries: RedoEntry[] = [];
 
-  constructor(private limit = 50) {}
+  constructor(
+    private limit = 50,
+    private afterLimit = UNDO_AFTER_LIMIT
+  ) {}
 
-  /** Called before applying an undoable action; clears the redo stack. */
-  push(prev: Data, label: string): void {
+  /** Records an undoable `action` that just changed `before` into new data; clears redo. */
+  push(before: Data, action: Action, label: string): void {
     this.clearRedo();
-    this.undoEntries.push({ data: prev, label });
-    if (this.undoEntries.length > this.limit) {
-      this.undoEntries.shift();
-    }
+    this.pushEntry({ before, action, label, after: [] });
   }
 
-  /** Pops the newest undo entry, pushes `current` onto redo, and returns the popped entry. */
-  undo(current: Data): { data: Data; label: string } | undefined {
+  /** Records a NON-undoable, data-changing `action` so undoing the newest entry
+   * replays it instead of discarding it. Leaves redo alone (redo re-applies onto
+   * whatever the data is by then). Clears all history past `afterLimit`. */
+  recordNonUndoable(action: Action): void {
+    const newest = this.undoEntries[this.undoEntries.length - 1];
+    if (!newest) return;
+    newest.after.push(action);
+    if (newest.after.length > this.afterLimit) this.clear();
+  }
+
+  /** Undoes the newest entry: `before` plus a replay of its `after` actions. Those
+   * replayed actions now follow the previous entry, so they carry over to it. */
+  undo(): { data: Data; label: string } | undefined {
     const entry = this.undoEntries.pop();
     if (!entry) return undefined;
-    this.redoEntries.push({ data: current, label: entry.label });
-    return { data: entry.data, label: entry.label };
+    const data = entry.after.reduce(reduce, entry.before);
+    const previous = this.undoEntries[this.undoEntries.length - 1];
+    if (previous && entry.after.length > 0) {
+      previous.after.push(...entry.after);
+      if (previous.after.length > this.afterLimit) {
+        this.clear();
+        return { data, label: entry.label };
+      }
+    }
+    this.redoEntries.push({ action: entry.action, label: entry.label });
+    return { data, label: entry.label };
   }
 
-  /** Mirrors `undo`: pops the newest redo entry, pushes `current` onto undo. */
+  /** Re-applies the newest undone action to `current`, making it undoable again. */
   redo(current: Data): { data: Data; label: string } | undefined {
     const entry = this.redoEntries.pop();
     if (!entry) return undefined;
-    this.undoEntries.push({ data: current, label: entry.label });
-    return { data: entry.data, label: entry.label };
+    const data = reduce(current, entry.action);
+    this.pushEntry({ before: current, action: entry.action, label: entry.label, after: [] });
+    return { data, label: entry.label };
   }
 
   clearRedo(): void {
+    this.redoEntries = [];
+  }
+
+  clear(): void {
+    this.undoEntries = [];
     this.redoEntries = [];
   }
 
@@ -49,6 +94,13 @@ export class UndoStack {
 
   get canRedo(): boolean {
     return this.redoEntries.length > 0;
+  }
+
+  private pushEntry(entry: UndoEntry): void {
+    this.undoEntries.push(entry);
+    if (this.undoEntries.length > this.limit) {
+      this.undoEntries.shift();
+    }
   }
 }
 

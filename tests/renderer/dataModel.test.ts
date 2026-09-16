@@ -4,7 +4,7 @@
 // the section can format it with `longDayLabel`. Plain 'node' env, same convention as
 // tests/renderer/settingsModel.test.ts.
 import { describe, it, expect } from 'vitest';
-import { backupDateMs } from '../../src/renderer/settings/dataModel';
+import { backupDateMs, isPreRestoreBackup } from '../../src/renderer/settings/dataModel';
 
 describe('backupDateMs', () => {
   it('parses a POSIX backup path', () => {
@@ -38,5 +38,19 @@ describe('backupDateMs', () => {
     expect(backupDateMs('/backups/data-2026-09-14.md')).toBeUndefined();
     expect(backupDateMs('/backups/data-14-09-2026.json')).toBeUndefined();
     expect(backupDateMs('')).toBeUndefined();
+  });
+});
+
+// Final-review fix 1: pre-restore snapshots (`data.pre-restore-YYYYMMDD-HHmmss[-n].json`)
+// are listed alongside the daily backups.
+describe('pre-restore backups', () => {
+  it('parses the local date and time a snapshot was taken', () => {
+    const ms = backupDateMs('C:\\data\\backups\\data.pre-restore-20260914-101112.json');
+    expect(ms).toBe(new Date(2026, 8, 14, 10, 11, 12).getTime());
+    expect(backupDateMs('/b/data.pre-restore-20260914-101112-2.json')).toBe(new Date(2026, 8, 14, 10, 11, 12).getTime());
+  });
+  it('isPreRestoreBackup tells snapshots apart from daily backups', () => {
+    expect(isPreRestoreBackup('/b/data.pre-restore-20260914-101112.json')).toBe(true);
+    expect(isPreRestoreBackup('/b/data-2026-09-14.json')).toBe(false);
   });
 });

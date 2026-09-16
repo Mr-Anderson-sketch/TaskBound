@@ -4,7 +4,7 @@
 // every new id comes from an injected `idGen`. See CLAUDE.md and
 // .superpowers/sdd/PLAN/task-5.3-brief.md.
 import type { Action, Data, Due, Id, List, Task } from './types';
-import { ActionSchema, DataInvalidError, parseData } from './schema';
+import { ActionSchema, DataInvalidError, MAX_TASKS, parseDataForLoad } from './schema';
 import { z } from 'zod';
 
 // --- size guard -------------------------------------------------------------------
@@ -59,9 +59,11 @@ export function toJson(data: Data): string {
   return JSON.stringify(sortedClone(data), null, 2);
 }
 
-/** Parses and validates a JSON export. Throws `ImportTooLargeError` for input over
- * 20 MB (checked before parsing) and `DataInvalidError` for anything that isn't valid
- * JSON or doesn't pass `parseData`. */
+/** Parses and validates a JSON export (or backup). Throws `ImportTooLargeError` for
+ * input over 20 MB (checked before parsing) and `DataInvalidError` for anything that
+ * isn't valid JSON or doesn't pass `parseDataForLoad` — the full schema minus the
+ * MAX_TASKS bound, which an import checks separately (`validateImportCapacity`) with a
+ * clearer message, and which must never make a backup unrestorable. */
 export function fromJson(text: string): Data {
   assertImportSize(text);
   let parsed: unknown;
@@ -70,7 +72,7 @@ export function fromJson(text: string): Data {
   } catch {
     invalidJson('not valid JSON');
   }
-  return parseData(parsed);
+  return parseDataForLoad(parsed);
 }
 
 // --- Markdown ------------------------------------------------------------------------
@@ -245,7 +247,8 @@ export function fromMarkdown(text: string, now: number, idGen: () => Id): { task
  *     parent's freshly-assigned real id; `task/add` never accepts `status`, so every
  *     added task starts open regardless of the source).
  *  3. Every task whose imported `status` was 'done' gets a trailing `task/complete`
- *     (`by: 'user'`), after every `task/add` above.
+ *     (`by: 'import'` — carried-over state, not a completion the user just made: no
+ *     score, no day count), after every `task/add` above.
  */
 export function importPlan(current: Data, imported: { tasks: Task[]; lists: List[] }, now: number, idGen: () => Id): Action[] {
   const actions: Action[] = [];
@@ -291,7 +294,7 @@ export function importPlan(current: Data, imported: { tasks: Task[]; lists: List
   }
 
   for (const oldId of doneOldIds) {
-    actions.push({ type: 'task/complete', id: taskIdMap.get(oldId)!, now, by: 'user' });
+    actions.push({ type: 'task/complete', id: taskIdMap.get(oldId)!, now, by: 'import' });
   }
 
   return actions;
@@ -314,4 +317,18 @@ export function validateImportActions(actions: Action[]): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Final-review fix 2: whether applying `actions` (an import plan) to `current` would
+ * push the task count past MAX_TASKS. Checked on the FULL plan before anything is
+ * dispatched — the reducer would otherwise silently drop the adds past the cap and
+ * leave a partial import. Returns a user-facing message, or `undefined` when it fits.
+ */
+export function validateImportCapacity(current: Data, actions: Action[]): string | undefined {
+  const adding = actions.filter((a) => a.type === 'task/add').length;
+  const projected = current.tasks.length + adding;
+  if (projected <= MAX_TASKS) return undefined;
+  const fmt = (n: number): string => n.toLocaleString('en-US');
+  return `This import has ${fmt(adding)} tasks, which would bring you to ${fmt(projected)}. TimeBound holds at most ${fmt(MAX_TASKS)} tasks, so nothing was imported.`;
 }

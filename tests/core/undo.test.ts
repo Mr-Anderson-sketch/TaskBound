@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { UndoStack, UNDOABLE, labelFor } from '../../src/core/undo';
+import { UndoStack, UNDOABLE, UNDO_AFTER_LIMIT, labelFor } from '../../src/core/undo';
 import { reduce } from '../../src/core/reducer';
 import { createEmptyData } from '../../src/core/defaults';
 import type { Action, Data } from '../../src/core/types';
@@ -12,13 +12,14 @@ describe('UndoStack', () => {
     const stack = new UndoStack();
     let d = createEmptyData(t0, '2.0.0');
     const before = d;
-    stack.push(before, 'Added "A"');
-    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A' });
+    const addA: Action = { type: 'task/add', id: 'a', now: t0, title: 'A' };
+    stack.push(before, addA, 'Added "A"');
+    d = reduce(d, addA);
 
     expect(stack.canUndo).toBe(true);
     expect(stack.canRedo).toBe(false);
 
-    const undone = stack.undo(d);
+    const undone = stack.undo();
     expect(undone).toEqual({ data: before, label: 'Added "A"' });
     expect(stack.canUndo).toBe(false);
     expect(stack.canRedo).toBe(true);
@@ -32,19 +33,20 @@ describe('UndoStack', () => {
   it('undo/redo return undefined when there is nothing to do', () => {
     const stack = new UndoStack();
     const d = createEmptyData(t0, '2.0.0');
-    expect(stack.undo(d)).toBeUndefined();
+    expect(stack.undo()).toBeUndefined();
     expect(stack.redo(d)).toBeUndefined();
   });
 
   it('push clears the redo stack', () => {
     const stack = new UndoStack();
     let d = createEmptyData(t0, '2.0.0');
-    stack.push(d, 'Added "A"');
-    d = reduce(d, { type: 'task/add', id: 'a', now: t0, title: 'A' });
-    stack.undo(d);
+    const addA: Action = { type: 'task/add', id: 'a', now: t0, title: 'A' };
+    stack.push(d, addA, 'Added "A"');
+    d = reduce(d, addA);
+    stack.undo();
     expect(stack.canRedo).toBe(true);
 
-    stack.push(d, 'Added "B"');
+    stack.push(d, { type: 'task/add', id: 'b', now: t0, title: 'B' }, 'Added "B"');
     expect(stack.canRedo).toBe(false);
   });
 
@@ -52,12 +54,13 @@ describe('UndoStack', () => {
     const stack = new UndoStack();
     let d = createEmptyData(t0, '2.0.0');
     for (let i = 0; i < 60; i++) {
-      stack.push(d, `entry ${i}`);
-      d = reduce(d, { type: 'task/add', id: `t${i}`, now: t0 + i, title: `T${i}` });
+      const action: Action = { type: 'task/add', id: `t${i}`, now: t0 + i, title: `T${i}` };
+      stack.push(d, action, `entry ${i}`);
+      d = reduce(d, action);
     }
     let undone = 0;
     while (stack.canUndo) {
-      const result = stack.undo(d);
+      const result = stack.undo();
       d = result!.data;
       undone++;
     }
@@ -187,7 +190,7 @@ describe('UndoStack property: undo/redo round-trip', () => {
           now += 1;
           const action = toAction(step, now);
           expect(UNDOABLE.has(action.type)).toBe(true);
-          stack.push(state, labelFor(action, state));
+          stack.push(state, action, labelFor(action, state));
           state = reduce(state, action);
         }
 
@@ -196,7 +199,7 @@ describe('UndoStack property: undo/redo round-trip', () => {
         // Undo all the way back to the start.
         let cur = state;
         while (stack.canUndo) {
-          const result = stack.undo(cur)!;
+          const result = stack.undo()!;
           cur = result.data;
         }
         expect(cur).toEqual(start);
@@ -224,20 +227,60 @@ describe('UndoStack property: undo/redo round-trip', () => {
         for (const step of steps) {
           now += 1;
           const action = toAction(step, now);
-          stack.push(state, labelFor(action, state));
+          stack.push(state, action, labelFor(action, state));
           state = reduce(state, action);
         }
 
         let undone = 0;
-        let cur = state;
         while (stack.canUndo) {
-          const result = stack.undo(cur)!;
-          cur = result.data;
+          stack.undo();
           undone++;
         }
         expect(undone).toBe(50);
       }),
       { numRuns: 100 }
     );
+  });
+});
+
+// Final-review fix 4: undo replays the non-undoable actions recorded after an entry.
+describe('UndoStack replay', () => {
+  it('undo returns before + the recorded non-undoable actions, skipping the undone one', () => {
+    const stack = new UndoStack();
+    let d = reduce(createEmptyData(t0, '2.0.0'), { type: 'task/add', id: 'a', now: t0, title: 'A' });
+    const complete: Action = { type: 'task/complete', id: 'a', now: t0 + 1, by: 'user' };
+    stack.push(d, complete, 'Completed "A"');
+    d = reduce(d, complete);
+    const patch: Action = { type: 'settings/patch', now: t0 + 2, patch: { textSize: 'L' } };
+    d = reduce(d, patch);
+    stack.recordNonUndoable(patch);
+
+    const undone = stack.undo()!;
+    expect(undone.data.tasks[0].status).toBe('open');
+    expect(undone.data.settings.textSize).toBe('L');
+
+    const redone = stack.redo(undone.data)!;
+    expect(redone.data.tasks[0].status).toBe('done');
+    expect(redone.data.settings.textSize).toBe('L');
+  });
+
+  it('recordNonUndoable with no undo entries is a no-op', () => {
+    const stack = new UndoStack();
+    stack.recordNonUndoable({ type: 'settings/patch', now: t0, patch: { textSize: 'L' } });
+    expect(stack.canUndo).toBe(false);
+  });
+
+  it('clears undo and redo once an entry would replay more than UNDO_AFTER_LIMIT actions', () => {
+    const stack = new UndoStack();
+    const d = createEmptyData(t0, '2.0.0');
+    stack.push(d, { type: 'task/add', id: 'a', now: t0, title: 'A' }, 'Added "A"');
+    stack.push(d, { type: 'task/add', id: 'b', now: t0, title: 'B' }, 'Added "B"');
+    stack.undo();
+    expect(stack.canRedo).toBe(true);
+    for (let i = 0; i < UNDO_AFTER_LIMIT; i++) stack.recordNonUndoable({ type: 'settings/patch', now: t0, patch: { textSize: 'L' } });
+    expect(stack.canUndo).toBe(true);
+    stack.recordNonUndoable({ type: 'settings/patch', now: t0, patch: { textSize: 'S' } });
+    expect(stack.canUndo).toBe(false);
+    expect(stack.canRedo).toBe(false);
   });
 });

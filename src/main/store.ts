@@ -96,8 +96,15 @@ export class Store {
     const label = isUndoable(action) ? labelFor(action, prev) : undefined;
     const next = reduce(prev, action);
     if (next !== prev) {
+      // Final-review fix 4: undo is a replay — an undoable action opens an entry;
+      // every other data-changing action is recorded against the newest entry so
+      // undoing it replays them rather than silently rolling them back.
       if (label !== undefined) {
-        this.undoStack.push(prev, label);
+        this.undoStack.push(prev, action, label);
+      } else {
+        this.undoStack.recordNonUndoable(action);
+        // Past the replay limit the history is cleared — drop the stale undo row too.
+        if (!this.undoStack.canUndo) this.lastUndo = undefined;
       }
       this.data = { ...next, meta: { ...next.meta, lastSavedAt: this.deps.now() } };
       this.rev++;
@@ -118,7 +125,7 @@ export class Store {
   }
 
   undo(): string | undefined {
-    const result = this.undoStack.undo(this.data);
+    const result = this.undoStack.undo();
     if (!result) return undefined;
     this.data = result.data;
     this.lastUndo = undefined;

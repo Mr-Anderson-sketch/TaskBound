@@ -194,10 +194,17 @@ const SettingsPatchSchema = SettingsSchema.deepPartial();
 const _settingsPatchTypeMatches: AssertEqual<z.infer<typeof SettingsPatchSchema>, DeepPartial<Settings>> = true;
 void _settingsPatchTypeMatches;
 
+/** The most tasks a data file may hold. The reducer enforces it too (`task/add` and a
+ * recurrence spawn are no-ops at the cap) and an import that would exceed it is
+ * rejected up front — so a file over it can only come from outside the app. Loading
+ * uses `parseDataForLoad`, which skips this one bound, so such a file is never
+ * mistaken for corruption. */
+export const MAX_TASKS = 100_000;
+
 export const DataSchema = z
   .object({
     schemaVersion: z.literal(2),
-    tasks: z.array(TaskSchema).max(10000),
+    tasks: z.array(TaskSchema).max(MAX_TASKS),
     lists: z.array(ListSchema),
     days: z.array(DayRecordSchema),
     settings: SettingsSchema,
@@ -256,7 +263,7 @@ const TaskCompleteSchema = z
     type: z.literal('task/complete'),
     id: IdSchema,
     now: z.number(),
-    by: z.enum(['user', 'timer']),
+    by: z.enum(['user', 'timer', 'import']),
     spawnId: IdSchema.optional()
   })
   .strict();
@@ -472,6 +479,20 @@ export class DataInvalidError extends Error {
 
 export function parseData(input: unknown): Data {
   const result = DataSchema.safeParse(input);
+  if (!result.success) {
+    throw new DataInvalidError(result.error.issues);
+  }
+  return result.data;
+}
+
+// Identical to DataSchema (`.extend` keeps `.strict()`) except `tasks` has no MAX_TASKS
+// bound: used wherever existing data is READ back (load, backups, restore, the file
+// watcher, import parsing) so a file that fails only the task-count bound still loads.
+const DataSchemaForLoad = DataSchema.extend({ tasks: z.array(TaskSchema) });
+
+/** `parseData` without the MAX_TASKS bound — see `DataSchemaForLoad`. */
+export function parseDataForLoad(input: unknown): Data {
+  const result = DataSchemaForLoad.safeParse(input);
   if (!result.success) {
     throw new DataInvalidError(result.error.issues);
   }
