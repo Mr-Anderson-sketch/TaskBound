@@ -87,11 +87,67 @@ export function isFullscreenRect(windowRect: RectPx, monitorRect: RectPx, tolera
 /** Window classes that belong to the desktop/taskbar shell itself, never a "real"
  * foreground app — `GetForegroundWindow` can return these (e.g. right after the last
  * app closes, or briefly during Alt-Tab), and they must never be mistaken for a
- * fullscreen app. */
-const SHELL_CLASSES = new Set(['Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd']);
+ * fullscreen app.
+ *
+ * Fix: Windows shell SURFACES — Start menu, Search, Action Center, Task View, Widgets,
+ * the lock/login UI, the IME/emoji panel — are full-screen-sized windows too (measured
+ * on a real machine: foreground class `Windows.UI.Core.CoreWindow`, rect equal to the
+ * whole monitor). Without these classes, simply opening Start hid the strip whenever
+ * `settings.strip.hideOverFullscreen` is on. `isShellProcess` (below) is the PRIMARY,
+ * more precise check (matches by owning process, since these hosts sometimes share
+ * generic window classes with real apps); this class set is the fallback used when the
+ * process lookup fails or is unavailable. Trade-off (deliberate): a rare UWP game that
+ * renders directly into a bare `CoreWindow` (rather than a normal top-level app window)
+ * will therefore not trigger auto-hide either — a hidden strip over the Start menu is a
+ * visible, frequent bug; a missed hide over a rare full-screen UWP game is not. */
+const SHELL_CLASSES = new Set([
+  'Progman',
+  'WorkerW',
+  'Shell_TrayWnd',
+  'Shell_SecondaryTrayWnd',
+  'Windows.UI.Core.CoreWindow',
+  'XamlExplorerHostIslandWindow',
+  'MultitaskingViewFrame',
+  'ForegroundStaging',
+  'Shell_InputSwitchTopLevelWindow',
+  'EdgeUiInputTopWndClass',
+  'TaskListThumbnailWnd'
+]);
 
 export function isShellClass(className: string): boolean {
   return SHELL_CLASSES.has(className);
+}
+
+/** Executable basenames of Windows shell HOST processes — Start menu, Search, Action
+ * Center, the lock/login UI, the IME/emoji panel, Widgets, and the desktop shell
+ * (`explorer.exe`) itself — matched case-insensitively so a full-screen-sized window
+ * owned by one of these is never mistaken for a fullscreen app (see `SHELL_CLASSES`'s
+ * doc comment for the bug this fixes). This is the PRIMARY check (more precise than
+ * matching by window class alone), used by `isForegroundFullscreen` via the caller's
+ * `getForegroundProcessExeName` dependency.
+ *
+ * Deliberately EXCLUDES `applicationframehost.exe` (hosts real UWP apps — Mail,
+ * Photos, Maps — so treating it as shell would suppress auto-hide over a genuinely
+ * full-screen UWP app) and `systemsettings.exe` (an ordinary, real, full-screen-able
+ * app window, not a shell surface). */
+const SHELL_PROCESS_NAMES = new Set([
+  'startmenuexperiencehost.exe',
+  'searchhost.exe',
+  'searchapp.exe',
+  'shellexperiencehost.exe',
+  'textinputhost.exe',
+  'lockapp.exe',
+  'widgets.exe',
+  'explorer.exe'
+]);
+
+/** True when `exeName` (a full path or bare filename — only the basename is
+ * inspected) names a Windows shell host process. Pure string matching, no Win32 call
+ * here: the caller (`fullscreen.ts`) is responsible for resolving the foreground
+ * window's owning process name via injected, never-throwing Win32 deps. */
+export function isShellProcess(exeName: string): boolean {
+  const basename = exeName.split(/[\\/]/).pop() ?? exeName;
+  return SHELL_PROCESS_NAMES.has(basename.toLowerCase());
 }
 
 /** Decodes the raw pointer-width HWND value out of the `Buffer` Electron's

@@ -16,6 +16,10 @@ export interface Win32 {
 }
 
 const MONITOR_DEFAULTTONEAREST = 2;
+// Fix: the least-privileged access right that still lets `QueryFullProcessImageNameW`
+// resolve a process's exe path — no need for full `PROCESS_QUERY_INFORMATION`
+// (0x0400), which some shell/elevated processes would refuse this app anyway.
+const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
 let loggedLoadFailure = false;
 
@@ -59,6 +63,9 @@ async function loadWin32Uncached(load: () => Promise<unknown>): Promise<Win32 | 
 
     const user32 = koffi.load('user32.dll');
     const shell32 = koffi.load('shell32.dll');
+    // Fix: for the process-based shell-surface check (GetWindowThreadProcessId is
+    // user32; OpenProcess/QueryFullProcessImageNameW/CloseHandle are kernel32).
+    const kernel32 = koffi.load('kernel32.dll');
 
     // Every "pointer" (HWND/HMONITOR) below is declared as `uintptr_t` rather than
     // a real koffi pointer type — see geometry.ts's `hwndValue` doc comment for why:
@@ -110,6 +117,19 @@ async function loadWin32Uncached(load: () => Promise<unknown>): Promise<Win32 | 
     const registerWindowMessageFn = user32.func('uint32_t __stdcall RegisterWindowMessageW(const char16_t *lpString)');
     const getShellWindowFn = user32.func('uintptr_t __stdcall GetShellWindow()');
     const getDesktopWindowFn = user32.func('uintptr_t __stdcall GetDesktopWindow()');
+    // Fix: process-based shell-surface detection (see geometry.ts's `isShellProcess`
+    // doc comment for why this is the PRIMARY check, and fullscreen.ts for how a
+    // failure here falls through to the class-based fallback).
+    const getWindowThreadProcessIdFn = user32.func(
+      'uint32_t __stdcall GetWindowThreadProcessId(uintptr_t hWnd, _Out_ uint32_t *lpdwProcessId)'
+    );
+    const openProcessFn = kernel32.func(
+      'uintptr_t __stdcall OpenProcess(uint32_t dwDesiredAccess, int bInheritHandle, uint32_t dwProcessId)'
+    );
+    const queryFullProcessImageNameFn = kernel32.func(
+      'int __stdcall QueryFullProcessImageNameW(uintptr_t hProcess, uint32_t dwFlags, _Out_ char16_t *lpExeName, _Inout_ uint32_t *lpdwSize)'
+    );
+    const closeHandleFn = kernel32.func('int __stdcall CloseHandle(uintptr_t hObject)');
 
     const cbSizeAppBarData = koffi.sizeof(APPBARDATA);
     const cbSizeMonitorInfo = koffi.sizeof(MONITORINFO);
@@ -151,7 +171,35 @@ async function loadWin32Uncached(load: () => Promise<unknown>): Promise<Win32 | 
         return len ? out[0].slice(0, len) : '';
       },
       getShellWindow: () => BigInt(getShellWindowFn()),
-      getDesktopWindow: () => BigInt(getDesktopWindowFn())
+      getDesktopWindow: () => BigInt(getDesktopWindowFn()),
+      // Fix: never throws — any failure along this chain (no thread/process found,
+      // OpenProcess denied or the process having exited, QueryFullProcessImageNameW
+      // failing) returns `undefined`, and `fullscreen.ts` falls through to the
+      // class-based check. `PROCESS_QUERY_LIMITED_INFORMATION` is enough for
+      // `QueryFullProcessImageNameW` and is grantable even against elevated/shell
+      // processes this app has no other privilege over.
+      getForegroundProcessExeName: (hwnd) => {
+        try {
+          const pidOut = [0];
+          getWindowThreadProcessIdFn(hwnd, pidOut);
+          const pid = pidOut[0];
+          if (!pid) return undefined;
+
+          const hProcess = BigInt(openProcessFn(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid));
+          if (hProcess === 0n) return undefined;
+          try {
+            const sizeOut = [260];
+            const nameOut = ['\0'.repeat(260)];
+            const ok = queryFullProcessImageNameFn(hProcess, 0, nameOut, sizeOut);
+            if (!ok || !sizeOut[0]) return undefined;
+            return nameOut[0].slice(0, sizeOut[0]);
+          } finally {
+            closeHandleFn(hProcess);
+          }
+        } catch {
+          return undefined;
+        }
+      }
     });
 
     return { appBar, fullscreen };

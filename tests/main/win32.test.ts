@@ -12,6 +12,7 @@ import {
   rectToRectPx,
   isFullscreenRect,
   isShellClass,
+  isShellProcess,
   hwndValue
 } from '../../src/main/win32/geometry';
 import { createAppBar } from '../../src/main/win32/appbar';
@@ -227,9 +228,57 @@ describe('isShellClass', () => {
     expect(isShellClass('Shell_SecondaryTrayWnd')).toBe(true);
   });
 
+  // Fix: Start, Search, Action Center, Task View, Widgets, the lock/login UI and the
+  // IME/emoji panel are all full-screen-sized windows of these classes — the bug this
+  // task fixes (simply opening Start used to hide the strip).
+  it('true for every known Windows shell SURFACE class (Start, Search, Task View, etc.)', () => {
+    expect(isShellClass('Windows.UI.Core.CoreWindow')).toBe(true);
+    expect(isShellClass('XamlExplorerHostIslandWindow')).toBe(true);
+    expect(isShellClass('MultitaskingViewFrame')).toBe(true);
+    expect(isShellClass('ForegroundStaging')).toBe(true);
+    expect(isShellClass('Shell_InputSwitchTopLevelWindow')).toBe(true);
+    expect(isShellClass('EdgeUiInputTopWndClass')).toBe(true);
+    expect(isShellClass('TaskListThumbnailWnd')).toBe(true);
+  });
+
   it('false for an ordinary app window class', () => {
     expect(isShellClass('Chrome_WidgetWin_1')).toBe(false);
     expect(isShellClass('')).toBe(false);
+  });
+});
+
+describe('isShellProcess', () => {
+  it('true for every known shell host process, matched case-insensitively', () => {
+    expect(isShellProcess('startmenuexperiencehost.exe')).toBe(true);
+    expect(isShellProcess('StartMenuExperienceHost.exe')).toBe(true);
+    expect(isShellProcess('SEARCHHOST.EXE')).toBe(true);
+    expect(isShellProcess('searchapp.exe')).toBe(true);
+    expect(isShellProcess('ShellExperienceHost.exe')).toBe(true);
+    expect(isShellProcess('TextInputHost.exe')).toBe(true);
+    expect(isShellProcess('LockApp.exe')).toBe(true);
+    expect(isShellProcess('Widgets.exe')).toBe(true);
+    expect(isShellProcess('explorer.exe')).toBe(true);
+  });
+
+  it('matches on the basename of a full path', () => {
+    expect(isShellProcess('C:\\Windows\\SystemApps\\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\\StartMenuExperienceHost.exe')).toBe(
+      true
+    );
+    expect(isShellProcess('C:/Windows/explorer.exe')).toBe(true);
+  });
+
+  // A real UWP app (Mail, Photos, Maps, ...) is hosted by applicationframehost.exe —
+  // treating it as shell would wrongly suppress auto-hide over a genuinely fullscreen
+  // UWP app. Settings is an ordinary real app window too, not a shell surface.
+  it('false for applicationframehost.exe and systemsettings.exe (real apps, not shell)', () => {
+    expect(isShellProcess('applicationframehost.exe')).toBe(false);
+    expect(isShellProcess('systemsettings.exe')).toBe(false);
+  });
+
+  it('false for an ordinary app exe', () => {
+    expect(isShellProcess('chrome.exe')).toBe(false);
+    expect(isShellProcess('TimeBound.exe')).toBe(false);
+    expect(isShellProcess('')).toBe(false);
   });
 });
 
@@ -420,6 +469,7 @@ describe('createFullscreen', () => {
       getClassName: () => 'SomeApp',
       getShellWindow: () => 0x999n,
       getDesktopWindow: () => 0x998n,
+      getForegroundProcessExeName: () => 'ordinaryapp.exe',
       ...overrides
     };
   }
@@ -468,6 +518,47 @@ describe('createFullscreen', () => {
 
   it('false when GetMonitorInfoW fails', () => {
     const fs = createFullscreen(baseDeps({ getMonitorRect: () => undefined }));
+    expect(fs.isForegroundFullscreen([])).toBe(false);
+  });
+
+  // Fix: the real bug — a Windows shell surface (Start menu, Search, etc.) full-screen
+  // sized on the foreground must never be treated as a fullscreen app.
+  it('false when the foreground window is owned by a shell process (e.g. Start menu), even though its rect is full-screen', () => {
+    const fs = createFullscreen(baseDeps({ getForegroundProcessExeName: () => 'StartMenuExperienceHost.exe' }));
+    expect(fs.isForegroundFullscreen([])).toBe(false);
+  });
+
+  it('false when the foreground window is a shell SURFACE class (e.g. CoreWindow), even though its rect is full-screen', () => {
+    const fs = createFullscreen(
+      baseDeps({ getForegroundProcessExeName: () => undefined, getClassName: () => 'Windows.UI.Core.CoreWindow' })
+    );
+    expect(fs.isForegroundFullscreen([])).toBe(false);
+  });
+
+  it('true for an ordinary app exe with a full-screen rect (unaffected by either shell check)', () => {
+    const fs = createFullscreen(baseDeps({ getForegroundProcessExeName: () => 'chrome.exe', getClassName: () => 'Chrome_WidgetWin_1' }));
+    expect(fs.isForegroundFullscreen([])).toBe(true);
+  });
+
+  // Fix: the process lookup must never crash the poll — a throwing dep (however
+  // unlikely given its own contract) falls through to the class-based check instead.
+  it('falls back to the class check when the process lookup throws', () => {
+    const throwing = () => {
+      throw new Error('OpenProcess denied');
+    };
+    const shellByClass = createFullscreen(
+      baseDeps({ getForegroundProcessExeName: throwing, getClassName: () => 'Windows.UI.Core.CoreWindow' })
+    );
+    expect(shellByClass.isForegroundFullscreen([])).toBe(false);
+
+    const ordinaryByClass = createFullscreen(baseDeps({ getForegroundProcessExeName: throwing, getClassName: () => 'SomeApp' }));
+    expect(ordinaryByClass.isForegroundFullscreen([])).toBe(true);
+  });
+
+  it('falls back to the class check when the process lookup resolves no name (undefined)', () => {
+    const fs = createFullscreen(
+      baseDeps({ getForegroundProcessExeName: () => undefined, getClassName: () => 'Shell_TrayWnd' })
+    );
     expect(fs.isForegroundFullscreen([])).toBe(false);
   });
 });
