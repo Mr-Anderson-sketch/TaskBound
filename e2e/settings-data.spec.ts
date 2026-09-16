@@ -2,7 +2,7 @@ import path from 'node:path';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { test, expect } from '@playwright/test';
-import { launchApp } from './launch';
+import { launchApp, seedRealisticToday } from './launch';
 
 test.setTimeout(90_000);
 
@@ -27,6 +27,9 @@ test('settings: Data section — default location, export/import controls, backu
   const launched = await launchApp({ dataDir });
   try {
     await launched.window('strip');
+
+    // Realistic seed data so this screenshot doesn't ship with all-zero rail counts.
+    await seedRealisticToday(launched.app);
 
     await launched.app.evaluate(() => {
       (globalThis as unknown as { __tb: { planner: { show: () => void } } }).__tb.planner.show();

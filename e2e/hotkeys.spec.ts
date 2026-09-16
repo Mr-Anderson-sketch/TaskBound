@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
-import { launchApp } from './launch';
+import { launchApp, seedRealisticToday } from './launch';
 
 test.setTimeout(60_000);
 
@@ -22,6 +22,9 @@ test('hotkeys: recording a new capture hotkey through the recorder updates the s
   const launched = await launchApp();
   try {
     await launched.window('strip');
+
+    // Realistic seed data so settings-hotkeys.png's rail isn't all-zero.
+    await seedRealisticToday(launched.app);
 
     await launched.app.evaluate(() => {
       (globalThis as unknown as { __tb: { planner: { show: () => void } } }).__tb.planner.show();
