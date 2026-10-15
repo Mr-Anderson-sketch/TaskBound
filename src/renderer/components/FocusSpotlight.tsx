@@ -1,17 +1,15 @@
 import { useEffect } from 'react';
-import type { CSSProperties } from 'react';
 
 interface FocusSpotlightProps {
   open: boolean;
   taskTitle?: string;
   timeRemaining?: string;
+  isFocusMode?: boolean;
   onClose: () => void;
 }
 
 export function FocusSpotlight(props: FocusSpotlightProps) {
-  const { open, taskTitle, timeRemaining, onClose } = props;
-
-  const overlayStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
+  const { open, taskTitle, timeRemaining, isFocusMode, onClose } = props;
 
   useEffect(() => {
     if (!open) {
@@ -32,12 +30,41 @@ export function FocusSpotlight(props: FocusSpotlightProps) {
     return null;
   }
 
+  if (isFocusMode) {
+    return (
+      <div
+        data-tauri-drag-region
+        className="fixed inset-0 z-50 flex items-center overflow-hidden rounded-2xl border border-brand-coral/45 bg-brand-navy/80 px-3 py-2 text-brand-ice shadow-[0_12px_24px_-8px_rgba(0,0,0,0.45)] backdrop-blur-xl app-region-no-drag"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 pr-2">
+          <p className="focus-overlay-heading-compact truncate font-semibold text-brand-ice">
+            {taskTitle}
+          </p>
+          <span className="focus-overlay-timer-compact font-bold tabular-nums text-brand-coral">
+            {timeRemaining ?? '--:--'}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="shrink-0 rounded-full border border-brand-coral/70 bg-brand-coral px-2 py-0.5 text-xs font-semibold text-brand-navy shadow-md transition hover:brightness-110"
+          onClick={onClose}
+          aria-label="Close focus spotlight"
+        >
+          ×
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-transparent backdrop-blur-2xl p-4 sm:p-6 md:p-10"
-      style={overlayStyle}
+      data-tauri-drag-region
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-auto p-4 sm:p-6 md:p-10"
+      style={{
+        backgroundColor: 'rgba(11, 29, 58, 0.45)'
+      }}
     >
-  <div className="relative flex w-full max-w-3xl flex-col gap-6 overflow-hidden rounded-3xl border border-brand-coral/50 bg-brand-navy/60 p-6 text-brand-ice shadow-[0_35px_60px_-15px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-8 md:p-10 app-region-no-drag">
+  <div className="relative flex w-full max-w-3xl flex-col gap-6 overflow-hidden rounded-3xl border border-brand-coral/45 bg-brand-navy/30 p-6 text-brand-ice shadow-[0_35px_60px_-15px_rgba(0,0,0,0.35)] backdrop-blur-2xl sm:p-8 md:p-10 app-region-no-drag">
         <button
           type="button"
           className="absolute right-4 top-4 rounded-full border border-brand-coral/70 bg-brand-coral px-3 py-1 text-xs font-semibold text-brand-navy shadow-md transition hover:brightness-110 sm:right-6 sm:py-1.5 sm:text-sm"
@@ -56,7 +83,10 @@ export function FocusSpotlight(props: FocusSpotlightProps) {
             {taskTitle}
           </p>
           <div className="text-center">
-            <span className="focus-overlay-timer inline-flex items-center justify-center rounded-xl bg-brand-coral/25 px-4 py-2 font-black text-brand-coral sm:px-6">
+            <span
+              className="focus-overlay-timer inline-flex items-center justify-center rounded-xl bg-brand-coral/25 px-4 py-2 font-black text-brand-coral sm:px-6"
+              style={{ transform: 'translateZ(0)' }}
+            >
               {timeRemaining ?? '--:--'}
             </span>
           </div>

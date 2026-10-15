@@ -27,7 +27,9 @@ import { BulkTaskModal } from './components/BulkTaskModal';
 import { FocusSpotlight } from './components/FocusSpotlight';
 import { TitleBar } from './components/TitleBar';
 import { formatSeconds } from './utils/time';
-import type { ElectronApi } from '../shared/ipc';
+import { invoke } from '@tauri-apps/api/tauri';
+import { appWindow, currentMonitor, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
+import { exit } from '@tauri-apps/api/process';
 import { v4 as uuidv4 } from 'uuid';
 
 const REMINDER_INTERVAL_MS = 3 * 60 * 1000;
@@ -107,6 +109,7 @@ export default function App() {
   const snoozeUntilRef = useRef<number | null>(null);
   const lastReminderTaskIdRef = useRef<string | null>(null);
   const [focusSpotlightOpenState, setFocusSpotlightOpenState] = useState(false);
+  const [isFocusModeActive, setIsFocusModeActive] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const focusSpotlightOpenRef = useRef(focusSpotlightOpenState);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -508,9 +511,8 @@ export default function App() {
     setModalState({ mode: 'edit', task: activeTask });
   }, [activeTask]);
 
-  const handleReminderCloseApp = useCallback(() => {
-    const api = (window as Window & { electronAPI?: { quitApp?: () => Promise<void> } }).electronAPI;
-    void api?.quitApp?.();
+  const handleReminderCloseApp = useCallback(async () => {
+    await exit(0);
   }, []);
 
   const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -707,9 +709,7 @@ export default function App() {
     });
   }, [alwaysOnTopEnabled, setAlwaysOnTop]);
 
-  const electronApi = useMemo(() => {
-    return (window as Window & { electronAPI?: ElectronApi }).electronAPI ?? null;
-  }, []);
+  // Tauri window API is available globally via imports
 
   const clearInactivityTimer = useCallback(() => {
     if (inactivityTimerRef.current) {
@@ -745,16 +745,12 @@ export default function App() {
     }, 30000);
   }, [shouldBeMinimal, alwaysOnTopEnabled, updateFocusSpotlightOpen]);
 
-  const handleExpandMinimal = useCallback(() => {
+  const handleExpandMinimal = useCallback(async () => {
     if (!isMinimalMode) {
       return;
     }
 
     updateFocusSpotlightOpen(false);
-
-    if (!electronApi) {
-      return;
-    }
 
     const fallback = previousWindowSizeRef.current ?? {
       width: Math.max(window.innerWidth, 420),
@@ -763,22 +759,29 @@ export default function App() {
 
     previousWindowSizeRef.current = null;
 
-    electronApi.setWindowSize?.(fallback.width, fallback.height).catch((error) => {
+    try {
+      await appWindow.setSize(new LogicalSize(fallback.width, fallback.height));
+    } catch (error) {
       console.error('Failed to restore window size from minimal mode', error);
-    });
+    }
 
     startMinimalModeCountdown();
-  }, [electronApi, isMinimalMode, startMinimalModeCountdown, updateFocusSpotlightOpen]);
+  }, [isMinimalMode, startMinimalModeCountdown, updateFocusSpotlightOpen]);
 
   const handleFocusMode = useCallback(async () => {
-    if (!activeTask || !electronApi) {
+    if (!activeTask) {
       return;
     }
     clearInactivityTimer();
+    setIsFocusModeActive(true);
     updateFocusSpotlightOpen(true);
-    await electronApi.setWindowSize?.(340, 240);
-    await electronApi.moveWindowToTopRight?.();
-  }, [activeTask, electronApi, clearInactivityTimer, updateFocusSpotlightOpen]);
+
+    try {
+      await invoke('enable_focus_mode');
+    } catch (error) {
+      console.error('Failed to enable focus mode', error);
+    }
+  }, [activeTask, clearInactivityTimer, updateFocusSpotlightOpen]);
 
   const scheduleFocusSpotlight = useCallback(() => {
     clearInactivityTimer();
@@ -890,37 +893,15 @@ export default function App() {
     };
   }, []);
 
+  // Window state tracking - Tauri handles this internally
   useEffect(() => {
-    const api = electronApi;
-    if (!api?.getWindowState) {
-      return;
-    }
-
-    let unsubscribe: (() => void) | undefined;
-
-    api
-      .getWindowState()
-      .then((state: WindowState) => {
-        setIsWindowMaximized(Boolean(state.isMaximized));
-      })
-      .catch((error: unknown) => {
-        console.error('Failed to get window state', error);
-      });
-
-    if (api.onWindowStateChange) {
-      unsubscribe = api.onWindowStateChange((state: WindowState) => {
-        setIsWindowMaximized(Boolean(state.isMaximized));
-      });
-    }
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [electronApi]);
+    // Listen for window maximize/unmaximize events if needed
+    // For now, isWindowMaximized state is managed via toggle
+  }, []);
 
   // Auto-resize and reposition window when entering/exiting minimal mode
   useEffect(() => {
-    if (!hydrated || !electronApi) {
+    if (!hydrated) {
       return;
     }
 
@@ -933,27 +914,24 @@ export default function App() {
       }
 
       // Enter minimal mode: resize small and move to top-right
-      electronApi.setWindowSize?.(340, 80).then(() => {
-        return electronApi.moveWindowToTopRight?.();
+      appWindow.setSize(new LogicalSize(340, 240)).then(async () => {
+        // Move to top-right corner
+        const monitor = await currentMonitor();
+        if (monitor) {
+          const logicalWidth = monitor.size.width / monitor.scaleFactor;
+          await appWindow.setPosition(new LogicalPosition(logicalWidth - 340, 0));
+        }
       }).catch((error) => {
         console.error('Failed to resize window for minimal mode', error);
-      });
-    } else if (focusSpotlightOpenState && !shouldBeMinimal) {
-      previousWindowSizeRef.current = null;
-      // Regular focus spotlight mode with active task
-      electronApi.setWindowSize?.(340, 240).then(() => {
-        return electronApi.moveWindowToTopRight?.();
-      }).catch((error) => {
-        console.error('Failed to resize window for focus mode', error);
       });
     } else if (previousWindowSizeRef.current) {
       const { width, height } = previousWindowSizeRef.current;
       previousWindowSizeRef.current = null;
-      electronApi.setWindowSize?.(width, height).catch((error) => {
+      appWindow.setSize(new LogicalSize(width, height)).catch((error) => {
         console.error('Failed to restore window size after minimal mode', error);
       });
     }
-  }, [isMinimalMode, focusSpotlightOpenState, shouldBeMinimal, hydrated, electronApi]);
+  }, [isMinimalMode, focusSpotlightOpenState, shouldBeMinimal, hydrated]);
 
   if (!hydrated) {
     return (
@@ -967,35 +945,37 @@ export default function App() {
   const scoreSign = state.score > 0 ? '+' : state.score < 0 ? '-' : '';
   const scoreValue = Math.abs(state.score);
 
-  const rootClasses = `min-h-screen text-brand-ice transition-colors duration-300 border-[3px] border-brand-ice/30 ${
-    focusSpotlightOpenState ? 'bg-transparent hide-scrollbar' : 'bg-brand-navy'
+  const rootClasses = `min-h-screen text-brand-ice transition-colors duration-300 ${
+    focusSpotlightOpenState ? 'bg-transparent border-transparent hide-scrollbar' : 'bg-brand-navy border-[3px] border-brand-ice/30'
   }`;
 
-  const dragLayerStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
-
-  const appContainerClasses = `mx-auto flex h-full max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
+  const appContainerClasses = `mx-auto flex flex-1 max-w-xl flex-col gap-3 px-4 pb-4 pt-2 transition duration-300 ${
     focusSpotlightOpenState && !isMinimalMode
-      ? 'pointer-events-none opacity-0'
+      ? 'hidden'
+      : focusSpotlightOpenState && isMinimalMode
+      ? ''
       : 'border-2 border-brand-ice/5 rounded-3xl shadow-[0_0_30px_rgba(148,187,233,0.08)]'
   }`;
 
   return (
-      <div className={rootClasses} style={dragLayerStyle}>
-        <div className={appContainerClasses}>
-        <div className={`relative ${isMinimalMode ? 'group' : ''}`}>
+      <div data-tauri-drag-region className={rootClasses}>
+        <div data-tauri-drag-region className={appContainerClasses}>
+        <div className={`relative z-50 ${isMinimalMode ? 'group' : ''}`}>
           <TitleBar
             alwaysOnTop={alwaysOnTopEnabled}
             isMaximized={isWindowMaximized}
             onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
-            onMinimize={() => electronApi?.minimizeWindow?.()}
-            onToggleMaximize={() => electronApi?.toggleMaximizeWindow?.()}
-            onClose={() => electronApi?.closeWindow?.()}
+            onMinimize={() => appWindow.minimize()}
+            onToggleMaximize={() => appWindow.toggleMaximize()}
+            onClose={() => appWindow.close()}
           />
           {isMinimalMode && (
-            <div className="pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2">
+            <div className="pointer-events-none absolute left-1/2 top-full mt-2 -translate-x-1/2 z-50">
               <button
                 type="button"
-                className="app-region-no-drag pointer-events-auto rounded-full border border-brand-ice/40 bg-brand-navy/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-ice opacity-0 transition hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral group-hover:opacity-100"
+                className={`app-region-no-drag pointer-events-auto rounded-full border-2 border-brand-ice/50 px-6 py-3 text-[22px] font-bold uppercase tracking-wide text-brand-ice opacity-0 transition hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral group-hover:opacity-100 ${
+                  focusSpotlightOpenState ? 'bg-brand-navy/50' : 'bg-brand-navy/95'
+                }`}
                 onClick={handleExpandMinimal}
               >
                 Show more
@@ -1004,7 +984,7 @@ export default function App() {
           )}
         </div>
         {!isMinimalMode && (
-        <main className="flex flex-1 flex-col gap-4">
+        <main data-tauri-drag-region className={`flex flex-1 flex-col gap-4 transition-opacity duration-300 ${focusSpotlightOpenState ? 'opacity-0' : 'opacity-100'}`}>
   <header className="app-region-no-drag rounded-2xl border border-brand-ice/20 bg-brand-dusk/90 p-4 shadow-xl backdrop-blur">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -1057,7 +1037,7 @@ export default function App() {
           )}
         </header>
 
-  <section className="app-region-no-drag flex-1 space-y-2 overflow-y-auto rounded-2xl border border-brand-ice/10 bg-brand-dusk/70 p-4 shadow-lg">
+  <section className="app-region-no-drag flex-1 space-y-2 rounded-2xl border border-brand-ice/10 bg-brand-dusk/70 p-4 shadow-lg">
           {state.tasks.length === 0 ? (
             <p className="text-center text-sm text-brand-ice/70">Create your first task to begin timeboxing.</p>
           ) : (
@@ -1104,7 +1084,7 @@ export default function App() {
         <section className="grid grid-cols-4 gap-3">
           <button
             type="button"
-            className="rounded-xl border border-brand-coral/80 bg-brand-coral px-3 py-2 text-sm font-semibold text-brand-navy hover:bg-brand-coral/90"
+            className="rounded-xl border border-brand-coral/80 bg-brand-coral px-2 py-2 text-xs font-semibold text-brand-navy hover:bg-brand-coral/90 whitespace-nowrap overflow-hidden"
             onClick={handleAddTask}
           >
             + Add Task
@@ -1119,7 +1099,7 @@ export default function App() {
             />
             <button
               type="button"
-              className="w-full rounded-xl border border-brand-aqua/70 bg-brand-aqua/20 px-3 py-2 text-sm font-semibold text-brand-aqua hover:bg-brand-aqua/30"
+              className="w-full rounded-xl border border-brand-aqua/70 bg-brand-aqua/20 px-2 py-2 text-xs font-semibold text-brand-aqua hover:bg-brand-aqua/30 whitespace-nowrap overflow-hidden"
               onClick={handleUploadButtonClick}
             >
               Upload ▼
@@ -1148,7 +1128,7 @@ export default function App() {
           </div>
           <button
             type="button"
-            className="rounded-xl border border-brand-teal/80 bg-brand-teal px-3 py-2 text-sm font-semibold text-white hover:bg-brand-teal/90 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/40"
+            className="rounded-xl border border-brand-teal/80 bg-brand-teal px-2 py-2 text-xs font-semibold text-white hover:bg-brand-teal/90 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/40 whitespace-nowrap overflow-hidden"
             onClick={completeActiveTask}
             disabled={!activeTask}
           >
@@ -1156,7 +1136,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            className="rounded-xl border border-brand-coral/70 bg-transparent px-3 py-2 text-sm font-semibold text-brand-coral hover:bg-brand-coral/10 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30"
+            className="rounded-xl border border-brand-coral/70 bg-transparent px-2 py-2 text-xs font-semibold text-brand-coral hover:bg-brand-coral/10 disabled:cursor-not-allowed disabled:border-brand-ice/10 disabled:bg-brand-dusk/50 disabled:text-brand-ice/30 whitespace-nowrap overflow-hidden"
             onClick={() => setAddTimeOpen(true)}
             disabled={!taskForAddTime}
           >
@@ -1188,10 +1168,6 @@ export default function App() {
             Focus Mode
           </button>
         </div>
-
-        <footer className="text-xs text-brand-ice/60">
-          {pendingCount > 0 ? `${pendingCount} task${pendingCount === 1 ? '' : 's'} pending` : 'All tasks completed'}
-        </footer>
         </main>
         )}
       </div>
@@ -1231,7 +1207,9 @@ export default function App() {
           open={focusSpotlightOpenState}
           taskTitle={activeTask?.title}
           timeRemaining={activeTime}
+          isFocusMode={isFocusModeActive}
           onClose={() => {
+            setIsFocusModeActive(false);
             updateFocusSpotlightOpen(false);
           }}
         />

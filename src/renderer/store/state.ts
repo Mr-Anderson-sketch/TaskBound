@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
+import { invoke } from '@tauri-apps/api/tauri';
+import { listen } from '@tauri-apps/api/event';
 import type { AppState, Task } from '../../shared/types';
 import { createEmptyState, ensureAlignedTasks } from '../../shared/stateHelpers';
-import type { ElectronApi } from '../../shared/ipc';
 
 const initialState: AppState = createEmptyState('0.0.0');
 
@@ -366,7 +367,6 @@ const shouldPersist = (type: AppAction['type']): boolean => {
 export const useAppStore = (): AppStore => {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [hydrated, setHydrated] = useState(false);
-  const apiRef = useRef<ElectronApi | null>(null);
   const stateRef = useRef(state);
   const pendingPersistRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -386,16 +386,10 @@ export const useAppStore = (): AppStore => {
     pendingPersistRef.current = true;
   }, []);
 
+  // Load state from Tauri backend on mount
   useEffect(() => {
-    const api = (window as Window & { electronAPI?: ElectronApi }).electronAPI;
-    apiRef.current = api ?? null;
-    if (!api) {
-      setHydrated(true);
-      return;
-    }
     let mounted = true;
-    api
-      .loadState()
+    invoke<AppState>('load_state')
       .then((loaded) => {
         if (!mounted) {
           return;
@@ -412,15 +406,12 @@ export const useAppStore = (): AppStore => {
     };
   }, []);
 
+  // Save state to Tauri backend when changes occur
   useEffect(() => {
     if (!hydrated) {
       return;
     }
     if (!pendingPersistRef.current) {
-      return;
-    }
-    const api = apiRef.current;
-    if (!api) {
       return;
     }
     if (debounceRef.current) {
@@ -429,8 +420,7 @@ export const useAppStore = (): AppStore => {
     debounceRef.current = setTimeout(() => {
       const snapshot = stateRef.current;
       pendingPersistRef.current = false;
-      api
-        .saveState(snapshot)
+      invoke<AppState>('save_state', { state: snapshot })
         .then((saved: AppState) => {
           dispatch({
             type: 'syncMeta',
@@ -505,9 +495,10 @@ export const useAppStore = (): AppStore => {
 
   const setAlwaysOnTopPreference = useCallback(
     async (value: boolean) => {
-      const api = apiRef.current;
-      if (api?.setAlwaysOnTop) {
-        await api.setAlwaysOnTop(value);
+      try {
+        await invoke('set_always_on_top', { enabled: value });
+      } catch (error) {
+        console.error('Failed to set always on top', error);
       }
       dispatchWithPersist({ type: 'setAlwaysOnTop', payload: { value } });
     },
@@ -601,20 +592,26 @@ export const useAppStore = (): AppStore => {
     [dispatchWithPersist]
   );
 
+  // Listen for timer tick events from Tauri backend
   useEffect(() => {
     if (!hydrated) {
       return;
     }
-    const api = apiRef.current;
-    if (!api?.onTimerTick) {
-      return;
-    }
-    const unsubscribeTick = api.onTimerTick((timestamp: number) => {
-      dispatchTick(timestamp);
+
+    let unlisten: (() => void) | null = null;
+
+    listen<number>('timer-tick', (event) => {
+      dispatchTick(event.payload);
+    }).then((unlistenFn) => {
+      unlisten = unlistenFn;
+    }).catch((error) => {
+      console.error('Failed to listen for timer ticks', error);
     });
 
     return () => {
-      unsubscribeTick?.();
+      if (unlisten) {
+        unlisten();
+      }
     };
   }, [hydrated, dispatchTick]);
 

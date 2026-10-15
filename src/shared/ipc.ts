@@ -1,16 +1,7 @@
-import type { AppState, WindowState } from './types';
+// Tauri IPC commands are invoked using invoke() from '@tauri-apps/api/tauri'
+// No need for a typed interface like Electron
 
-export interface ElectronApi {
-  loadState(): Promise<AppState>;
-  saveState(state: AppState): Promise<AppState>;
-  quitApp(): Promise<void>;
-  setAlwaysOnTop(enabled: boolean): Promise<void>;
-  minimizeWindow?(): Promise<void>;
-  toggleMaximizeWindow?(): Promise<void>;
-  closeWindow?(): Promise<void>;
-  getWindowState?(): Promise<WindowState>;
-  onWindowStateChange?(callback: (state: WindowState) => void): () => void;
-  onTimerTick?(callback: (timestamp: number) => void): () => void;
-  setWindowSize?(width: number, height: number): Promise<void>;
-  moveWindowToTopRight?(): Promise<void>;
-}
+// This file is kept for potential future shared utilities
+// between frontend and backend
+
+export {};

@@ -13,9 +13,6 @@ interface TitleBarProps {
 const buttonBase =
   'flex h-7 w-7 items-center justify-center rounded-md text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral';
 
-const dragRegionStyle = { WebkitAppRegion: 'drag' } as unknown as CSSProperties;
-const noDragRegionStyle = { WebkitAppRegion: 'no-drag' } as unknown as CSSProperties;
-
 export const TitleBar: FC<TitleBarProps> = ({
   alwaysOnTop,
   isMaximized,
@@ -25,23 +22,23 @@ export const TitleBar: FC<TitleBarProps> = ({
   onClose
 }) => {
   return (
-    <header className="flex items-center justify-between pr-4 pt-3 pb-1.5 text-xs bg-brand-navy/40 gap-2 min-w-0" style={dragRegionStyle} onDoubleClick={onToggleMaximize}>
-      <div className="flex items-center gap-3 min-w-0 flex-shrink">
+    <header data-tauri-drag-region className="flex items-center justify-between pr-4 pt-3 pb-1.5 text-xs bg-brand-navy/40 gap-2 min-w-0" onDoubleClick={onToggleMaximize}>
+      <div data-tauri-drag-region className="flex items-center gap-3 min-w-0 flex-shrink">
         {/* Responsive logo: shrinks from 48px -> 40px -> 32px */}
         <img
           src={logoIcon}
           alt="TimeBound"
           className="h-12 w-12 min-[350px]:h-10 min-[350px]:w-10 min-[300px]:h-8 min-[300px]:w-8 flex-shrink-0 transition-all duration-200"
         />
-        <div className="flex flex-col justify-center min-w-0">
+        <div data-tauri-drag-region className="flex flex-col justify-center min-w-0">
           {/* Responsive heading: shrinks from xl -> lg -> base */}
-          <h1 className="text-xl min-[350px]:text-lg min-[300px]:text-base font-bold text-brand-ice tracking-tight leading-none whitespace-nowrap transition-all duration-200">
+          <h1 data-tauri-drag-region className="text-xl min-[350px]:text-lg min-[300px]:text-base font-bold text-brand-ice tracking-tight leading-none whitespace-nowrap transition-all duration-200">
             TimeBound
           </h1>
-          <p className="text-xs text-brand-aqua/80 leading-tight hidden sm:block">Focus, finish, and track your wins.</p>
+          <p data-tauri-drag-region className="text-xs text-brand-aqua/80 leading-tight hidden sm:block">Focus, finish, and track your wins.</p>
         </div>
       </div>
-      <div className="flex items-center gap-2 flex-shrink-0" style={noDragRegionStyle}>
+      <div className="flex items-center gap-2 flex-shrink-0">
         <button
           type="button"
           className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brand-coral whitespace-nowrap ${

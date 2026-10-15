@@ -84,10 +84,10 @@ export function EditModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-navy/85 px-4">
-      <div className="w-full max-w-md rounded-xl border border-brand-teal/40 bg-brand-dusk p-6 shadow-2xl flex flex-col max-h-[80vh]">
-        <header className="mb-4 app-region-no-drag">
+      <div className="w-full max-w-md rounded-xl border border-brand-teal/40 bg-brand-dusk p-4 shadow-2xl flex flex-col max-h-[80vh]">
+        <header className="mb-2 app-region-no-drag">
           <h2 className="modal-heading font-semibold text-brand-ice">{heading}</h2>
-          {subtitle ? <p className="modal-subtitle mt-1 text-brand-ice/80">{subtitle}</p> : null}
+          {subtitle ? <p className="modal-subtitle mt-0.5 text-brand-ice/80">{subtitle}</p> : null}
         </header>
         <div className="space-y-4 overflow-auto flex-1">
           <label className="modal-label block font-medium text-brand-ice">
@@ -180,17 +180,17 @@ export function EditModal({
           ) : null}
           {error ? <p className="text-sm text-brand-coral">{error}</p> : null}
         </div>
-  <footer className="mt-6 flex justify-end gap-3 app-region-no-drag">
+  <footer className="mt-4 flex justify-end gap-2 app-region-no-drag">
           <button
             type="button"
-            className="rounded-md border border-brand-ice/30 px-4 py-2 text-sm font-medium text-brand-ice hover:border-brand-ice/60"
+            className="rounded-md border border-brand-ice/30 px-3 py-1.5 text-xs font-medium text-brand-ice hover:border-brand-ice/60"
             onClick={onCancel}
           >
             Cancel
           </button>
           <button
             type="button"
-            className="rounded-md bg-brand-coral px-4 py-2 text-sm font-semibold text-brand-navy hover:bg-brand-coral/90"
+            className="rounded-md bg-brand-coral px-3 py-1.5 text-xs font-semibold text-brand-navy hover:bg-brand-coral/90"
             onClick={handleSubmit}
           >
             {confirmLabel ?? (mode === 'create' ? 'Add Task' : 'Save Changes')}

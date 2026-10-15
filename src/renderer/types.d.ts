@@ -1,9 +1,4 @@
-import type { ElectronApi } from '../shared/ipc';
-
-declare global {
-  interface Window {
-    electronAPI?: ElectronApi;
-  }
-}
+// Tauri types are imported directly from @tauri-apps/api
+// No need for global window extensions
 
 export {};

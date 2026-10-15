@@ -7,12 +7,20 @@
 }
 
 html {
+  background-color: transparent;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 107, 107, 0.45) transparent;
 }
 
 body {
+  background-color: transparent;
   overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#root {
+  background-color: transparent;
 }
 
 ::-webkit-scrollbar {
@@ -34,6 +42,10 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, rgba(255, 107, 107, 0.9) 0%, rgba(54, 197, 255, 0.75) 100%);
+}
+
+.app-region-drag {
+  -webkit-app-region: drag;
 }
 
 .app-region-no-drag {
@@ -119,16 +131,26 @@ select,
     font-size: clamp(0.7rem, 1.35vw, 0.95rem);
   }
 
+  .focus-overlay-heading-compact {
+    font-size: 0.8rem;
+    line-height: 1.2;
+  }
+
+  .focus-overlay-timer-compact {
+    font-size: 1.6rem;
+    letter-spacing: 0.05rem;
+  }
+
   .modal-heading {
-    font-size: clamp(1.1rem, 2vw + 0.6rem, 1.6rem);
+    font-size: clamp(0.9rem, 1.5vw + 0.4rem, 1.1rem);
   }
 
   .modal-subtitle {
-    font-size: clamp(0.85rem, 1.6vw + 0.4rem, 1.05rem);
+    font-size: clamp(0.7rem, 1.2vw + 0.3rem, 0.85rem);
   }
 
   .modal-label {
-    font-size: clamp(0.78rem, 1.4vw + 0.35rem, 0.95rem);
+    font-size: clamp(0.7rem, 1.2vw + 0.25rem, 0.8rem);
   }
 }
 
