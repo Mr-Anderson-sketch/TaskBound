@@ -1,8 +1,8 @@
 [package]
 name = "app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.2.0"
+description = "TimeBound — timebox your tasks"
+authors = ["Bloomeasy"]
 license = ""
 repository = ""
 default-run = "app"
@@ -17,11 +17,14 @@ tauri-build = { version = "1.5.5", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "1.8.1", features = [ "macos-private-api", "process-exit", "window-center", "window-close", "window-hide", "window-maximize", "window-minimize", "window-set-always-on-top", "window-set-position", "window-set-size", "window-show", "window-start-dragging", "window-unmaximize", "window-unminimize"] }
+tauri = { version = "1.8.1", features = [ "global-shortcut-all", "macos-private-api", "notification-all", "process-exit", "system-tray", "window-center", "window-close", "window-hide", "window-maximize", "window-minimize", "window-set-always-on-top", "window-set-focus", "window-set-position", "window-set-size", "window-show", "window-start-dragging", "window-unmaximize", "window-unminimize"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 chrono = "0.4"
-window-vibrancy = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24"
+objc = "0.2"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem and the built-in dev server is disabled.

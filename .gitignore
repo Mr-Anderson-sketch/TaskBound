@@ -6,3 +6,6 @@ release/
 
 # Tauri
 /src-tauri/target/
+
+# Playwright screenshots
+e2e/out/

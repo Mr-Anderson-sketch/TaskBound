@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "TimeBound",
-    "version": "1.1.1"
+    "version": "1.2.0"
   },
   "tauri": {
     "macOSPrivateApi": true,
@@ -16,7 +16,9 @@
       "all": false,
       "fs": {
         "all": false,
-        "scope": ["$APPDATA/timebound/*"]
+        "scope": [
+          "$APPDATA/timebound/*"
+        ]
       },
       "process": {
         "all": false,
@@ -37,12 +39,19 @@
         "setAlwaysOnTop": true,
         "setSize": true,
         "setPosition": true,
-        "center": true
+        "center": true,
+        "setFocus": true
+      },
+      "notification": {
+        "all": true
+      },
+      "globalShortcut": {
+        "all": true
       }
     },
     "bundle": {
       "active": true,
-      "category": "DeveloperTool",
+      "category": "Productivity",
       "copyright": "",
       "deb": {
         "depends": []
@@ -65,7 +74,7 @@
         "signingIdentity": null
       },
       "resources": [],
-      "shortDescription": "",
+      "shortDescription": "Timebox your tasks",
       "targets": "all",
       "windows": {
         "certificateThumbprint": null,
@@ -83,9 +92,9 @@
       {
         "title": "TimeBound",
         "width": 400,
-        "height": 600,
-        "minWidth": 350,
-        "minHeight": 250,
+        "height": 640,
+        "minWidth": 360,
+        "minHeight": 480,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
@@ -95,6 +104,11 @@
         "center": true,
         "visible": true
       }
-    ]
+    ],
+    "systemTray": {
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": true
+    }
   }
 }
