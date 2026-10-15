@@ -3,3 +3,9 @@ dist/
 release/
 *.log
 .DS_Store
+
+# Tauri
+/src-tauri/target/
+
+# Playwright screenshots
+e2e/out/

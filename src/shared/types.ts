@@ -31,8 +31,18 @@ export interface MetaState {
   appVersion: string;
 }
 
+export type ThemeName = 'dark' | 'light';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface PreferencesState {
   alwaysOnTop: boolean;
+  theme: ThemeName;
+  menuBarTimer: boolean;
+  focusPositions?: Partial<Record<ThemeName, Point>>;
 }
 
 export interface AppState {
@@ -41,8 +51,4 @@ export interface AppState {
   stats: StatsSnapshot;
   meta: MetaState;
   preferences: PreferencesState;
-}
-
-export interface WindowState {
-  isMaximized: boolean;
 }
