@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Block distractions (macOS)
+- While a task's timer runs, TimeBound closes browser tabs on your block list and hides blocked apps. Only the matching tab closes; the browser and your other tabs stay open. Paused tasks don't block.
+- Starts with X/Twitter, YouTube, Instagram, TikTok and Facebook. Add any site, or just part of one ("youtube.com/shorts").
+- Scheduled blocks: "Weekdays 9:00–12:00" blocks on a schedule whether or not a task is running. Overnight windows work.
+- Works in Chrome, Safari, Opera, Brave, Edge, Vivaldi and Chromium. Firefox and Arc can't be read yet; add them as blocked apps to hide them instead.
+- When a tab is closed you can allow that site for the rest of the task. It costs a point, like adding time, and reopens the tab.
+- The shield in the header shows when blocking is on and opens the settings, including which browsers TimeBound may control and a shortcut to System Settings if one was refused.
+
+### Plan ahead
+- Give a task a start time: type "Standup 9:30 15m", "Deep work 1h30 at 2pm" or "Gym tomorrow 6pm", or use "Start at a set time" when adding or editing. Hours without am/pm read as working hours (7–11 morning, 1–6 afternoon).
+- Scheduled tasks wait in their own section. At their time they move to the front and start; whatever was running keeps its time and goes next.
+- Right-click a scheduled task to start it now or unschedule it.
+
+### Fixes
+- Menus now open above notifications instead of underneath them.
+
 ## 1.2.0 — 2026-10-16
 
 ### New look

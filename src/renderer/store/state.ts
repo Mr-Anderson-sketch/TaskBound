@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
-import type { Point, ThemeName } from '../../shared/types';
+import type { BlockingPrefs, Point, ThemeName } from '../../shared/types';
 import type { AppState } from '../../shared/types';
-import { createEmptyState, isDone, normalizeState } from '../../shared/stateHelpers';
+import { createEmptyState, isDone, isQueued, normalizeState } from '../../shared/stateHelpers';
 import { native } from '../native';
 import { reducer, tickDelta, type AppAction } from './reducer';
 
@@ -14,11 +14,14 @@ export interface AppStore {
   state: AppState;
   hydrated: boolean;
   loadFailed: boolean;
-  addTask: (title: string, seconds?: number) => void;
+  addTask: (title: string, seconds?: number, startAt?: string) => void;
   completeActiveTask: () => void;
   addTime: (taskId: string, seconds: number) => void;
   reopenWithTime: (taskId: string, seconds: number) => void;
-  updateTask: (taskId: string, title: string, seconds?: number) => void;
+  updateTask: (taskId: string, title: string, seconds?: number, startAt?: string | null) => void;
+  unschedule: (taskId: string, to: 'front' | 'end') => void;
+  allowSite: (taskId: string, site: string) => void;
+  setBlocking: (blocking: BlockingPrefs) => void;
   deleteTasks: (taskIds: string[]) => void;
   clearFinished: () => void;
   reorderTasks: (orderedTaskIds: string[]) => void;
@@ -110,9 +113,13 @@ export const useAppStore = (): AppStore => {
     for (let i = 1; i <= elapsed; i += 1) {
       dispatch({ type: 'tick', now: new Date(previous + i * 1000).toISOString() });
     }
-    // Completions caused by the timer must reach disk even though ticks themselves are not saved.
-    const activeBefore = before.tasks.find((task) => !isDone(task));
+    // Completions and scheduled starts caused by the timer must reach disk even though ticks
+    // themselves are not saved.
+    const activeBefore = before.tasks.find(isQueued);
     if (activeBefore && typeof activeBefore.remainingSeconds === 'number' && activeBefore.remainingSeconds <= elapsed && !activeBefore.isPaused) {
+      pendingPersistRef.current = true;
+    }
+    if (before.tasks.some((task) => !isDone(task) && task.scheduledAt && Date.parse(task.scheduledAt) <= nowMs)) {
       pendingPersistRef.current = true;
     }
   }, []);
@@ -143,7 +150,10 @@ export const useAppStore = (): AppStore => {
     hydrated,
     loadFailed,
     dispatchTick,
-    addTask: useCallback((title, seconds) => run({ type: 'addTask', payload: { id: uuid(), title, seconds, now: nowIso() } }), [run]),
+    addTask: useCallback(
+      (title, seconds, startAt) => run({ type: 'addTask', payload: { id: uuid(), title, seconds, startAt, now: nowIso() } }),
+      [run]
+    ),
     completeActiveTask: useCallback(() => run({ type: 'manualComplete', now: nowIso() }), [run]),
     addTime: useCallback((taskId, seconds) => run({ type: 'addTime', payload: { taskId, seconds, now: nowIso() } }), [run]),
     reopenWithTime: useCallback(
@@ -151,9 +161,12 @@ export const useAppStore = (): AppStore => {
       [run]
     ),
     updateTask: useCallback(
-      (taskId, title, seconds) => run({ type: 'updateTask', payload: { taskId, title, seconds, now: nowIso() } }),
+      (taskId, title, seconds, startAt) => run({ type: 'updateTask', payload: { taskId, title, seconds, startAt, now: nowIso() } }),
       [run]
     ),
+    unschedule: useCallback((taskId, to) => run({ type: 'unschedule', payload: { taskId, to, now: nowIso() } }), [run]),
+    allowSite: useCallback((taskId, site) => run({ type: 'allowSite', payload: { taskId, site, now: nowIso() } }), [run]),
+    setBlocking: useCallback((blocking) => run({ type: 'setBlocking', payload: { blocking } }), [run]),
     deleteTasks: useCallback((taskIds) => run({ type: 'deleteTasks', payload: { taskIds, now: nowIso() } }), [run]),
     clearFinished: useCallback(() => run({ type: 'clearFinished', now: nowIso() }), [run]),
     reorderTasks: useCallback(

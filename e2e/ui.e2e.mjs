@@ -251,6 +251,96 @@ await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
 await shot('light-07-shortcuts');
 await page.keyboard.press('Escape');
 
+console.log('E19 scheduled start');
+const soon = await page.evaluate(() => {
+  const d = new Date(Date.now() + 2 * 60_000);
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() + 1);
+  const h = d.getHours();
+  const label = `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+  return { typed: `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`, label };
+});
+const runningBefore = await nowTitle();
+await page.fill('#quick-add', `Standup ${soon.typed} 15m`);
+check('start chip shows the parsed time', (await page.locator('.addbar .parsed.start').innerText()) === soon.label, await page.locator('.addbar .parsed.start').innerText());
+check('duration chip still shows', (await page.locator('.addbar .parsed:not(.start)').innerText()) === '15m');
+await page.press('#quick-add', 'Enter');
+const scheduledNames = () => page.locator('section[aria-label="Scheduled"] .row .name').allInnerTexts();
+check('lands in Scheduled, not the queue', (await scheduledNames()).includes('Standup') && !(await upNextNames()).includes('Standup'));
+check('current task is untouched', (await nowTitle()) === runningBefore, await nowTitle());
+check('row shows the start time', (await page.locator('section[aria-label="Scheduled"] .row .when').first().innerText()).includes(soon.label));
+check('toast confirms the schedule', await page.getByText(`Scheduled for ${soon.label}`).isVisible());
+await page.locator('section[aria-label="Scheduled"] .row', { hasText: 'Standup' }).click({ button: 'right' });
+check('scheduled rows offer Start now and Unschedule', (await page.getByRole('menuitem', { name: 'Start now' }).isVisible()) && (await page.getByRole('menuitem', { name: 'Unschedule' }).isVisible()));
+await shot('light-08-scheduled-menu');
+await page.keyboard.press('Escape');
+await tick(2 * 60_000);
+check('still waiting just before its time', (await nowTitle()) !== 'Standup');
+for (let i = 0; i < 90 && (await nowTitle()) !== 'Standup'; i += 1) {
+  await tick(1000);
+}
+check('takes over at its time', (await nowTitle()) === 'Standup', await nowTitle());
+check('leaves the Scheduled section', (await page.locator('section[aria-label="Scheduled"]').count()) === 0);
+check('announces the start', (await page.getByText('Starting “Standup”').count()) === 1);
+check('the interrupted task waits next', (await upNextNames())[0] === runningBefore, (await upNextNames()).join(','));
+await shot('light-09-scheduled-started');
+
+console.log('E19b schedule from the edit sheet');
+const target = (await upNextNames())[0];
+await page.locator('section[aria-label="Up next"] .row', { hasText: target }).dblclick();
+await page.getByLabel('Start at a set time').check();
+const inHour = await page.evaluate(() => {
+  const d = new Date(Date.now() + 60 * 60_000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+});
+await page.locator('input[type="datetime-local"]').fill(inHour);
+check('sheet explains when it starts', await page.getByText(/Starts .*ahead of whatever is running/).isVisible());
+await page.getByRole('button', { name: /^Save/ }).click();
+check('edited task moved to Scheduled', (await scheduledNames()).includes(target));
+await page.locator('section[aria-label="Scheduled"] .row', { hasText: target }).click({ button: 'right' });
+await page.getByRole('menuitem', { name: 'Unschedule' }).click();
+check('Unschedule puts it back in the queue', (await upNextNames()).includes(target) && (await page.locator('section[aria-label="Scheduled"]').count()) === 0);
+
+console.log('E20 blocking sheet');
+await page.getByRole('button', { name: /^Block distractions/ }).click();
+check('sheet opens', await page.getByRole('dialog', { name: 'Block distractions' }).isVisible());
+const chips = () => page.locator('section[aria-label="Blocked sites"] .tags li span').allInnerTexts();
+check('default sites listed', (await chips()).join(',') === 'x.com,twitter.com,youtube.com,youtu.be,instagram.com,tiktok.com,facebook.com', (await chips()).join(','));
+await page.getByLabel('Add a site to block').fill('https://www.Reddit.com/r/all?ref=x');
+await page.getByRole('button', { name: 'Add', exact: true }).click();
+check('pasted URL is cleaned up', (await chips()).includes('reddit.com/r/all'), (await chips()).join(','));
+await page.getByLabel('Add a site to block').fill('nope');
+await page.getByRole('button', { name: 'Add', exact: true }).click();
+check('rejects something that is not a site', await page.getByText('That doesn’t look like a website').isVisible());
+await page.getByLabel('Add a site to block').fill('');
+await page.getByRole('button', { name: 'Stop blocking x.com' }).click();
+check('removes a site', !(await chips()).includes('x.com'));
+check('offers to restore defaults', await page.getByRole('button', { name: 'Restore defaults' }).isVisible());
+await page.getByRole('button', { name: 'Add a schedule…' }).click();
+await page.getByRole('button', { name: 'Saturday' }).click();
+await page.getByRole('button', { name: 'Add schedule' }).click();
+check('schedule listed', await page.getByText('Mon, Tue, Wed, Thu, Fri, Sat · 9:00 AM – 12:00 PM').isVisible());
+await page.getByLabel('While a task’s timer runs').uncheck();
+check('preview explains browser access', await page.getByText('Browser access shows in the desktop app.').isVisible());
+await shot('light-10-blocking-top');
+await page.locator('.sheet').evaluate((el) => el.scrollTo(0, el.scrollHeight));
+await shot('light-11-blocking-bottom');
+await page.getByRole('dialog', { name: 'Block distractions' }).getByRole('button', { name: 'Done', exact: true }).click();
+await tick(500);
+const blockingPrefs = await page.evaluate(() => JSON.parse(localStorage.getItem('timebound-preview-state')).preferences.blocking);
+check('blocking settings saved', blockingPrefs.sites.includes('reddit.com/r/all') && !blockingPrefs.sites.includes('x.com') && blockingPrefs.duringTasks === false, JSON.stringify(blockingPrefs));
+check('schedule saved', blockingPrefs.windows.length === 1 && blockingPrefs.windows[0].days.join(',') === '1,2,3,4,5,6' && blockingPrefs.windows[0].start === '09:00', JSON.stringify(blockingPrefs.windows));
+await page.reload();
+await page.waitForSelector('.shell');
+await page.getByRole('button', { name: /^Block distractions/ }).click();
+check('blocking settings survive a restart', (await chips()).includes('reddit.com/r/all') && !(await page.getByLabel('While a task’s timer runs').isChecked()));
+await page.keyboard.press('Escape');
+await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+await page.getByRole('button', { name: /^Block distractions/ }).click();
+await shot('dark-11-blocking');
+await page.keyboard.press('Escape');
+
 check('no console or page errors', errors.length === 0, errors.join(' | '));
 
 await browser.close();

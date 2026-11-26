@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { combineToSeconds, splitSeconds } from '../utils/time';
+import { combineToSeconds, formatStart, splitSeconds, toLocalInput } from '../utils/time';
 import { MAX_TASK_MINUTES } from '../utils/parse';
 
 interface SheetProps {
@@ -76,17 +76,34 @@ interface TaskSheetProps {
   mode: 'create' | 'edit';
   initialTitle?: string;
   initialSeconds?: number;
+  initialStartAt?: string;
+  /** Finished tasks can't be scheduled. */
+  allowSchedule?: boolean;
   requireTime: boolean;
-  onSubmit: (payload: { title: string; seconds?: number }) => void;
+  /** startAt: an ISO time, or null to clear the schedule. */
+  onSubmit: (payload: { title: string; seconds?: number; startAt: string | null }) => void;
   onClose: () => void;
 }
 
-export function TaskSheet({ mode, initialTitle = '', initialSeconds, requireTime, onSubmit, onClose }: TaskSheetProps) {
+const nextHour = (): Date => {
+  const date = new Date();
+  date.setMinutes(0, 0, 0);
+  date.setHours(date.getHours() + 1);
+  return date;
+};
+
+export function TaskSheet({ mode, initialTitle = '', initialSeconds, initialStartAt, allowSchedule = true, requireTime, onSubmit, onClose }: TaskSheetProps) {
   const initial = splitSeconds(initialSeconds);
   const [title, setTitle] = useState(initialTitle);
   const [minutes, setMinutes] = useState(initialSeconds ? initial.hours * 60 + initial.minutes : 25);
   const [useTime, setUseTime] = useState(mode === 'create' || requireTime || initialSeconds !== undefined);
+  const [useStart, setUseStart] = useState(Boolean(initialStartAt));
+  const [startInput, setStartInput] = useState(toLocalInput(initialStartAt ? new Date(initialStartAt) : nextHour()));
   const [error, setError] = useState<string | null>(null);
+
+  const startDate = useStart && startInput ? new Date(startInput) : null;
+  const startValid = !startDate || !Number.isNaN(startDate.getTime());
+  const startPassed = Boolean(startDate && startValid && startDate.getTime() <= Date.now());
 
   const seconds = useTime ? combineToSeconds(0, minutes) : undefined;
   const costsPoint = mode === 'edit' && (initialSeconds ?? 0) > 0 && (seconds ?? 0) > (initialSeconds ?? 0);
@@ -105,7 +122,11 @@ export function TaskSheet({ mode, initialTitle = '', initialSeconds, requireTime
       setError('This task needs a time so the timer can run.');
       return;
     }
-    onSubmit({ title: title.trim(), seconds });
+    if (useStart && (!startDate || !startValid)) {
+      setError('Pick when the task should start.');
+      return;
+    }
+    onSubmit({ title: title.trim(), seconds, startAt: useStart && startDate ? startDate.toISOString() : null });
   };
 
   return (
@@ -130,6 +151,25 @@ export function TaskSheet({ mode, initialTitle = '', initialSeconds, requireTime
           Time limit {requireTime ? '(needed)' : ''}
         </label>
         {useTime ? <DurationPicker minutes={minutes} onChange={setMinutes} /> : null}
+        {allowSchedule ? (
+          <>
+            <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, color: 'var(--text)', fontSize: 13 }}>
+              <input type="checkbox" checked={useStart} onChange={(event) => setUseStart(event.target.checked)} style={{ width: 16, height: 16 }} />
+              Start at a set time
+            </label>
+            {useStart ? (
+              <label className="field">
+                Starts
+                <input type="datetime-local" value={startInput} onChange={(event) => setStartInput(event.target.value)} />
+                {startDate && startValid ? (
+                  <span className="sub" style={{ margin: 0 }}>
+                    {startPassed ? 'That time has passed, so it starts right away.' : `Starts ${formatStart(startDate.toISOString())}, ahead of whatever is running.`}
+                  </span>
+                ) : null}
+              </label>
+            ) : null}
+          </>
+        ) : null}
         {costsPoint ? <p className="sub" style={{ margin: 0 }}>Adding time costs 1 point.</p> : null}
         {error ? <p className="error">{error}</p> : null}
         <footer>

@@ -2,15 +2,18 @@ import { forwardRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Task, ThemeName } from '../../shared/types';
 import type { DaySummary } from '../../shared/stateHelpers';
-import { formatDuration, formatSeconds } from '../utils/time';
+import { formatDuration, formatSeconds, formatStart } from '../utils/time';
 import { parseQuickAdd } from '../utils/parse';
 import logoIcon from '../assets/logo-icon.png';
-import { IconClose, IconExpand, IconMinus, IconMoon, IconMore, IconPause, IconPlay, IconSun } from './Icons';
+import { IconClose, IconExpand, IconMinus, IconMoon, IconMore, IconPause, IconPlay, IconShield, IconShieldOn, IconSun } from './Icons';
 
 interface HeaderProps {
   theme: ThemeName;
   today: number;
   score: number;
+  blocking: boolean;
+  blockingLabel: string;
+  onBlocking: () => void;
   onSummary: () => void;
   onToggleTheme: () => void;
   onMenu: (x: number, y: number) => void;
@@ -20,7 +23,7 @@ interface HeaderProps {
 
 export const formatScore = (score: number): string => (score > 0 ? `+${score}` : `${score}`);
 
-export function Header({ theme, today, score, onSummary, onToggleTheme, onMenu, onMinimize, onClose }: HeaderProps) {
+export function Header({ theme, today, score, blocking, blockingLabel, onBlocking, onSummary, onToggleTheme, onMenu, onMinimize, onClose }: HeaderProps) {
   return (
     <header className="header" data-tauri-drag-region>
       <img className="logo" src={logoIcon} alt="" />
@@ -30,6 +33,15 @@ export function Header({ theme, today, score, onSummary, onToggleTheme, onMenu, 
         <span className="score mono">{formatScore(score)}</span>
       </button>
       <div className="spacer" data-tauri-drag-region />
+      <button
+        type="button"
+        className={`icon-btn shield${blocking ? ' on' : ''}`}
+        onClick={onBlocking}
+        aria-label={`Block distractions. ${blockingLabel}`}
+        title={`Block distractions — ${blockingLabel}`}
+      >
+        {blocking ? <IconShieldOn size={16} /> : <IconShield size={16} />}
+      </button>
       <button
         type="button"
         className="icon-btn"
@@ -63,6 +75,7 @@ export function Header({ theme, today, score, onSummary, onToggleTheme, onMenu, 
 
 interface NowCardProps {
   task?: Task;
+  nextScheduled?: Task;
   position: number;
   openCount: number;
   time: string;
@@ -75,14 +88,16 @@ interface NowCardProps {
   onSetTime: () => void;
 }
 
-export function NowCard({ task, position, openCount, time, total, fraction, onDone, onTogglePause, onAddFive, onFocus, onSetTime }: NowCardProps) {
+export function NowCard({ task, nextScheduled, position, openCount, time, total, fraction, onDone, onTogglePause, onAddFive, onFocus, onSetTime }: NowCardProps) {
   if (!task) {
     return (
       <section className="now" aria-label="Current task">
         <p className="empty">
           <strong>Nothing running.</strong>
           <br />
-          Add a task below — try “Write intro 25m”.
+          {nextScheduled?.scheduledAt
+            ? `Next: “${nextScheduled.title}” at ${formatStart(nextScheduled.scheduledAt)}.`
+            : 'Add a task below — try “Write intro 25m” or “Deep work 1h at 9”.'}
         </p>
       </section>
     );
@@ -141,7 +156,7 @@ export function NowCard({ task, position, openCount, time, total, fraction, onDo
 
 interface AddBarProps {
   requireTime: boolean;
-  onAdd: (title: string, seconds?: number) => void;
+  onAdd: (title: string, seconds?: number, startAt?: string) => void;
 }
 
 export const AddBar = forwardRef<HTMLInputElement, AddBarProps>(function AddBar({ requireTime, onAdd }, ref) {
@@ -154,11 +169,11 @@ export const AddBar = forwardRef<HTMLInputElement, AddBarProps>(function AddBar(
     if (!parsed || !parsed.title) {
       return;
     }
-    if (requireTime && !parsed.seconds) {
+    if (requireTime && !parsed.seconds && !parsed.startAt) {
       setHint('Add a time so the timer can start — e.g. “Write intro 25m”.');
       return;
     }
-    onAdd(parsed.title, parsed.seconds);
+    onAdd(parsed.title, parsed.seconds, parsed.startAt);
     setValue('');
     setHint(null);
   };
@@ -175,7 +190,7 @@ export const AddBar = forwardRef<HTMLInputElement, AddBarProps>(function AddBar(
           value={value}
           autoComplete="off"
           spellCheck={false}
-          placeholder="Add a task — “Review deck 20m”"
+          placeholder="Add a task — “Review deck 20m at 3pm”"
           onChange={(event) => {
             setValue(event.target.value);
             setHint(null);
@@ -187,6 +202,7 @@ export const AddBar = forwardRef<HTMLInputElement, AddBarProps>(function AddBar(
             }
           }}
         />
+        {parsed?.startAt ? <span className="parsed mono start">{formatStart(parsed.startAt)}</span> : null}
         {parsed?.seconds ? <span className="parsed mono">{formatDuration(parsed.seconds)}</span> : null}
       </form>
       {hint ? <p className="hint">{hint}</p> : null}

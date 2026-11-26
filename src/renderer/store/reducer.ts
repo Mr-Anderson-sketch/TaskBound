@@ -1,5 +1,5 @@
-import type { AppState, Point, Task, ThemeName } from '../../shared/types';
-import { ensureAlignedTasks, isDone, toLocalDateKey } from '../../shared/stateHelpers';
+import type { AppState, BlockingPrefs, Point, Task, ThemeName } from '../../shared/types';
+import { ensureAlignedTasks, isDone, isQueued, toLocalDateKey } from '../../shared/stateHelpers';
 
 // A gap longer than this between ticks means the machine slept or the app was suspended;
 // that time is not charged to the running task.
@@ -8,11 +8,15 @@ export const MAX_TICK_GAP_MS = 90_000;
 export type AppAction =
   | { type: 'hydrate'; payload: AppState }
   | { type: 'tick'; now: string }
-  | { type: 'addTask'; payload: { id: string; title: string; seconds?: number; now: string } }
+  | { type: 'addTask'; payload: { id: string; title: string; seconds?: number; startAt?: string; now: string } }
   | { type: 'manualComplete'; now: string }
   | { type: 'addTime'; payload: { taskId: string; seconds: number; now: string } }
   | { type: 'reopenWithTime'; payload: { taskId: string; seconds: number; now: string } }
-  | { type: 'updateTask'; payload: { taskId: string; title: string; seconds?: number; now: string } }
+  // startAt: undefined leaves the schedule alone, null clears it.
+  | { type: 'updateTask'; payload: { taskId: string; title: string; seconds?: number; startAt?: string | null; now: string } }
+  | { type: 'unschedule'; payload: { taskId: string; to: 'front' | 'end'; now: string } }
+  | { type: 'allowSite'; payload: { taskId: string; site: string; now: string } }
+  | { type: 'setBlocking'; payload: { blocking: BlockingPrefs } }
   | { type: 'deleteTasks'; payload: { taskIds: string[]; now: string } }
   | { type: 'clearFinished'; now: string }
   | { type: 'reorderTasks'; payload: { orderedTaskIds: string[]; now: string } }
@@ -24,7 +28,35 @@ export type AppAction =
   | { type: 'pauseTask'; payload: { taskId: string; now: string } }
   | { type: 'resumeTask'; payload: { taskId: string; now: string } };
 
-const findActiveTaskIndex = (tasks: Task[]): number => tasks.findIndex((task) => !isDone(task));
+const findActiveTaskIndex = (tasks: Task[]): number => tasks.findIndex(isQueued);
+
+const isDue = (task: Task, nowMs: number): boolean =>
+  !isDone(task) && Boolean(task.scheduledAt) && Date.parse(task.scheduledAt as string) <= nowMs;
+
+/**
+ * Scheduled tasks whose start time has arrived move to the front of the queue (earliest
+ * first) and start. Whatever was running keeps its remaining time and becomes next.
+ */
+export const promoteDueTasks = (state: AppState, now: string): AppState => {
+  const nowMs = Date.parse(now);
+  const due = state.tasks.filter((task) => isDue(task, nowMs));
+  if (due.length === 0) {
+    return state;
+  }
+  due.sort((a, b) => Date.parse(a.scheduledAt as string) - Date.parse(b.scheduledAt as string));
+  const dueIds = new Set(due.map((task) => task.id));
+  const started = due.map((task) => ({
+    ...task,
+    scheduledAt: undefined,
+    isPaused: false,
+    updatedAt: now,
+    history: [...task.history, { type: 'scheduled_start' as const, at: now }]
+  }));
+  const tasks = [...started, ...state.tasks.filter((task) => !dueIds.has(task.id))];
+  return { ...state, tasks: ensureAlignedTasks(tasks), meta: withSavedAt(state, now) };
+};
+
+const moveToFront = (tasks: Task[], task: Task): Task[] => [task, ...tasks.filter((other) => other.id !== task.id)];
 
 const updateStatsOnCompletion = (state: AppState, completionIso: string): AppState['stats'] => {
   const dateKey = toLocalDateKey(new Date(completionIso));
@@ -44,6 +76,7 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
       return action.payload;
 
     case 'tick': {
+      state = promoteDueTasks(state, action.now);
       const activeIndex = findActiveTaskIndex(state.tasks);
       if (activeIndex === -1) {
         return state;
@@ -77,7 +110,7 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
     }
 
     case 'addTask': {
-      const { id, title, seconds, now } = action.payload;
+      const { id, title, seconds, startAt, now } = action.payload;
       const newTask: Task = {
         id,
         title,
@@ -88,6 +121,9 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
         status: 'pending',
         history: []
       };
+      if (startAt) {
+        newTask.scheduledAt = startAt;
+      }
       return { ...state, tasks: ensureAlignedTasks([...state.tasks, newTask]), meta: withSavedAt(state, now) };
     }
 
@@ -165,7 +201,7 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
         history: [...task.history, { type: 'add_time', amountSeconds: seconds, at: now }]
       };
       const others = state.tasks.filter((candidate) => candidate.id !== taskId);
-      const firstOpen = others.findIndex((candidate) => !isDone(candidate));
+      const firstOpen = others.findIndex(isQueued);
       const insertAt = firstOpen === -1 ? others.length : firstOpen;
       const tasks = [...others.slice(0, insertAt), reopened, ...others.slice(insertAt)];
       const stats = wasAuto
@@ -188,12 +224,13 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
     }
 
     case 'updateTask': {
-      const { taskId, title, seconds, now } = action.payload;
+      const { taskId, title, seconds, startAt, now } = action.payload;
       let scoreDelta = 0;
       const tasks = state.tasks.map((task) => {
         if (task.id !== taskId) {
           return task;
         }
+        const scheduledAt = startAt === undefined ? task.scheduledAt : startAt ?? undefined;
         const previousAssigned = task.timeAssignedSeconds ?? 0;
         const previousRemaining = task.remainingSeconds ?? previousAssigned;
         const hasTime = typeof seconds === 'number' && seconds > 0;
@@ -213,11 +250,47 @@ export const reducer = (state: AppState, action: AppAction): AppState => {
           remainingSeconds: hasTime ? nextRemaining : undefined,
           updatedAt: now,
           status: reopen ? ('pending' as const) : task.status,
-          completedAt: reopen ? undefined : task.completedAt
+          completedAt: reopen ? undefined : task.completedAt,
+          scheduledAt
         };
       });
       return { ...state, score: state.score + scoreDelta, tasks: ensureAlignedTasks(tasks), meta: withSavedAt(state, now) };
     }
+
+    case 'unschedule': {
+      const { taskId, to, now } = action.payload;
+      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      if (!task || isDone(task)) {
+        return state;
+      }
+      const freed: Task = { ...task, scheduledAt: undefined, isPaused: false, updatedAt: now };
+      const others = state.tasks.filter((candidate) => candidate.id !== taskId);
+      const tasks = to === 'front' ? moveToFront(others, freed) : [...others, freed];
+      return { ...state, tasks: ensureAlignedTasks(tasks), meta: withSavedAt(state, now) };
+    }
+
+    case 'allowSite': {
+      // Letting a blocked site through for the rest of a task costs a point, like adding time.
+      const { taskId, site, now } = action.payload;
+      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      if (!task || isDone(task) || task.allowedSites?.includes(site)) {
+        return state;
+      }
+      const tasks = state.tasks.map((candidate) =>
+        candidate.id === taskId
+          ? {
+              ...candidate,
+              allowedSites: [...(candidate.allowedSites ?? []), site],
+              updatedAt: now,
+              history: [...candidate.history, { type: 'allow_site' as const, site, at: now }]
+            }
+          : candidate
+      );
+      return { ...state, score: state.score - 1, tasks, meta: withSavedAt(state, now) };
+    }
+
+    case 'setBlocking':
+      return { ...state, preferences: { ...state.preferences, blocking: action.payload.blocking } };
 
     case 'deleteTasks': {
       const remove = new Set(action.payload.taskIds);

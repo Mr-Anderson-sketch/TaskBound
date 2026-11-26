@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod blocker;
 #[cfg(target_os = "macos")]
 mod macos;
 
@@ -822,6 +823,12 @@ fn handlers() -> impl Fn(tauri::Invoke) + Send + Sync + 'static {
         exit_focus_mode,
         set_theme_effects,
         update_tray,
+        blocker::set_block_config,
+        blocker::get_block_status,
+        blocker::check_browser_access,
+        blocker::list_running_apps,
+        blocker::reopen_url,
+        blocker::open_automation_settings,
         selftest_log
     ]
 }
@@ -837,13 +844,20 @@ fn handlers() -> impl Fn(tauri::Invoke) + Send + Sync + 'static {
         get_focus_position,
         exit_focus_mode,
         set_theme_effects,
-        update_tray
+        update_tray,
+        blocker::set_block_config,
+        blocker::get_block_status,
+        blocker::check_browser_access,
+        blocker::list_running_apps,
+        blocker::reopen_url,
+        blocker::open_automation_settings
     ]
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(FocusState::default())
+        .manage(blocker::BlockerState::default())
         .system_tray(build_tray())
         .on_system_tray_event(handle_tray_event)
         .invoke_handler(handlers())
@@ -855,6 +869,8 @@ fn main() {
                     eprintln!("Failed to apply initial window constraints: {}", e);
                 }
             }
+
+            blocker::spawn(app.handle(), app.state::<blocker::BlockerState>().inner().clone());
 
             tauri::async_runtime::spawn(async move {
                 start_timer_loop(app_handle).await;

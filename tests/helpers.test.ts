@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { completedToday, normalizeState, summarizeDay, toLocalDateKey } from '../src/shared/stateHelpers';
 import type { AppState, Task } from '../src/shared/types';
 import { formatDuration, formatSeconds } from '../src/renderer/utils/time';
+import { defaultBlocking } from '../src/shared/blocking';
 
 describe('normalizeState', () => {
   it('fills preferences for a 1.x state file', () => {
@@ -13,7 +14,13 @@ describe('normalizeState', () => {
       preferences: { alwaysOnTop: false }
     } as unknown as AppState;
     const state = normalizeState(legacy, '1.2.0');
-    expect(state.preferences).toEqual({ alwaysOnTop: false, theme: 'dark', menuBarTimer: true, focusPositions: undefined });
+    expect(state.preferences).toEqual({
+      alwaysOnTop: false,
+      theme: 'dark',
+      menuBarTimer: true,
+      focusPositions: undefined,
+      blocking: defaultBlocking()
+    });
     expect(state.stats.lastCompletionDate).toBeUndefined();
     expect(state.score).toBe(68);
   });

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Shown in the macOS "TimeBound wants to control Google Chrome" prompt. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>TimeBound closes distracting tabs, like YouTube or X, while a focus block is running. It only reads tab addresses to check them against your block list.</string>
+</dict>
+</plist>

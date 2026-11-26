@@ -1,4 +1,5 @@
 import type { AppState, PreferencesState, Task, TaskHistoryEntry } from './types';
+import { defaultBlocking, normalizeBlocking } from './blocking';
 
 const pad = (value: number): string => value.toString().padStart(2, '0');
 
@@ -8,6 +9,10 @@ export const toLocalDateKey = (value: Date): string =>
 
 export const isDone = (task: Task): boolean => task.status === 'completed' || task.status === 'struck';
 export const isOpen = (task: Task): boolean => !isDone(task);
+/** Open but waiting for its planned start time. Never the current task. */
+export const isScheduled = (task: Task): boolean => isOpen(task) && Boolean(task.scheduledAt);
+/** Open and in the run queue: the first of these is the current task. */
+export const isQueued = (task: Task): boolean => isOpen(task) && !task.scheduledAt;
 
 const cloneTask = (task: Task): Task => ({
   ...task,
@@ -27,7 +32,8 @@ export const ensureTaskDefaults = (task: Task): Task => {
 export const defaultPreferences = (): PreferencesState => ({
   alwaysOnTop: true,
   theme: 'dark',
-  menuBarTimer: true
+  menuBarTimer: true,
+  blocking: defaultBlocking()
 });
 
 export const createEmptyState = (appVersion: string, now: Date = new Date()): AppState => ({
@@ -51,7 +57,7 @@ export const realignTaskStatuses = (tasks: Task[]): Task[] => {
       return task;
     }
 
-    if (hasActive) {
+    if (hasActive || task.scheduledAt) {
       return task.status === 'pending' ? task : { ...task, status: 'pending' };
     }
 
@@ -86,7 +92,8 @@ export const normalizeState = (raw: Partial<AppState> | null | undefined, appVer
       alwaysOnTop: prefs.alwaysOnTop ?? true,
       theme: prefs.theme === 'light' ? 'light' : 'dark',
       menuBarTimer: prefs.menuBarTimer ?? true,
-      focusPositions: prefs.focusPositions
+      focusPositions: prefs.focusPositions,
+      blocking: normalizeBlocking(prefs.blocking)
     }
   };
 };

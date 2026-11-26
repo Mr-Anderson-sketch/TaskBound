@@ -10,6 +10,7 @@
     "build": "vite build",
     "tauri": "tauri",
     "build:tauri": "tauri build",
+    "build:mac": "bash scripts/build-mac.sh",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "node e2e/ui.e2e.mjs"

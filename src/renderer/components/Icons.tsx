@@ -89,6 +89,26 @@ export const IconExpand = ({ size }: { size?: number }) => (
   </Svg>
 );
 
+export const IconShield = ({ size }: { size?: number }) => (
+  <Svg size={size}>
+    <path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z" />
+  </Svg>
+);
+
+export const IconShieldOn = ({ size }: { size?: number }) => (
+  <Svg size={size}>
+    <path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z" />
+    <path d="M9 12l2 2 4-4" />
+  </Svg>
+);
+
+export const IconClock = ({ size }: { size?: number }) => (
+  <Svg size={size}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 2" />
+  </Svg>
+);
+
 export const ProgressRing = ({ size, stroke, fraction, color, track }: { size: number; stroke: number; fraction: number; color: string; track: string }) => {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;

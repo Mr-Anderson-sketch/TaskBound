@@ -4,7 +4,7 @@ import { appWindow } from '@tauri-apps/api/window';
 import { exit } from '@tauri-apps/api/process';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/api/notification';
 import { register, unregister } from '@tauri-apps/api/globalShortcut';
-import type { AppState, Point, ThemeName } from '../shared/types';
+import type { AppState, BlockWindow, Point, ThemeName } from '../shared/types';
 
 // Everything that touches the OS goes through here. Outside Tauri (plain browser, used for
 // UI testing) each call falls back to a local stand-in so the whole UI stays usable.
@@ -28,6 +28,48 @@ export interface FocusLayout {
 }
 
 export type TrayAction = 'show' | 'focus' | 'pause' | 'complete';
+
+/** What the Rust blocker needs to decide whether to block (src-tauri/src/blocker.rs). */
+export interface BlockConfig {
+  duringTasks: boolean;
+  sites: string[];
+  apps: string[];
+  windows: BlockWindow[];
+  currentTask: { title: string; running: boolean; allowedSites: string[] } | null;
+}
+
+export interface BlockStatus {
+  active: boolean;
+  reason: 'task' | 'window' | null;
+  taskTitle: string | null;
+  windowId: string | null;
+  /** Local "YYYY-MM-DDTHH:MM:SS". */
+  windowUntil: string | null;
+}
+
+export interface BlockedEvent {
+  kind: 'site' | 'app';
+  target: string;
+  url: string | null;
+  bundleId: string;
+  appName: string;
+}
+
+export type BrowserAccessState = 'granted' | 'denied' | 'needsConsent' | 'notRunning' | 'unsupported' | 'error';
+
+export interface BrowserAccess {
+  bundleId: string;
+  name: string;
+  access: BrowserAccessState;
+  detail: string | null;
+}
+
+export interface RunningApp {
+  bundleId: string;
+  name: string;
+}
+
+export const INACTIVE_STATUS: BlockStatus = { active: false, reason: null, taskTitle: null, windowId: null, windowUntil: null };
 
 const PREVIEW_KEY = 'timebound-preview-state';
 
@@ -132,6 +174,49 @@ export const native = {
       return listen<TrayAction>('tray-action', (event) => handler(event.payload));
     }
     return () => undefined;
+  },
+
+  async setBlockConfig(config: BlockConfig): Promise<void> {
+    if (isTauri) {
+      await invoke('set_block_config', { config });
+    }
+  },
+
+  async getBlockStatus(): Promise<BlockStatus> {
+    return isTauri ? invoke<BlockStatus>('get_block_status') : INACTIVE_STATUS;
+  },
+
+  async onBlockerStatus(handler: (status: BlockStatus) => void): Promise<() => void> {
+    return isTauri ? listen<BlockStatus>('blocker-status', (event) => handler(event.payload)) : () => undefined;
+  },
+
+  async onBlocked(handler: (event: BlockedEvent) => void): Promise<() => void> {
+    return isTauri ? listen<BlockedEvent>('blocker-blocked', (event) => handler(event.payload)) : () => undefined;
+  },
+
+  async onBrowserAccess(handler: (access: BrowserAccess[]) => void): Promise<() => void> {
+    return isTauri ? listen<BrowserAccess[]>('blocker-access', (event) => handler(event.payload)) : () => undefined;
+  },
+
+  /** With `ask`, macOS shows its permission prompt for running browsers not yet asked. */
+  async checkBrowserAccess(ask: boolean): Promise<BrowserAccess[]> {
+    return isTauri ? invoke<BrowserAccess[]>('check_browser_access', { ask }) : [];
+  },
+
+  async listRunningApps(): Promise<RunningApp[]> {
+    return isTauri ? invoke<RunningApp[]>('list_running_apps') : [];
+  },
+
+  async reopenUrl(url: string, bundleId: string): Promise<void> {
+    if (isTauri) {
+      await invoke('reopen_url', { url, bundleId });
+    }
+  },
+
+  async openAutomationSettings(): Promise<void> {
+    if (isTauri) {
+      await invoke('open_automation_settings');
+    }
   },
 
   async notify(title: string, body: string): Promise<void> {

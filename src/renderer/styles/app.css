@@ -583,7 +583,8 @@ button.chip:hover {
 /* ---------- menus & popovers ---------- */
 .menu {
   position: fixed;
-  z-index: 60;
+  /* Above toasts (65) so an open menu is never covered; below sheets (70). */
+  z-index: 68;
   min-width: 220px;
   padding: 6px;
   border-radius: 14px;
@@ -1070,4 +1071,239 @@ body.focus-mode #root {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------- scheduling ---------- */
+.row .when {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.addbar .parsed.start {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.field input[type='datetime-local'],
+.field input[type='time'] {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+/* ---------- blocking ---------- */
+.icon-btn.shield.on {
+  color: var(--ok);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.toggle-row input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.toggle-row b {
+  display: block;
+  font-weight: 500;
+}
+
+.toggle-row small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.block-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.block-section .section-head {
+  padding: 0;
+}
+
+.sheet .note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tags li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.tags button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.tags button:hover {
+  background: var(--hover);
+  color: var(--danger);
+}
+
+.inline-add {
+  display: flex;
+  gap: 8px;
+}
+
+.inline-add input,
+.select {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--btn-sec-line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.inline-add input:focus,
+.select:focus {
+  border-color: var(--accent);
+}
+
+.inline-add .btn {
+  height: 36px;
+}
+
+.windows,
+.access {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.windows li,
+.access li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.windows li:last-child,
+.access li:last-child {
+  border-bottom: none;
+}
+
+.windows label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.windows input {
+  accent-color: var(--accent);
+}
+
+.windows li.off span {
+  color: var(--faint);
+}
+
+.window-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.days button {
+  height: 32px;
+  border-radius: 9px;
+  border: 1px solid var(--btn-sec-line);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.days button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.access .state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.access li[data-access='granted'] .state {
+  color: var(--ok);
+}
+
+.access li[data-access='denied'] .state,
+.access li[data-access='error'] .state {
+  color: var(--danger);
+}
+
+.access li[data-access='needsConsent'] .state {
+  color: var(--accent);
 }

@@ -5,8 +5,8 @@ import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifi
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '../../shared/types';
-import { formatSeconds } from '../utils/time';
-import { IconCheck, IconPencil } from './Icons';
+import { formatSeconds, formatStart } from '../utils/time';
+import { IconCheck, IconClock, IconPencil } from './Icons';
 
 export interface RowHandlers {
   onSelect: (task: Task, event: ReactMouseEvent) => void;
@@ -19,9 +19,11 @@ interface RowProps extends RowHandlers {
   label: string;
   selected: boolean;
   sortable: boolean;
+  /** Start time shown in place of the queue number for scheduled tasks. */
+  when?: string;
 }
 
-function RowBody({ task, label, selected, onSelect, onEdit, onContextMenu, dragging }: Omit<RowProps, 'sortable'> & { dragging?: boolean }) {
+function RowBody({ task, label, selected, onSelect, onEdit, onContextMenu, dragging, when }: Omit<RowProps, 'sortable'> & { dragging?: boolean }) {
   const done = task.status === 'completed' || task.status === 'struck';
   const seconds = task.remainingSeconds ?? task.timeAssignedSeconds;
   return (
@@ -34,7 +36,14 @@ function RowBody({ task, label, selected, onSelect, onEdit, onContextMenu, dragg
         onContextMenu(task, event.clientX, event.clientY);
       }}
     >
-      <span className="idx mono">{label}</span>
+      {when ? (
+        <span className="when mono" title={`Starts ${when}`}>
+          <IconClock size={12} />
+          {when}
+        </span>
+      ) : (
+        <span className="idx mono">{label}</span>
+      )}
       <span className="name" title={task.title}>
         {task.title}
       </span>
@@ -79,6 +88,7 @@ function SortableRow(props: RowProps) {
 
 interface TaskListProps extends RowHandlers {
   upNext: Task[];
+  scheduled: Task[];
   doneToday: Task[];
   selectedIds: Set<string>;
   onReorder: (orderedIds: string[]) => void;
@@ -86,7 +96,7 @@ interface TaskListProps extends RowHandlers {
 
 const PREVIEW_COUNT = 6;
 
-export function TaskList({ upNext, doneToday, selectedIds, onReorder, ...handlers }: TaskListProps) {
+export function TaskList({ upNext, scheduled, doneToday, selectedIds, onReorder, ...handlers }: TaskListProps) {
   const [showAll, setShowAll] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const sensors = useSensors(
@@ -136,6 +146,26 @@ export function TaskList({ upNext, doneToday, selectedIds, onReorder, ...handler
               </div>
             </SortableContext>
           </DndContext>
+        </section>
+      ) : null}
+
+      {scheduled.length > 0 ? (
+        <section aria-label="Scheduled">
+          <div className="section-head">
+            <span>Scheduled · {scheduled.length}</span>
+          </div>
+          <div className="rows cards">
+            {scheduled.map((task) => (
+              <RowBody
+                key={task.id}
+                task={task}
+                label=""
+                when={task.scheduledAt ? formatStart(task.scheduledAt) : undefined}
+                selected={selectedIds.has(task.id)}
+                {...handlers}
+              />
+            ))}
+          </div>
         </section>
       ) : null}
 

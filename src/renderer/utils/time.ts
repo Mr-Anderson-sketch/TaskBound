@@ -32,3 +32,26 @@ export const combineToSeconds = (hours: number, minutes: number): number => {
   const safeMinutes = Number.isFinite(minutes) ? Math.max(0, Math.floor(minutes)) : 0;
   return (safeHours * 60 + safeMinutes) * 60;
 };
+
+/** Value for an <input type="datetime-local">: local "YYYY-MM-DDTHH:MM". */
+export const toLocalInput = (date: Date): string =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+const clock12 = (date: Date): string => {
+  const hours = date.getHours();
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${pad(date.getMinutes())} ${hours < 12 ? 'AM' : 'PM'}`;
+};
+
+/** "9:00 AM", "tomorrow 9:00 AM", "Thu 27 Nov 9:00 AM" relative to `now`. */
+export const formatStart = (iso: string, now: Date = new Date()): string => {
+  const date = new Date(iso);
+  const dayDiff = Math.round(
+    (new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) /
+      86_400_000
+  );
+  if (dayDiff === 0) return clock12(date);
+  if (dayDiff === 1) return `tomorrow ${clock12(date)}`;
+  const day = date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  return `${day} ${clock12(date)}`;
+};

@@ -67,11 +67,12 @@
       "identifier": "com.timebound.app",
       "longDescription": "",
       "macOS": {
-        "entitlements": null,
+        "entitlements": "entitlements.plist",
         "exceptionDomain": "",
         "frameworks": [],
         "providerShortName": null,
-        "signingIdentity": null
+        "signingIdentity": null,
+        "minimumSystemVersion": "10.15"
       },
       "resources": [],
       "shortDescription": "Timebox your tasks",

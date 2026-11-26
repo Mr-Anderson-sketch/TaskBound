@@ -1,25 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Task } from '../shared/types';
-import { completedToday, isDone, summarizeDay, toLocalDateKey } from '../shared/stateHelpers';
+import { completedToday, isDone, isQueued, isScheduled, summarizeDay, toLocalDateKey } from '../shared/stateHelpers';
 import { useAppStore } from './store/state';
-import { native, platform, type FocusLayout } from './native';
+import { INACTIVE_STATUS, native, platform, type BlockConfig, type BlockedEvent, type BlockStatus, type FocusLayout } from './native';
+import { formatStart } from './utils/time';
 import { parseCsv, parseTaskLines, type ParsedTask } from './utils/parse';
 import { playChime, primeAudio } from './utils/chime';
 import { AddBar, Header, NowCard, SummaryPopover, remainingOf } from './components/MainParts';
 import { TaskList, PopupMenu, type MenuItem } from './components/TaskList';
 import { AddTimeSheet, BulkSheet, ConfirmSheet, ShortcutsSheet, TaskSheet } from './components/Sheets';
 import { FOCUS_EXTRA_HEIGHT, FocusWidget } from './components/FocusWidget';
+import { BlockingSheet, describeStatus } from './components/BlockingSheet';
 
 const QUICK_ADD_HOTKEY = 'CommandOrControl+Shift+Space';
 const FIVE_MINUTES = 5 * 60;
 const SHELL_RADIUS = 22;
+// The blocker re-closes a tab every couple of seconds if it comes back; don't toast every time.
+const BLOCK_TOAST_EVERY_MS = 15_000;
+const BLOCK_NOTIFY_EVERY_MS = 60_000;
 
 type SheetState =
   | { kind: 'task'; mode: 'create' | 'edit'; task?: Task; requireTime: boolean }
   | { kind: 'addTime'; task: Task }
   | { kind: 'bulk' }
   | { kind: 'shortcuts' }
+  | { kind: 'blocking' }
   | { kind: 'confirm'; title: string; body: string; confirmLabel: string; onConfirm: () => void }
   | null;
 
@@ -62,10 +68,22 @@ export default function App() {
   const ignoreMovesUntil = useRef(0);
   const userMovedFocus = useRef(false);
   const prevStatuses = useRef<Map<string, Task['status']> | null>(null);
+  const prevScheduled = useRef<Set<string> | null>(null);
   const trayKey = useRef('');
+  const [blockStatus, setBlockStatus] = useState<BlockStatus>(INACTIVE_STATUS);
+  const blockConfigRef = useRef<BlockConfig | null>(null);
+  const blockConfigKey = useRef('');
+  const lastBlockToast = useRef(new Map<string, number>());
+  const lastBlockNotify = useRef(new Map<string, number>());
+  const warnedAccess = useRef(new Set<string>());
 
   // ---------- derived ----------
-  const openTasks = useMemo(() => state.tasks.filter((task) => !isDone(task)), [state.tasks]);
+  // The run queue; scheduled tasks wait outside it until their start time.
+  const openTasks = useMemo(() => state.tasks.filter(isQueued), [state.tasks]);
+  const scheduledTasks = useMemo(
+    () => state.tasks.filter(isScheduled).sort((a, b) => (a.scheduledAt ?? '').localeCompare(b.scheduledAt ?? '')),
+    [state.tasks]
+  );
   const activeTask = openTasks[0];
   const upNext = useMemo(() => openTasks.slice(1), [openTasks]);
   const doneToday = useMemo(() => {
@@ -149,9 +167,32 @@ export default function App() {
     }
     setTimeUp({ taskId: expired.id, title: expired.title });
     playChime();
-    const nextTask = state.tasks.find((task) => !isDone(task));
+    const nextTask = state.tasks.find(isQueued);
     native.notify('Time’s up', nextTask ? `${expired.title} · next: ${nextTask.title}` : expired.title).catch(() => undefined);
   }, [state.tasks, hydrated]);
+
+  // ---------- scheduled starts ----------
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    const previous = prevScheduled.current;
+    prevScheduled.current = new Set(state.tasks.filter(isScheduled).map((task) => task.id));
+    if (!previous) {
+      return;
+    }
+    const started = state.tasks.filter(
+      (task) => previous.has(task.id) && !task.scheduledAt && task.history[task.history.length - 1]?.type === 'scheduled_start'
+    );
+    if (started.length === 0) {
+      return;
+    }
+    const first = started[0];
+    const bumped = state.tasks.filter(isQueued)[1];
+    playChime();
+    native.notify('Starting now', bumped ? `${first.title} · then ${bumped.title}` : first.title).catch(() => undefined);
+    pushToast({ title: `Starting “${first.title}”`, body: bumped ? `“${bumped.title}” is next and keeps its time.` : 'It was scheduled for now.' }, 6000);
+  }, [state.tasks, hydrated, pushToast]);
 
   useEffect(() => {
     if (!timeUp) {
@@ -203,7 +244,7 @@ export default function App() {
         pushToast({ title: `No tasks found in ${source}.` });
         return;
       }
-      tasks.forEach((task) => store.addTask(task.title, task.seconds));
+      tasks.forEach((task) => store.addTask(task.title, task.seconds, task.startAt));
       pushToast({ title: `Added ${tasks.length} task${tasks.length === 1 ? '' : 's'}` });
     },
     [store, pushToast]
@@ -215,8 +256,14 @@ export default function App() {
   );
 
   const startNow = useCallback(
-    (task: Task) => orderWith([task.id, ...openTasks.filter((other) => other.id !== task.id).map((other) => other.id)]),
-    [orderWith, openTasks]
+    (task: Task) => {
+      if (task.scheduledAt) {
+        store.unschedule(task.id, 'front');
+        return;
+      }
+      orderWith([task.id, ...openTasks.filter((other) => other.id !== task.id).map((other) => other.id)]);
+    },
+    [orderWith, openTasks, store]
   );
 
   const doNext = useCallback(
@@ -249,7 +296,7 @@ export default function App() {
   );
 
   // ---------- selection ----------
-  const listOrder = useMemo(() => [...upNext, ...doneToday].map((task) => task.id), [upNext, doneToday]);
+  const listOrder = useMemo(() => [...upNext, ...scheduledTasks, ...doneToday].map((task) => task.id), [upNext, scheduledTasks, doneToday]);
 
   const handleSelect = useCallback(
     (task: Task, event: ReactMouseEvent) => {
@@ -299,7 +346,16 @@ export default function App() {
         return;
       }
       const done = isDone(task);
-      const items: Array<MenuItem | 'sep'> = done
+      const items: Array<MenuItem | 'sep'> = task.scheduledAt && !done
+        ? [
+            { label: 'Start now', onClick: () => startNow(task) },
+            { label: 'Unschedule', onClick: () => store.unschedule(task.id, 'end') },
+            'sep',
+            { label: 'Edit…', onClick: () => openEdit(task) },
+            'sep',
+            { label: 'Delete', danger: true, onClick: () => deleteWithConfirm([task.id]) }
+          ]
+        : done
         ? [
             { label: 'Edit…', onClick: () => openEdit(task) },
             'sep',
@@ -316,7 +372,7 @@ export default function App() {
           ];
       setMenu({ x, y, items });
     },
-    [selectedIds, deleteWithConfirm, openEdit, startNow, doNext, upNext]
+    [selectedIds, deleteWithConfirm, openEdit, startNow, doNext, upNext, store]
   );
 
   // ---------- focus mode ----------
@@ -410,6 +466,119 @@ export default function App() {
     trayKey.current = key;
     native.updateTray(title, tooltip, Boolean(activeTask), running).catch(() => undefined);
   }, [hydrated, activeTask, activeHasTime, time, state.preferences.menuBarTimer]);
+
+  // ---------- distraction blocker ----------
+  const blocking = state.preferences.blocking;
+  const blockRunning = Boolean(activeTask && activeHasTime && !activeTask.isPaused);
+  const activeTitle = activeTask?.title;
+  const activeAllowed = activeTask?.allowedSites;
+  useEffect(() => {
+    if (!hydrated || loadFailed) {
+      return;
+    }
+    const config: BlockConfig = {
+      duringTasks: blocking.duringTasks,
+      sites: blocking.sites,
+      apps: blocking.apps.map((app) => app.bundleId),
+      windows: blocking.windows,
+      currentTask: activeTitle !== undefined ? { title: activeTitle, running: blockRunning, allowedSites: activeAllowed ?? [] } : null
+    };
+    blockConfigRef.current = config;
+    const key = JSON.stringify(config);
+    if (key === blockConfigKey.current) {
+      return;
+    }
+    blockConfigKey.current = key;
+    native.setBlockConfig(config).catch((error) => console.error('Failed to update the blocker', error));
+  }, [hydrated, loadFailed, blocking, activeTitle, blockRunning, activeAllowed]);
+
+  const allowBlocked = useCallback(
+    async (event: BlockedEvent) => {
+      const current = state.tasks.find(isQueued);
+      const config = blockConfigRef.current;
+      if (!current || !config?.currentTask) {
+        return;
+      }
+      store.allowSite(current.id, event.target);
+      // Tell the blocker before reopening, or it could close the tab again.
+      const next: BlockConfig = {
+        ...config,
+        currentTask: { ...config.currentTask, allowedSites: [...config.currentTask.allowedSites, event.target] }
+      };
+      try {
+        await native.setBlockConfig(next);
+        if (event.url) {
+          await native.reopenUrl(event.url, event.bundleId);
+        }
+      } catch (error) {
+        console.error('Failed to reopen the allowed tab', error);
+      }
+    },
+    [state.tasks, store]
+  );
+
+  const handleBlocked = useCallback(
+    (event: BlockedEvent) => {
+      const key = `${event.kind}:${event.target}`;
+      const now = Date.now();
+      const reason = blockStatus.reason === 'task' && blockStatus.taskTitle ? `“${blockStatus.taskTitle}” is running` : 'Scheduled block';
+      if (now - (lastBlockNotify.current.get(key) ?? 0) >= BLOCK_NOTIFY_EVERY_MS) {
+        lastBlockNotify.current.set(key, now);
+        const title = event.kind === 'site' ? `Closed ${event.target}` : `Hid ${event.appName}`;
+        native.notify(title, reason).catch(() => undefined);
+      }
+      if (now - (lastBlockToast.current.get(key) ?? 0) < BLOCK_TOAST_EVERY_MS) {
+        return;
+      }
+      lastBlockToast.current.set(key, now);
+      const canAllow = event.kind === 'site' && Boolean(blockConfigRef.current?.currentTask);
+      pushToast(
+        {
+          title: event.kind === 'site' ? `Closed ${event.target}` : `Hid ${event.appName}`,
+          body: event.kind === 'site' ? `In ${event.appName} · ${reason}` : reason,
+          actions: canAllow ? [{ label: 'Allow · −1', onClick: () => allowBlocked(event) }] : undefined
+        },
+        canAllow ? 8000 : 3500
+      );
+    },
+    [blockStatus, pushToast, allowBlocked]
+  );
+
+  const handleBlockedRef = useRef(handleBlocked);
+  handleBlockedRef.current = handleBlocked;
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const keep = (fn: () => void) => (disposed ? fn() : cleanups.push(fn));
+    native.getBlockStatus().then((status) => !disposed && setBlockStatus(status)).catch(() => undefined);
+    native.onBlockerStatus((status) => setBlockStatus(status)).then(keep);
+    native.onBlocked((event) => handleBlockedRef.current(event)).then(keep);
+    native
+      .onBrowserAccess((access) => {
+        for (const browser of access) {
+          if (browser.access === 'denied' && !warnedAccess.current.has(browser.bundleId)) {
+            warnedAccess.current.add(browser.bundleId);
+            pushToast(
+              {
+                title: `Can’t close tabs in ${browser.name}`,
+                body: 'Allow TimeBound in System Settings → Automation.',
+                actions: [{ label: 'Open', onClick: () => native.openAutomationSettings() }]
+              },
+              12000
+            );
+          }
+        }
+      })
+      .then(keep);
+    return () => {
+      disposed = true;
+      cleanups.forEach((fn) => fn());
+    };
+  }, [hydrated, pushToast]);
 
   const focusAddInput = useCallback(() => {
     window.setTimeout(() => addInputRef.current?.focus(), 60);
@@ -524,6 +693,8 @@ export default function App() {
         x,
         y,
         items: [
+          { label: 'Block distractions…', onClick: () => setSheet({ kind: 'blocking' }) },
+          'sep',
           { label: 'Add several tasks…', onClick: () => setSheet({ kind: 'bulk' }) },
           { label: 'Import from file…', onClick: () => fileInputRef.current?.click() },
           'sep',
@@ -596,6 +767,9 @@ export default function App() {
         theme={theme}
         today={today}
         score={state.score}
+        blocking={blockStatus.active}
+        blockingLabel={describeStatus(blockStatus)}
+        onBlocking={() => setSheet({ kind: 'blocking' })}
         onSummary={() => setShowSummary((value) => !value)}
         onToggleTheme={() => store.setTheme(theme === 'dark' ? 'light' : 'dark')}
         onMenu={openMoreMenu}
@@ -606,6 +780,7 @@ export default function App() {
       <div className="scroll">
         <NowCard
           task={activeTask}
+          nextScheduled={scheduledTasks[0]}
           position={1}
           openCount={openTasks.length}
           time={time}
@@ -619,6 +794,7 @@ export default function App() {
         />
         <TaskList
           upNext={upNext}
+          scheduled={scheduledTasks}
           doneToday={doneToday}
           selectedIds={selectedIds}
           onReorder={(ids) => activeTask && orderWith([activeTask.id, ...ids, ...upNext.slice(ids.length).map((task) => task.id)])}
@@ -628,7 +804,16 @@ export default function App() {
         />
       </div>
 
-      <AddBar ref={addInputRef} requireTime={requireTime} onAdd={(title, seconds) => store.addTask(title, seconds)} />
+      <AddBar
+        ref={addInputRef}
+        requireTime={requireTime}
+        onAdd={(title, seconds, startAt) => {
+          store.addTask(title, seconds, startAt);
+          if (startAt) {
+            pushToast({ title: `Scheduled for ${formatStart(startAt)}`, body: `“${title}” starts then, ahead of whatever is running.` });
+          }
+        }}
+      />
 
       <input
         ref={fileInputRef}
@@ -669,6 +854,18 @@ export default function App() {
               <b>{toast.title}</b>
               {toast.body ? <span>{toast.body}</span> : null}
             </div>
+            {toast.actions?.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  setToasts((list) => list.filter((item) => item.id !== toast.id));
+                  action.onClick();
+                }}
+              >
+                {action.label}
+              </button>
+            ))}
           </div>
         ))}
       </div>
@@ -680,13 +877,15 @@ export default function App() {
           mode={sheet.mode}
           initialTitle={sheet.task?.title}
           initialSeconds={sheet.task?.timeAssignedSeconds}
+          initialStartAt={sheet.task?.scheduledAt}
+          allowSchedule={!sheet.task || !isDone(sheet.task)}
           requireTime={sheet.requireTime}
           onClose={() => setSheet(null)}
-          onSubmit={({ title, seconds }) => {
+          onSubmit={({ title, seconds, startAt }) => {
             if (sheet.mode === 'create') {
-              store.addTask(title, seconds);
+              store.addTask(title, seconds, startAt ?? undefined);
             } else if (sheet.task) {
-              store.updateTask(sheet.task.id, title, seconds);
+              store.updateTask(sheet.task.id, title, seconds, startAt);
             }
             setSheet(null);
           }}
@@ -712,6 +911,9 @@ export default function App() {
         />
       ) : null}
       {sheet?.kind === 'shortcuts' ? <ShortcutsSheet onClose={() => setSheet(null)} /> : null}
+      {sheet?.kind === 'blocking' ? (
+        <BlockingSheet blocking={state.preferences.blocking} status={blockStatus} onChange={store.setBlocking} onClose={() => setSheet(null)} />
+      ) : null}
       {sheet?.kind === 'confirm' ? (
         <ConfirmSheet
           title={sheet.title}
